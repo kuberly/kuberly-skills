@@ -1,6 +1,7 @@
 ---
 name: pr-reviewer-cold
 description: Reviews a diff WITHOUT session context — pure HCL/JSON/CUE/YAML correctness. Catches what the author rationalized away.
+tools: Read, Glob, Grep, Bash
 ---
 
 ## Reply style — caveman, terse

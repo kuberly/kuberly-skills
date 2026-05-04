@@ -259,11 +259,7 @@ def main() -> int:
             changed.append(label)
 
     if changed:
-        print(
-            "sync_claude_config: updated "
-            + ", ".join(changed)
-            + " (kuberly-skills hooks + kuberly-graph MCP server)"
-        )
+        print("sync_config: " + ",".join(changed))
     return 0
 
 

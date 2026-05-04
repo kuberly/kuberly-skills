@@ -114,47 +114,22 @@ PERSONA_DAGS = {
 }
 
 # ---------------------------------------------------------------------------
-# Emoji vocabulary — defined once so the renderer layer stays consistent.
-# Pick swaps here ripple to every MCP card and the SessionStart banner.
+# Renderer "vocabulary" — kept as a dict for source-stability with previous
+# versions, but every value is now an empty string. v0.10.6 stripped emojis
+# (and all their byte cost) from MCP card outputs to save tokens.
+# Resurrect single keys here only if a downstream consumer truly needs them.
 # ---------------------------------------------------------------------------
 EMOJI = {
-    # phase / persona status (used by session_status + fanout briefing)
-    "queued":   "⏳",
-    "running":  "🟡",
-    "done":     "✅",
-    "blocked":  "❌",
-    "skipped":  "⚪",
-    # gate verdicts
-    "ok":       "🟢",
-    "block":    "🔴",
-    "warn":     "🟠",
-    # node types
-    "environment":    "🌐",
-    "shared-infra":   "🏗️",
-    "component":      "🧩",
-    "application":    "📦",
-    "module":         "🧱",
-    "cloud_provider": "☁️",
-    "component_type": "🧷",
-    # concept badges
-    "scope":    "🧭",
-    "blast":    "💥",
-    "drift":    "🌊",
-    "stats":    "📊",
-    "approval": "🔒",
-    "fanout":   "🚀",
-    "review":   "🔍",
-    "session":  "📁",
-    "critical": "🔥",
-    "graph":    "🕸️",
-    "neighbor": "🔗",
-    "path":     "🛤️",
-    "files":    "📝",
-    "time":     "🕒",
-    "info":     "ℹ️",
-    "spark":    "📈",
-    "parallel": "🔀",
-    "sequential": "→",
+    "queued": "", "running": "", "done": "", "blocked": "", "skipped": "",
+    "ok": "", "block": "", "warn": "",
+    "environment": "", "shared-infra": "", "component": "", "application": "",
+    "module": "", "cloud_provider": "", "component_type": "",
+    "scope": "", "blast": "", "drift": "", "stats": "", "approval": "",
+    "fanout": "", "review": "", "session": "", "critical": "", "graph": "",
+    "neighbor": "", "path": "", "files": "", "time": "", "info": "",
+    "spark": "",
+    "parallel": "||",      # kept short — table cells benefit from the marker
+    "sequential": "->",    # ASCII arrow
 }
 
 # Used by session_init to seed context.md — mirrors apm_modules' init_agent_session.py
@@ -919,7 +894,7 @@ class KuberlyGraph:
         if scope["files_likely_changed"]:
             glines.append("- **Files likely changed:**")
             for f in scope["files_likely_changed"]:
-                glines.append(f"  - `{f}`")
+                glines.append(f"- `{f}`")
         if scope["drift_slice"]:
             glines.append(f"- **Drift slice:** {scope['drift_slice']}")
 
@@ -928,7 +903,7 @@ class KuberlyGraph:
         if unresolved_modules and not scope.get("modules"):
             names = ", ".join(f"`{m}`" for m in unresolved_modules)
             halt_block = (
-                f"\n## ⛔ Pre-flight halt — target absent\n"
+                f"\n## Pre-flight halt — target absent\n"
                 f"Named module(s) {names} have **no matching node** in the "
                 f"kuberly-graph. The fanout DAG was overridden to "
                 f"`stop-target-absent` (zero personas). Confirm with the user "
@@ -940,7 +915,7 @@ class KuberlyGraph:
             # Some resolved, some didn't — informational, not a halt.
             names = ", ".join(f"`{m}`" for m in unresolved_modules)
             halt_block = (
-                f"\n## ⚠️ Partial resolution\n"
+                f"\n## Partial resolution\n"
                 f"These named module(s) did not resolve: {names}. Proceeding "
                 f"with the modules that did — confirm scope before fanning "
                 f"out implementation personas.\n"
@@ -1227,7 +1202,7 @@ def write_graph_json(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = Fals
     path = out_dir / "graph.json"
     path.write_text(json.dumps(data, indent=2, default=str))
     if verbose:
-        print(f"  wrote {path} ({len(data['nodes'])} nodes, {len(data['edges'])} edges)")
+        print(f"wrote {path} ({len(data['nodes'])} nodes, {len(data['edges'])} edges)")
 
 
 def write_graph_html(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = False):
@@ -1427,7 +1402,7 @@ network.on('click', params => {{
     path = out_dir / "graph.html"
     path.write_text(html)
     if verbose:
-        print(f"  wrote {path}")
+        print(f"wrote {path}")
 
 
 def write_graph_report(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = False):
@@ -1484,7 +1459,7 @@ def write_graph_report(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = Fa
     path = out_dir / "GRAPH_REPORT.md"
     path.write_text("\n".join(lines))
     if verbose:
-        print(f"  wrote {path}")
+        print(f"wrote {path}")
 
 
 def write_mermaid_dag(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = False):
@@ -1522,7 +1497,7 @@ def write_mermaid_dag(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = Fal
         providers[n.get("provider", "unknown")].append((nid, n))
 
     for provider, mods in sorted(providers.items()):
-        lines.append(f"    subgraph {provider}[{provider.upper()}]")
+        lines.append(f"subgraph {provider}[{provider.upper()}]")
         for nid, n in mods:
             sid = sanitize(nid)
             label = n["label"]
@@ -1536,7 +1511,7 @@ def write_mermaid_dag(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = Fal
     for e in dep_edges:
         s = sanitize(e["source"])
         t = sanitize(e["target"])
-        lines.append(f"    {s} --> {t}")
+        lines.append(f"{s} --> {t}")
 
     # Apply styles
     lines.append("")
@@ -1544,20 +1519,20 @@ def write_mermaid_dag(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = Fal
         sid = sanitize(nid)
         label = n["label"]
         if label in foundation:
-            lines.append(f"    class {sid} foundation")
+            lines.append(f"class {sid} foundation")
         elif label in observability:
-            lines.append(f"    class {sid} observability")
+            lines.append(f"class {sid} observability")
         elif label in data_stores:
-            lines.append(f"    class {sid} data")
+            lines.append(f"class {sid} data")
         elif label in app_modules:
-            lines.append(f"    class {sid} app")
+            lines.append(f"class {sid} app")
         else:
-            lines.append(f"    class {sid} k8s")
+            lines.append(f"class {sid} k8s")
 
     path = out_dir / "module_dag.mmd"
     path.write_text("\n".join(lines))
     if verbose:
-        print(f"  wrote {path} (module dependency DAG)")
+        print(f"wrote {path} (module dependency DAG)")
 
     # --- 2. Per-environment diagrams ---
     env_nodes = {nid: n for nid, n in graph.nodes.items()
@@ -1584,14 +1559,14 @@ def write_mermaid_dag(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = Fal
                 acct = n.get("account_id", "")
                 region = n.get("region", "")
                 elines.append(f'    {sid}[["shared-infra<br/>{acct}<br/>{region}"]]')
-                elines.append(f"    class {sid} sharedInfra")
+                elines.append(f"class {sid} sharedInfra")
             elif ntype == "component":
                 elines.append(f'    {sid}[{label}]')
-                elines.append(f"    class {sid} component")
+                elines.append(f"class {sid} component")
             elif ntype == "application":
                 port = n.get("port", "")
                 elines.append(f'    {sid}([{label}:{port}])')
-                elines.append(f"    class {sid} application")
+                elines.append(f"class {sid} application")
 
         # Edges within this env
         for e in graph.edges:
@@ -1602,12 +1577,12 @@ def write_mermaid_dag(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = Fal
                     ss = sanitize(e["source"])
                     ts = sanitize(e["target"])
                     rel = e.get("relation", "")
-                    elines.append(f"    {ss} -->|{rel}| {ts}")
+                    elines.append(f"{ss} -->|{rel}| {ts}")
 
         env_path = out_dir / f"env_{env}.mmd"
         env_path.write_text("\n".join(elines))
         if verbose:
-            print(f"  wrote {env_path} ({env} environment)")
+            print(f"wrote {env_path} ({env} environment)")
 
     # --- 3. Blast radius diagram for shared-infra ---
     for nid, node in graph.nodes.items():
@@ -1626,25 +1601,25 @@ def write_mermaid_dag(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = Fal
 
         root_sid = sanitize(nid)
         blines.append(f'    {root_sid}[["shared-infra ({env})"]]')
-        blines.append(f"    class {root_sid} root")
+        blines.append(f"class {root_sid} root")
 
         for dnid, info in br.get("downstream", {}).items():
             dsid = sanitize(dnid)
             dlabel = graph.nodes.get(dnid, {}).get("label", dnid)
             depth = info["depth"]
             blines.append(f'    {dsid}[{dlabel}]')
-            blines.append(f"    class {dsid} d{min(depth, 3)}")
+            blines.append(f"class {dsid} d{min(depth, 3)}")
             # Connect to parent (find edge)
             for e in graph.edges:
                 if e["target"] == dnid and (e["source"] == nid or e["source"] in br.get("downstream", {})):
                     ps = sanitize(e["source"])
-                    blines.append(f"    {ps} --> {dsid}")
+                    blines.append(f"{ps} --> {dsid}")
                     break
 
         br_path = out_dir / f"blast_{env}.mmd"
         br_path.write_text("\n".join(blines))
         if verbose:
-            print(f"  wrote {br_path} (blast radius: {env})")
+            print(f"wrote {br_path} (blast radius: {env})")
 
 
 def format_blast_radius(result: dict) -> str:
@@ -1654,28 +1629,28 @@ def format_blast_radius(result: dict) -> str:
 
     lines = [f"Blast radius for: {result['node']}"]
     node_info = result.get("node_info", {})
-    lines.append(f"  Type: {node_info.get('type', '?')} | Label: {node_info.get('label', '?')}")
+    lines.append(f"Type: {node_info.get('type', '?')} | Label: {node_info.get('label', '?')}")
     lines.append("")
 
     if "downstream" in result:
         lines.append(f"DOWNSTREAM (affected if this changes): {result['downstream_count']} nodes")
         by_depth = defaultdict(list)
         for nid, info in result["downstream"].items():
-            by_depth[info["depth"]].append(f"  {nid} ({info.get('type', '?')})")
+            by_depth[info["depth"]].append(f"{nid} ({info.get('type', '?')})")
         for d in sorted(by_depth):
-            lines.append(f"  Depth {d}:")
+            lines.append(f"Depth {d}:")
             for item in by_depth[d]:
-                lines.append(f"    {item}")
+                lines.append(f"{item}")
 
     if "upstream" in result:
         lines.append(f"\nUPSTREAM (changes here affect this node): {result['upstream_count']} nodes")
         by_depth = defaultdict(list)
         for nid, info in result["upstream"].items():
-            by_depth[info["depth"]].append(f"  {nid} ({info.get('type', '?')})")
+            by_depth[info["depth"]].append(f"{nid} ({info.get('type', '?')})")
         for d in sorted(by_depth):
-            lines.append(f"  Depth {d}:")
+            lines.append(f"Depth {d}:")
             for item in by_depth[d]:
-                lines.append(f"    {item}")
+                lines.append(f"{item}")
 
     return "\n".join(lines)
 
@@ -1748,8 +1723,7 @@ def main():
         write_graph_report(g, out)
         write_mermaid_dag(g, out)
 
-        # SessionStart banner — visible at every Claude Code session start.
-        # Open-right framing avoids emoji-width misalignment across terminals.
+        # SessionStart banner — terse, no decoration. Single line per fact.
         stats   = g.compute_stats()
         drift   = g.cross_env_drift()
         n_envs  = stats["type_counts"].get("environment", 0)
@@ -1758,31 +1732,11 @@ def main():
         n_crit  = sum(1 for _, ind, _ in stats["critical_nodes"] if ind >= 3)
         n_drift = len(drift["components"]) + len(drift["applications"])
 
-        if n_drift == 0:
-            drift_line = "🌊 drift:    🟢 none"
-        elif n_drift <= 2:
-            drift_line = f"🌊 drift:    🟡 {n_drift} env(s) with drift"
-        else:
-            drift_line = f"🌊 drift:    🔴 {n_drift} env(s) — review"
-
-        crit_line = ("🔥 critical: 🟢 none"
-                     if n_crit == 0
-                     else f"🔥 critical: 🟡 {n_crit} hot node(s) (in° ≥ 3)")
-
-        lines = [
-            "",
-            "╭─ 🕸️  kuberly-graph refreshed ───────────────────────────",
-            f"│  📊 nodes:    {len(g.nodes)} · edges: {len(g.edges)}",
-            f"│  🌐 envs:     {n_envs} · 🧱 modules: {n_mods} · 📦 apps: {n_apps}",
-            f"│  {crit_line}",
-            f"│  {drift_line}",
-            "├─────────────────────────────────────────────────────────",
-            "│  📁 wrote: graph.json · graph.html · GRAPH_REPORT.md · *.mmd",
-            "│  ⚡ tip: call MCP first (blast_radius, query_nodes, drift)",
-            "│     — saves dozens of Read calls.",
-            "╰─────────────────────────────────────────────────────────",
-        ]
-        print("\n".join(lines))
+        print(
+            f"kuberly-graph: nodes={len(g.nodes)} edges={len(g.edges)} "
+            f"envs={n_envs} modules={n_mods} apps={n_apps} "
+            f"critical={n_crit} drift={n_drift}"
+        )
 
     elif args.command == "blast":
         g = load_graph(args.repo)
@@ -1809,7 +1763,7 @@ def main():
         results = g.query_nodes(node_type=args.node_type, environment=args.env,
                                 name_contains=args.name)
         for n in results:
-            print(f"  {n['id']:50s}  type={n.get('type', '?'):15s}  label={n.get('label', '')}")
+            print(f"{n['id']:50s}  type={n.get('type', '?'):15s}  label={n.get('label', '')}")
         print(f"\n{len(results)} nodes matched.")
 
     elif args.command == "mcp":
@@ -1826,7 +1780,7 @@ def main():
 # ---------------------------------------------------------------------------
 
 def _node_emoji(ntype: str | None) -> str:
-    return EMOJI.get(ntype or "", "•")
+    return EMOJI.get(ntype or "", "-")
 
 
 def _truncate(s: str, n: int = 60) -> str:
@@ -1859,16 +1813,16 @@ def _sparkline(values: list[float], width: int = 16) -> str:
 
 
 def _confidence_badge(c: str | None) -> str:
-    return {"high": "🟢", "medium": "🟡", "low": "🟠"}.get(c or "", "•") + f" {c or '—'}"
+    return {"high": "ok", "medium": "warn", "low": "meh"}.get(c or "", "-") + f" {c or '—'}"
 
 
 def _status_badge(s: str | None) -> str:
-    return f"{EMOJI.get(s or '', '•')} {s or '—'}"
+    return f"{EMOJI.get(s or '', '-')} {s or '—'}"
 
 
 def _card_query_nodes(result: list[dict], args: dict, graph: KuberlyGraph) -> str:
     if not result:
-        return f"## {EMOJI['scope']} query_nodes — 0 matches\n\n_No nodes match the filter._"
+        return f"## query_nodes — 0 matches\n\n_No nodes match the filter._"
 
     by_type: dict[str, list[dict]] = defaultdict(list)
     for n in result:
@@ -1881,13 +1835,13 @@ def _card_query_nodes(result: list[dict], args: dict, graph: KuberlyGraph) -> st
     fstr = " · ".join(fparts) or "_(no filter)_"
 
     lines = [
-        f"## {EMOJI['scope']} query_nodes — **{len(result)} matches**",
+        f"## query_nodes — **{len(result)} matches**",
         f"_filter: {fstr}_",
         "",
     ]
     for t in sorted(by_type):
         nodes = by_type[t]
-        lines.append(f"### {_node_emoji(t)} {t} · {len(nodes)}")
+        lines.append(f"### {t} · {len(nodes)}")
         lines.append("")
         lines.append("| ID | Label | Env |")
         lines.append("|---|---|---|")
@@ -1903,7 +1857,7 @@ def _card_query_nodes(result: list[dict], args: dict, graph: KuberlyGraph) -> st
 
 def _card_get_node(result: dict, args: dict, graph: KuberlyGraph) -> str:
     if "error" in result:
-        return f"## ❌ get_node — error\n\n`{result['error']}`"
+        return f"## err get_node — error\n\n`{result['error']}`"
     info = result.get("node_info", {})
     nid = result.get("node", "?")
     ntype = info.get("type", "?")
@@ -1911,7 +1865,7 @@ def _card_get_node(result: dict, args: dict, graph: KuberlyGraph) -> str:
     out = result.get("outgoing", [])
 
     lines = [
-        f"## {_node_emoji(ntype)} `{nid}`",
+        f"## `{nid}`",
         "",
         "| Field | Value |",
         "|---|---|",
@@ -1927,7 +1881,7 @@ def _card_get_node(result: dict, args: dict, graph: KuberlyGraph) -> str:
 
     lines.extend([
         "",
-        f"### {EMOJI['neighbor']} Edges",
+        f"### Edges",
         f"- **incoming:** {len(inc)}",
         f"- **outgoing:** {len(out)}",
     ])
@@ -1955,27 +1909,27 @@ def _card_get_neighbors(result: dict, args: dict, graph: KuberlyGraph) -> str:
 
 def _card_blast_radius(result: dict, args: dict, graph: KuberlyGraph) -> str:
     if "error" in result:
-        return f"## ❌ blast_radius — error\n\n`{result['error']}`"
+        return f"## err blast_radius — error\n\n`{result['error']}`"
     info = result.get("node_info", {})
     nid = result.get("node", "?")
     ds_count = result.get("downstream_count", 0)
     us_count = result.get("upstream_count", 0)
 
     severity = (
-        "🔴 high"  if ds_count > 20
-        else "🟠 medium" if ds_count > 5
-        else "🟢 low"
+        "bad high"  if ds_count > 20
+        else "meh medium" if ds_count > 5
+        else "ok low"
     )
 
     lines = [
-        f"## {EMOJI['blast']} blast_radius — `{nid}`",
+        f"## blast_radius — `{nid}`",
         f"_{_node_emoji(info.get('type'))} {info.get('type','?')} · "
         f"label: {info.get('label','—')}_",
         "",
         "| Direction | Count |",
         "|---|---:|",
-        f"| 🔻 downstream (affected if changed) | **{ds_count}** |",
-        f"| 🔺 upstream (affects this) | **{us_count}** |",
+        f"| down downstream (affected if changed) | **{ds_count}** |",
+        f"| up upstream (affects this) | **{us_count}** |",
         f"| severity | {severity} |",
         "",
     ]
@@ -1987,34 +1941,34 @@ def _card_blast_radius(result: dict, args: dict, graph: KuberlyGraph) -> str:
         return dict(sorted(d.items()))
 
     if ds_count:
-        lines.append("### 🔻 Downstream by depth")
+        lines.append("### down Downstream by depth")
         for depth, items in _by_depth(result.get("downstream", {})).items():
             lines.append(f"- **depth {depth}** · {len(items)} node(s)")
             for nid_, info_ in items[:8]:
-                lines.append(f"  - {_node_emoji(info_.get('type'))} `{_truncate(nid_)}`")
+                lines.append(f"- {_node_emoji(info_.get('type'))} `{_truncate(nid_)}`")
             if len(items) > 8:
-                lines.append(f"  - _… {len(items) - 8} more_")
+                lines.append(f"- _… {len(items) - 8} more_")
         lines.append("")
 
     if us_count:
-        lines.append("### 🔺 Upstream by depth")
+        lines.append("### up Upstream by depth")
         for depth, items in _by_depth(result.get("upstream", {})).items():
             lines.append(f"- **depth {depth}** · {len(items)} node(s)")
             for nid_, info_ in items[:8]:
-                lines.append(f"  - {_node_emoji(info_.get('type'))} `{_truncate(nid_)}`")
+                lines.append(f"- {_node_emoji(info_.get('type'))} `{_truncate(nid_)}`")
             if len(items) > 8:
-                lines.append(f"  - _… {len(items) - 8} more_")
+                lines.append(f"- _… {len(items) - 8} more_")
     return "\n".join(lines).rstrip()
 
 
 def _card_shortest_path(result: dict, args: dict, graph: KuberlyGraph) -> str:
     if "error" in result:
-        return f"## ❌ shortest_path — error\n\n`{result['error']}`"
+        return f"## err shortest_path — error\n\n`{result['error']}`"
     path = result.get("path", [])
     if not path:
-        return f"## {EMOJI['path']} shortest_path — _empty path_"
+        return f"## shortest_path — _empty path_"
     lines = [
-        f"## {EMOJI['path']} shortest_path — length **{result['length']}**",
+        f"## shortest_path — length **{result['length']}**",
         "",
     ]
     for i, nid in enumerate(path):
@@ -2029,7 +1983,7 @@ def _card_drift(result: dict, args: dict, graph: KuberlyGraph) -> str:
     comps = result.get("components", {})
     apps = result.get("applications", {})
     if not comps and not apps:
-        return (f"## {EMOJI['drift']} drift — **no drift**\n\n"
+        return (f"## drift — **no drift**\n\n"
                 "_All environments have the same components and applications._")
 
     # Build heatmap: env × component (1 if missing)
@@ -2039,13 +1993,13 @@ def _card_drift(result: dict, args: dict, graph: KuberlyGraph) -> str:
     all_comp_names = sorted({c for ms in comps.values() for c in ms})
 
     lines = [
-        f"## {EMOJI['drift']} drift — **{len(comps)} env(s) with component drift, "
+        f"## drift — **{len(comps)} env(s) with component drift, "
         f"{len(apps)} env(s) with app drift**",
         "",
     ]
 
     if comps:
-        lines.append("### 🧩 Component drift heatmap")
+        lines.append("### Component drift heatmap")
         lines.append("")
         # Header
         header = ["env"] + [f"`{c[:10]}`" for c in all_comp_names]
@@ -2055,12 +2009,12 @@ def _card_drift(result: dict, args: dict, graph: KuberlyGraph) -> str:
             row = [f"**{env}**"]
             missing = set(comps.get(env, []))
             for c in all_comp_names:
-                row.append("🔴" if c in missing else "🟢")
+                row.append("bad" if c in missing else "ok")
             lines.append("| " + " | ".join(row) + " |")
         lines.append("")
 
     if apps:
-        lines.append("### 📦 Application drift")
+        lines.append("### Application drift")
         for env in sorted(apps.keys()):
             lines.append(f"- **{env}**: missing `{', '.join(apps[env])}`")
         lines.append("")
@@ -2078,14 +2032,14 @@ def _card_stats(result: dict, args: dict, graph: KuberlyGraph) -> str:
     for t in sorted(types, key=lambda x: -types[x]):
         bar_width = int(round((types[t] / max_count) * 12))
         bar = "█" * bar_width + "░" * (12 - bar_width)
-        type_rows.append(f"| {_node_emoji(t)} `{t}` | {types[t]} | `{bar}` |")
+        type_rows.append(f"| `{t}` | {types[t]} | `{bar}` |")
 
     # Depth distribution from longest chains (for sparkline)
     chain_lengths = [len(c) for c in chains]
     spark = _sparkline(chain_lengths) if chain_lengths else ""
 
     lines = [
-        f"## {EMOJI['stats']} graph stats",
+        f"## graph stats",
         "",
         f"**{result['node_count']}** nodes · **{result['edge_count']}** edges",
         "",
@@ -2095,7 +2049,7 @@ def _card_stats(result: dict, args: dict, graph: KuberlyGraph) -> str:
         "|---|---:|---|",
         *type_rows,
         "",
-        f"### {EMOJI['critical']} Critical nodes (most depended upon)",
+        f"### Critical nodes (most depended upon)",
         "",
         "| Node | in° | out° |",
         "|---|---:|---:|",
@@ -2109,7 +2063,7 @@ def _card_stats(result: dict, args: dict, graph: KuberlyGraph) -> str:
 
     lines.extend([
         "",
-        f"### 🌳 Dependency chains (top {len(chains)})",
+        f"### Dependency chains (top {len(chains)})",
         "",
     ])
     if spark:
@@ -2123,167 +2077,94 @@ def _card_stats(result: dict, args: dict, graph: KuberlyGraph) -> str:
 
 
 def _card_plan_persona_fanout(plan: dict, args: dict, graph: KuberlyGraph) -> str:
-    """The marquee card — used as the fanout briefing the orchestrator pastes
-    when starting a session."""
-    scope = plan.get("scope", {})
-    br = scope.get("blast_radius", {})
-    gates = plan.get("gates", {})
-    phases = plan.get("phases", [])
+    """Fanout briefing card — terse `key: value` lines, table for the DAG.
 
+    Token-minimal as of v0.10.6: no emoji, no decorative headers, no
+    multi-paragraph explanatory prose. Orchestrator reads this directly.
+    """
+    scope  = plan.get("scope", {})
+    br     = scope.get("blast_radius", {})
+    gates  = plan.get("gates", {})
+    phases = plan.get("phases", [])
     branch = gates.get("branch", {})
-    branch_e = "🟢" if branch.get("verdict") == "ok" else "🔴"
-    op = gates.get("openspec", {})
+    op     = gates.get("openspec", {})
+    ps     = gates.get("personas_synced", {})
+
     if op.get("required") and not op.get("existing_change_folder"):
-        op_e, op_label = "🟠", "required (no folder yet)"
-    elif op.get("required") and op.get("existing_change_folder"):
-        op_e, op_label = "🟢", f"reusing `{op['existing_change_folder']}`"
+        op_label = "required"
+    elif op.get("required"):
+        op_label = f"reuse {op.get('existing_change_folder')}"
     else:
-        op_e, op_label = "🟢", "not required"
-    ps = gates.get("personas_synced", {})
-    ps_e = "🟢" if ps.get("verdict") == "ok" else "🟠"
+        op_label = "n/a"
 
     unresolved = plan.get("unresolved_modules") or []
     is_halt = plan.get("task_kind") == "stop-target-absent"
 
-    lines = [
-        f"# {EMOJI['fanout']} Persona fanout briefing",
-        f"_session slug: `{plan.get('session_slug', '?')}`_",
-        "",
+    lines = [f"fanout: {plan.get('session_slug', '?')}"]
+
+    if is_halt:
+        names = ", ".join(unresolved) or "?"
+        lines += [
+            f"STOP target-absent: {names} not in graph. DAG empty.",
+            "Action: confirm name, retry with corrected named_modules, or surface absence to user.",
+        ]
+    elif unresolved:
+        lines.append(f"partial: unresolved={','.join(unresolved)}")
+
+    lines += [
+        f"task_kind: {plan.get('task_kind', '?')} ({plan.get('confidence', '?')})",
     ]
 
-    # Pre-flight halt banner — top of the card so the orchestrator can't miss it.
-    if is_halt:
-        names = ", ".join(f"`{m}`" for m in unresolved) or "_(unspecified)_"
-        lines.extend([
-            f"## {EMOJI['block']} STOP — pre-flight halt",
-            "",
-            f"Named module(s) {names} have **no matching node** in the "
-            f"kuberly-graph. The DAG below is intentionally empty "
-            f"(`stop-target-absent`).",
-            "",
-            "**Do not dispatch any persona.** Either:",
-            "",
-            "1. Confirm with the user that the target name is correct and the "
-            "graph is fresh.",
-            "2. If the user actually meant a different module, re-call "
-            "`plan_persona_fanout` with the corrected `named_modules`.",
-            "3. If the target genuinely is not deployed in this fork, the "
-            "task may not apply — surface that to the user.",
-            "",
-            "_(This is the v0.10.2 guard against the canonical "
-            "\"two personas burn 100k tokens to re-discover the target is "
-            "not deployed\" failure mode.)_",
-            "",
-        ])
-    elif unresolved:
-        names = ", ".join(f"`{m}`" for m in unresolved)
-        lines.extend([
-            f"## {EMOJI['warn']} Partial resolution",
-            "",
-            f"These named module(s) did not resolve and will be skipped: "
-            f"{names}. Verify scope before fanning out implementation "
-            f"personas.",
-            "",
-        ])
-
-    lines.extend([
-        f"## {EMOJI['scope']} Classification",
-        "",
-        "| Field | Value |",
-        "|---|---|",
-        f"| task_kind | `{plan.get('task_kind', '?')}` |",
-        f"| confidence | {_confidence_badge(plan.get('confidence'))} |",
-        "",
-        f"## {EMOJI['blast']} Scope",
-    ])
     mods = scope.get("modules", [])
-    lines.append(
-        f"- **Modules in scope:** {', '.join(f'`{m}`' for m in mods) if mods else '_(none resolved)_'}"
-    )
-    if br:
-        lines.append(f"- **Blast radius:** {br.get('summary', '—')}")
-        if br.get("upstream"):
-            lines.append(
-                "- **Upstream depends on:** "
-                + ", ".join(f"`{u}`" for u in br["upstream"])
-            )
+    if mods:
+        lines.append(f"modules: {','.join(mods)}")
+    if br.get("summary"):
+        lines.append(f"blast: {br['summary']}")
+    if br.get("upstream"):
+        lines.append(f"upstream: {','.join(br['upstream'])}")
     files = scope.get("files_likely_changed", [])
     if files:
-        lines.append(f"- **{EMOJI['files']} Files likely changed ({len(files)}):**")
-        for f in files[:10]:
-            lines.append(f"  - `{f}`")
-        if len(files) > 10:
-            lines.append(f"  - _… {len(files) - 10} more_")
+        head = files[:10]
+        suffix = f" (+{len(files) - 10})" if len(files) > 10 else ""
+        lines.append("files: " + ",".join(head) + suffix)
     if scope.get("drift_slice"):
-        lines.append(f"- **{EMOJI['drift']} Drift slice:** "
-                     f"`{json.dumps(scope['drift_slice'], default=str)}`")
+        lines.append(f"drift: {json.dumps(scope['drift_slice'], default=str, separators=(',', ':'))}")
 
-    lines.extend([
-        "",
-        "## 🛡️ Gates",
-        "",
-        "| Gate | Status | Detail |",
-        "|---|---|---|",
-        f"| branch | {branch_e} {branch.get('verdict', '—')} | "
-        f"{branch.get('reason') or branch.get('current') or '—'} |",
-        f"| openspec | {op_e} {op_label} | "
-        f"{op.get('reason') or '—'} |",
-        f"| personas_synced | {ps_e} {ps.get('verdict', '—')} | "
-        f"{ps.get('found', 0)}/{ps.get('expected', 0)} personas found |",
-    ])
+    lines += [
+        f"gates: branch={branch.get('verdict', '?')}({branch.get('current') or '?'}) "
+        f"openspec={op_label} personas={ps.get('found', 0)}/{ps.get('expected', 0)}",
+    ]
     if ps.get("missing"):
-        lines.append(f"\n_missing personas:_ `{', '.join(ps['missing'])}`")
-
-    # Phase plan
-    lines.extend([
-        "",
-        f"## {EMOJI['fanout']} Fanout plan — **{len(phases)} phase(s)**",
-        "",
-        "| # | Phase | Personas | Mode | Approval | Status |",
-        "|---|---|---|---|---|---|",
-    ])
-    for i, ph in enumerate(phases, 1):
-        mode = (f"{EMOJI['parallel']} parallel" if ph.get("parallel")
-                else f"{EMOJI['sequential']} sequential")
-        approval = f"{EMOJI['approval']} required" if ph.get("needs_approval") else "—"
-        personas = ", ".join(f"`{p}`" for p in ph["personas"])
-        lines.append(
-            f"| {i} | **{ph['id']}** | {personas} | {mode} | {approval} | "
-            f"{EMOJI['queued']} queued |"
-        )
-
-    # Next-call hint
-    branch_arg = branch.get("current") or "<feature-branch>"
-    lines.extend([
-        "",
-        "## ⚡ Next call",
-        "",
-        "```",
-        f"mcp__kuberly-graph__session_init({{",
-        f"  name: \"{plan.get('session_slug', '?')}\",",
-        f"  task: \"<one-line goal>\",",
-        f"  modules: {json.dumps(mods)},",
-        f"  current_branch: \"{branch_arg}\"",
-        f"}})",
-        "```",
-    ])
+        lines.append(f"missing-personas: {','.join(ps['missing'])}")
     if branch.get("verdict") == "block":
-        lines.extend([
-            "",
-            f"## {EMOJI['block']} Branch gate BLOCKED",
-            f"_{branch.get('reason', '')}_",
-            "",
-            "Cut a feature branch before any edits.",
-        ])
+        lines.append(f"branch-blocked: {branch.get('reason', '')}")
+
+    if phases:
+        lines += ["", "| # | phase | personas | mode | approval |",
+                  "|---|---|---|---|---|"]
+        for i, ph in enumerate(phases, 1):
+            mode = "par" if ph.get("parallel") else "seq"
+            approval = "yes" if ph.get("needs_approval") else "no"
+            personas = ",".join(ph.get("personas", []))
+            lines.append(f"| {i} | {ph['id']} | {personas or '-'} | {mode} | {approval} |")
+
+    branch_arg = branch.get("current") or "<feature-branch>"
+    lines += [
+        "",
+        f"next: session_init(name=\"{plan.get('session_slug', '?')}\", "
+        f"modules={json.dumps(mods)}, branch=\"{branch_arg}\")",
+    ]
+    if branch.get("verdict") == "block":
+        lines.append(f"BLOCK: {branch.get('reason', '')}")
     return "\n".join(lines)
 
 
 def _card_session_init(result: dict, args: dict, graph: KuberlyGraph) -> str:
     if "error" in result:
-        return f"## ❌ session_init — error\n\n`{result['error']}`"
+        return f"## err session_init — error\n\n`{result['error']}`"
     phases = result.get("phases", [])
     lines = [
-        f"## {EMOJI['session']} session created",
+        f"## session created",
         "",
         f"- **slug:** `{result.get('session_slug', '?')}`",
         f"- **dir:** `{result.get('session_dir', '?')}`",
@@ -2294,7 +2175,7 @@ def _card_session_init(result: dict, args: dict, graph: KuberlyGraph) -> str:
     if phases:
         lines.extend([
             "",
-            f"### {EMOJI['fanout']} Fanout queued",
+            f"### Fanout queued",
             "",
             "| # | Phase | Personas | Status |",
             "|---|---|---|---|",
@@ -2308,13 +2189,13 @@ def _card_session_init(result: dict, args: dict, graph: KuberlyGraph) -> str:
 
 def _card_session_status(status: dict, args: dict, graph: KuberlyGraph) -> str:
     if "error" in status:
-        return f"## ❌ session_status — error\n\n`{status['error']}`"
+        return f"## err session_status — error\n\n`{status['error']}`"
 
     name = status.get("session", "?")
     if status.get("_no_status_yet"):
         files = status.get("files", [])
         return (
-            f"## {EMOJI['session']} session `{name}` — _no fanout started_\n\n"
+            f"## session `{name}` — _no fanout started_\n\n"
             f"`status.json` not present yet.\n\n"
             f"Files in dir: {len(files)}"
         )
@@ -2328,7 +2209,7 @@ def _card_session_status(status: dict, args: dict, graph: KuberlyGraph) -> str:
     for ph in phases:
         phase_counts[ph.get("status", "queued")] += 1
 
-    summary = " · ".join(f"{EMOJI.get(k, '•')} {v} {k}"
+    summary = " · ".join(f"{EMOJI.get(k, '-')} {v} {k}"
                          for k, v in phase_counts.items())
 
     lines = [
@@ -2338,7 +2219,7 @@ def _card_session_status(status: dict, args: dict, graph: KuberlyGraph) -> str:
         "",
         f"**Phases:** {summary}",
         "",
-        f"## {EMOJI['fanout']} Phase progression",
+        f"## Phase progression",
         "",
         "| # | Phase | Personas | Mode | Status |",
         "|---|---|---|---|---|",
@@ -2352,7 +2233,7 @@ def _card_session_status(status: dict, args: dict, graph: KuberlyGraph) -> str:
         if ph.get("needs_approval"):
             mode_parts.append(f"{EMOJI['approval']} approval")
         personas_str = ", ".join(
-            f"{EMOJI.get(personas.get(p, {}).get('status', 'queued'), '•')} `{p}`"
+            f"{EMOJI.get(personas.get(p, {}).get('status', 'queued'), '-')} `{p}`"
             for p in ph["personas"]
         )
         lines.append(
@@ -2366,7 +2247,7 @@ def _card_session_status(status: dict, args: dict, graph: KuberlyGraph) -> str:
     if timed:
         lines.extend([
             "",
-            "### 🕒 Persona timing",
+            "### Persona timing",
             "",
             "| Persona | Status | Started | Ended |",
             "|---|---|---|---|",
@@ -2381,7 +2262,7 @@ def _card_session_status(status: dict, args: dict, graph: KuberlyGraph) -> str:
     # File listing — annotate expected ones with status
     lines.extend([
         "",
-        f"### {EMOJI['files']} Session files",
+        f"### Session files",
         "",
     ])
     if not files:
@@ -2396,9 +2277,9 @@ def _card_session_status(status: dict, args: dict, graph: KuberlyGraph) -> str:
 
 def _card_session_set_status(result: dict, args: dict, graph: KuberlyGraph) -> str:
     if "error" in result:
-        return f"## ❌ session_set_status — error\n\n`{result['error']}`"
+        return f"## err session_set_status — error\n\n`{result['error']}`"
     return (
-        f"## ✅ status updated\n\n"
+        f"## ok status updated\n\n"
         f"- **{result['kind']}:** `{result['target']}`\n"
         f"- **status:** {_status_badge(result['status'])}\n"
         f"- **at:** {result['updated_at']}"
@@ -2407,32 +2288,32 @@ def _card_session_set_status(result: dict, args: dict, graph: KuberlyGraph) -> s
 
 def _card_session_read(result: dict, args: dict, graph: KuberlyGraph) -> str:
     if "error" in result:
-        return f"## ❌ session_read — error\n\n`{result['error']}`"
+        return f"## err session_read — error\n\n`{result['error']}`"
     fname = result.get("file", "?")
     content = result.get("content", "")
     return (
-        f"## {EMOJI['files']} `{fname}` · {result.get('bytes', 0)} bytes\n\n"
+        f"## `{fname}` · {result.get('bytes', 0)} bytes\n\n"
         f"```markdown\n{content}\n```"
     )
 
 
 def _card_session_write(result: dict, args: dict, graph: KuberlyGraph) -> str:
     if "error" in result:
-        return f"## ❌ session_write — error\n\n`{result['error']}`"
+        return f"## err session_write — error\n\n`{result['error']}`"
     return (
-        f"## ✅ wrote `{result.get('file', '?')}`\n\n"
+        f"## ok wrote `{result.get('file', '?')}`\n\n"
         f"_{result.get('bytes', 0)} bytes_"
     )
 
 
 def _card_session_list(result: dict, args: dict, graph: KuberlyGraph) -> str:
     if "error" in result:
-        return f"## ❌ session_list — error\n\n`{result['error']}`"
+        return f"## err session_list — error\n\n`{result['error']}`"
     files = result.get("files", [])
     if not files:
-        return f"## {EMOJI['session']} session `{result.get('session', '?')}` — _empty_"
+        return f"## session `{result.get('session', '?')}` — _empty_"
     lines = [
-        f"## {EMOJI['session']} session `{result.get('session', '?')}` "
+        f"## session `{result.get('session', '?')}` "
         f"— **{len(files)} files**",
         "",
         "| File | Size | Modified |",
@@ -2446,48 +2327,48 @@ def _card_session_list(result: dict, args: dict, graph: KuberlyGraph) -> str:
 # Compact one-line summaries for chained calls (`format=compact`).
 def _compact_summary(name: str, result, args: dict) -> str:
     if isinstance(result, dict) and "error" in result:
-        return f"❌ {name}: {result['error']}"
+        return f"err {name}: {result['error']}"
     if name == "query_nodes":
-        return f"🧭 query_nodes: {len(result)} matches"
+        return f" query_nodes: {len(result)} matches"
     if name in ("get_node", "get_neighbors"):
-        return (f"🔗 {name}: `{result.get('node','?')}` "
+        return (f" {name}: `{result.get('node','?')}` "
                 f"· in={len(result.get('incoming',[]))} "
                 f"· out={len(result.get('outgoing',[]))}")
     if name == "blast_radius":
-        return (f"💥 blast_radius `{result.get('node','?')}`: "
+        return (f" blast_radius `{result.get('node','?')}`: "
                 f"down={result.get('downstream_count',0)} "
                 f"up={result.get('upstream_count',0)}")
     if name == "shortest_path":
-        return f"🛤️ shortest_path: length {result.get('length','?')}"
+        return f" shortest_path: length {result.get('length','?')}"
     if name == "drift":
         comps = len(result.get("components", {}))
         apps = len(result.get("applications", {}))
-        return f"🌊 drift: components in {comps} env(s), apps in {apps} env(s)"
+        return f" drift: components in {comps} env(s), apps in {apps} env(s)"
     if name == "stats":
-        return (f"📊 stats: {result.get('node_count',0)} nodes "
+        return (f" stats: {result.get('node_count',0)} nodes "
                 f"· {result.get('edge_count',0)} edges "
                 f"· {len(result.get('critical_nodes',[]))} critical")
     if name == "plan_persona_fanout":
-        return (f"🚀 plan: kind=`{result.get('task_kind','?')}` "
+        return (f" plan: kind=`{result.get('task_kind','?')}` "
                 f"({result.get('confidence','?')}) "
                 f"· {len(result.get('phases',[]))} phases")
     if name == "session_init":
-        return (f"📁 session `{result.get('session_slug','?')}` created "
+        return (f" session `{result.get('session_slug','?')}` created "
                 f"({result.get('task_kind','?')})")
     if name == "session_status":
         if result.get("_no_status_yet"):
-            return f"📁 session `{result.get('session','?')}`: no fanout"
+            return f" session `{result.get('session','?')}`: no fanout"
         ps = result.get("phases", [])
         done = sum(1 for p in ps if p.get("status") == "done")
-        return f"📁 session `{result.get('session','?')}`: {done}/{len(ps)} phases done"
+        return f" session `{result.get('session','?')}`: {done}/{len(ps)} phases done"
     if name == "session_set_status":
-        return f"✅ {result.get('kind','?')} `{result.get('target','?')}`: {result.get('status','?')}"
+        return f"ok {result.get('kind','?')} `{result.get('target','?')}`: {result.get('status','?')}"
     if name == "session_read":
-        return f"📝 read `{result.get('file','?')}`: {result.get('bytes',0)} B"
+        return f" read `{result.get('file','?')}`: {result.get('bytes',0)} B"
     if name == "session_write":
-        return f"✅ wrote `{result.get('file','?')}`: {result.get('bytes',0)} B"
+        return f"ok wrote `{result.get('file','?')}`: {result.get('bytes',0)} B"
     if name == "session_list":
-        return f"📁 session `{result.get('session','?')}`: {len(result.get('files',[]))} files"
+        return f" session `{result.get('session','?')}`: {len(result.get('files',[]))} files"
     return f"{name}: ok"
 
 
@@ -2523,7 +2404,7 @@ def render_tool_result(name: str, result, args: dict, graph: KuberlyGraph,
     try:
         return fn(result, args, graph)
     except Exception as exc:  # never let a render bug break the MCP call
-        return (f"## ⚠️ render error — falling back to JSON\n\n"
+        return (f"## render error — falling back to JSON\n\n"
                 f"`{type(exc).__name__}: {exc}`\n\n"
                 f"```json\n{json.dumps(result, indent=2, default=str)}\n```")
 

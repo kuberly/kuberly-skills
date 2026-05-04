@@ -87,15 +87,13 @@ STRONG_INFRA_VERBS = (
     "bump", "upgrade", "downgrade", "refactor", "rename",
 )
 
-NUDGE_BASE = """[infra-orchestrator hook] This prompt looks like a non-trivial infra task in kuberly-stack.
-
-Recommended routing:
-1. Invoke the `infra-orchestrator` skill via the Skill tool before editing anything; it owns session state under `.agents/prompts/<session>/` and enforces plan-only + OpenSpec gates.
-2. Graph-first: call `mcp__kuberly-graph__*` tools (`query_nodes`, `blast_radius`, `get_neighbors`, `drift`, `shortest_path`, `stats`) BEFORE reading HCL/JSON files. Paste the slice into `context.md`.
-3. **Sequential before parallel.** Run `infra-scope-planner` first and wait. Only fan out additional personas (troubleshooter, reviewers) after scope confirms the target *exists* in the graph. Don't spawn two agents to answer the same question.
-4. Per `infra-bootstrap-mandatory`: if any edit is implied, create a feature branch off the current integration branch first.
-5. Plan-only: never run `terragrunt apply`, `tofu apply`, `terragrunt destroy`, or `tofu destroy`. Only `terragrunt run plan`, `validate`, `fmt`, lint, and read-only tooling are allowed.
-6. Wait for user approval on any implementation/CI-cd persona prompt; read-only personas (planner, troubleshooter, reviewers, reconciler) can run without confirmation."""
+NUDGE_BASE = """[infra-orchestrator] non-trivial infra task. Routing:
+1. Invoke `infra-orchestrator` skill before editing.
+2. Graph-first: call `mcp__kuberly-graph__plan_persona_fanout` then `session_init`.
+3. Sequential: scope-planner alone first; fan out only after scope confirms target exists.
+4. New feature branch before any edit (see infra-bootstrap-mandatory).
+5. Plan-only: no `apply`/`destroy`. Only `terragrunt run plan`, `validate`, `fmt`, lint.
+6. Approval required for impl/cicd persona dispatch; read-only personas auto-run."""
 
 
 def _emit_silent_exit(code: int = 0) -> None:
@@ -179,29 +177,23 @@ def _preflight_graph_check(lower: str):
     for ent in mentioned:
         ids = by_label.get(ent, [])
         if ids:
-            shown = ", ".join(ids[:6])
+            shown = ",".join(ids[:6])
             if len(ids) > 6:
-                shown += f", ... (+{len(ids) - 6} more)"
-            present_rows.append(f"- `{ent}` -> {shown}")
+                shown += f"+{len(ids) - 6}"
+            present_rows.append(f"{ent}={shown}")
         else:
             absent.append(ent)
 
     present_block = ""
     if present_rows:
-        present_block = (
-            "\n\n**Graph slice (pre-flight, no MCP call needed):**\n"
-            + "\n".join(present_rows)
-        )
+        present_block = "\n\ngraph-slice:\n" + "\n".join(present_rows)
 
     absent_block = ""
     if absent:
-        names = ", ".join(f"`{a}`" for a in absent)
+        names = ", ".join(absent)
         absent_block = (
-            "\n\n**STOP — pre-flight graph check.** The following named entities "
-            f"appear in the prompt but have NO matching node in `.claude/graph.json`: {names}. "
-            "Either the entity is not deployed in this repo, the user means a different name, "
-            "or the graph is stale. Do NOT spawn subagents to re-discover this. "
-            "Confirm with the user (or run `mcp__kuberly-graph__query_nodes` once) before delegating."
+            f"\n\nSTOP target-absent: {names} not in graph. "
+            "Confirm with user before any persona dispatch."
         )
 
     return present_block, absent_block
