@@ -76,10 +76,6 @@ Public GitHub access needs no token. APM reads **`GITHUB_TOKEN`/`GH_TOKEN`** if 
 
 4. Run **`apm install`** in the fork and commit the updated **`apm.lock.yaml`**.
 
-## Related upstream docs
-
-The scaffold originated from **kuberly-stack** (`templates/kuberly-agent-skills/`). Packaging how-to: **kuberly-stack** [docs/agent-packaging/README.md](https://github.com/kuberly/kuberly-stack/blob/main/docs/agent-packaging/README.md) (same tree in your clone).
-
 ## Local validation
 
 ```bash
