@@ -26,13 +26,15 @@ Pairs with **`revise-infra-plan`** (interview workflow) and **`infra-self-review
 
 For any non-trivial task, the first three calls are mechanical:
 
-1. `mcp__kuberly-graph__plan_persona_fanout({ task, named_modules?, current_branch })` — returns `task_kind`, `scope` (blast radius + likely-changed files + drift), `gates` (branch + OpenSpec + personas-synced), the persona DAG with per-phase `parallel`/`needs_approval` flags, and a ready-to-paste `context_md` body. **Replaces what the orchestrator used to chain by hand: `query_nodes` → `blast_radius` → `drift` → manual policy reasoning.**
-2. `mcp__kuberly-graph__session_init({ name, task, modules, current_branch })` — creates `.agents/prompts/<slug>/` with `context.md` (seeded from the plan above), `findings/`, `tasks/`. Identical layout to `scripts/init_agent_session.py`.
-3. Fan out **phase 1** of the returned DAG: one assistant message with one `Agent` call per persona in the phase. Use `run_in_background: true` when you have other prep to do while a long-running persona finishes.
+1. `mcp__kuberly-graph__plan_persona_fanout({ task, named_modules?, current_branch })` — returns `task_kind`, `scope` (blast radius + likely-changed files + drift), `gates` (branch + OpenSpec + personas-synced), the persona DAG with per-phase `parallel`/`needs_approval` flags, and a ready-to-paste `context_md` body. The MCP card output is a **fanout briefing** with status-badged tables — paste it verbatim to the user as your "here's what I'm about to do" summary. **Replaces what the orchestrator used to chain by hand: `query_nodes` → `blast_radius` → `drift` → manual policy reasoning.**
+2. `mcp__kuberly-graph__session_init({ name, task, modules, current_branch })` — creates `.agents/prompts/<slug>/` with `context.md` (seeded from the plan above), `findings/`, `tasks/`, **and `status.json`** (live fanout dashboard, every persona starting in `queued`).
+3. Fan out **phase 1** of the returned DAG: one assistant message with one `Agent` call per persona in the phase. **Wrap each `Agent` call with status updates** so the user sees live progress (see "Status-aware fanout" below). Use `run_in_background: true` when you have other prep to do while a long-running persona finishes.
 
 If `gates.branch.verdict == "block"` or `gates.openspec.required == true && existing_change_folder == null`, **stop and surface to the user** before delegating implementation. Read-only personas (planner, troubleshooter, reviewers, reconciler) can still run.
 
 If `confidence == "low"` from the plan, ask the user to confirm the inferred `task_kind` — or pass an explicit `task_kind` on a re-call.
+
+Between phases, call `mcp__kuberly-graph__session_status({ name })` to render the live Kanban-style dashboard (phase progression, per-persona timing, file inventory). This is what the user reads to follow along.
 
 ## Hard rules
 
@@ -58,9 +60,12 @@ mcp__kuberly-graph__session_init({ name: "<slug>", task: "<one-line goal>",
 mcp__kuberly-graph__session_write({ name, file: "decisions.md", content: "..." })
 mcp__kuberly-graph__session_read({  name, file: "scope.md" })
 mcp__kuberly-graph__session_list({  name })
+mcp__kuberly-graph__session_status({  name })                     # live fanout dashboard
+mcp__kuberly-graph__session_set_status({ name, target: "<persona|phase>",
+                                         status: "running" })     # called around Agent() calls
 ```
 
-`session_init` seeds `context.md` from a fresh `plan_persona_fanout` for the same task, so step 1 of the entry sequence and the session creation can be a single round-trip. All session writes are path-validated and refused if they resolve outside the session dir.
+`session_init` seeds `context.md` from a fresh `plan_persona_fanout` for the same task, **and seeds `status.json`** with every persona starting in `queued`. So step 1 of the entry sequence and the session creation can be a single round-trip. All session writes are path-validated and refused if they resolve outside the session dir.
 
 **B. Shell / CLI:**
 
@@ -133,6 +138,30 @@ Agent({subagent_type: "findings-reconciler", prompt: ...})
 
 Locking is unnecessary because each persona has a unique write target.
 
+## Status-aware fanout
+
+The `status.json` seeded by `session_init` is the source of truth for the live dashboard. Wrap every persona dispatch with **two MCP calls** — one to mark `running`, one to mark the resulting status — so `session_status` reflects reality:
+
+```
+# Mark personas running (single message — runs concurrently with the Agent calls)
+mcp__kuberly-graph__session_set_status({ name, target: "troubleshooter",        status: "running" })
+mcp__kuberly-graph__session_set_status({ name, target: "infra-scope-planner",   status: "running" })
+
+Agent({subagent_type: "troubleshooter",       prompt: ...})
+Agent({subagent_type: "infra-scope-planner",  prompt: ...})
+
+# After they return, mark the outcome
+mcp__kuberly-graph__session_set_status({ name, target: "troubleshooter",      status: "done" })
+mcp__kuberly-graph__session_set_status({ name, target: "infra-scope-planner", status: "done" })
+
+# Render the live dashboard for the user before the next phase
+mcp__kuberly-graph__session_status({ name })
+```
+
+Phase status auto-rolls-up from its personas — you don't update phase rows by hand. Use `status: "blocked"` when a persona surfaces a blocker requiring user input.
+
+Read-only personas (planner, troubleshooter, reviewers, reconciler) can run without prior approval; mark them `running` immediately. Implementation personas (`iac-developer`, `app-cicd-engineer`) need the user's go-ahead first — mark `queued` until then.
+
 ## Interview workflow
 
 Use **`revise-infra-plan`** as the algorithmic prompt for plan refinement (writes `plan.md`). Before invoking it, ensure the orchestrator has at minimum:
@@ -164,6 +193,7 @@ Stop only when the reconciler returns `Verdict: clean`. For multi-pass changes, 
 ```
 .agents/prompts/<session>/
 ├── context.md           you write — goal, graph snapshot, constraints
+├── status.json          MCP-managed — fanout dashboard (queued/running/done/blocked)
 ├── scope.md             infra-scope-planner writes
 ├── decisions.md         you write — irreversible calls + reasons
 ├── plan.md              revise-infra-plan writes (when used)
@@ -175,6 +205,8 @@ Stop only when the reconciler returns `Verdict: clean`. For multi-pass changes, 
 └── tasks/
     └── <NN>-<slug>.md   you write — implementation prompts for iac-developer
 ```
+
+`status.json` is owned by the MCP server — do not write it directly. Mutate it via `mcp__kuberly-graph__session_set_status`; render it via `mcp__kuberly-graph__session_status`.
 
 **Read rule:** every persona reads every file in the session dir.
 **Write rule:** every persona writes only its own assigned file.
