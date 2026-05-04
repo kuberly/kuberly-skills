@@ -29,6 +29,7 @@ The remaining skills assume the kuberly-stack layout (Terragrunt monorepo, OpenS
 | Path | Purpose |
 |------|---------|
 | `.apm/skills/<name>/` | Each skill is a directory with **`SKILL.md`** at the leaf (flat layout for APM deploy). |
+| `.apm/cursor/rules/*.mdc` | Canonical **Cursor** rules; copied to the consumer's **`.cursor/rules/`** by **`scripts/sync_cursor_rules.sh`** after **`apm install`**. |
 | `agents/<name>.md` | Persona subagent definitions (orchestrator's roster). Synced into the consumer's `.claude/agents/` via `scripts/sync_agents.sh` after `apm install`. |
 | `scripts/init_agent_session.py` | Manage `.agents/prompts/<session>/` directories (filesystem-based shared memory for the orchestrator and personas). |
 | `scripts/sync_agents.sh` | Copy `agents/*.md` from the apm cache to the consumer's `.claude/agents/`. |

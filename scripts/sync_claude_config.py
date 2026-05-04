@@ -9,8 +9,11 @@ it merges canonical entries — pointing at that apm cache path — into:
 
   - `.claude/settings.json`  (Claude Code hooks)
   - `.mcp.json`              (Claude Code project-scope MCP servers)
-  - `.cursor/hooks.json`     (Cursor hooks)
-  - `.cursor/mcp.json`       (Cursor project-scope MCP servers)
+  - `.cursor/hooks.json`     (Cursor hooks: UserPromptSubmit + sessionStart graph refresh)
+  - `.cursor/mcp.json`       (Cursor project-scope MCP servers, stdio transport)
+
+Canonical Cursor rules ship under **kuberly-skills** `.apm/cursor/rules/` and are copied into
+`.cursor/rules/` by **`scripts/sync_cursor_rules.sh`** (invoked from **`post_apm_install.sh`**).
 
 Idempotent: same input -> no-op; nothing else in any file is touched.
 User-authored entries that don't reference the apm cache path survive.
@@ -96,22 +99,57 @@ def _mcp_server_claude() -> dict[str, Any]:
 def _mcp_server_cursor() -> dict[str, Any]:
     """kuberly-platform MCP server for Cursor `.cursor/mcp.json`.
 
-    Cursor adds `type`, `tools`, `id` fields. Format mirrors what APM writes
-    natively for self-defined stdio servers, so the two paths produce
-    interchangeable output.
+    Cursor requires **stdio** MCP servers (`type: stdio`); `${workspaceFolder}`
+    is expanded by Cursor for both the script path and `--repo`.
     """
     return {
-        "type": "local",
-        "tools": ["*"],
-        "id": "",
+        "type": "stdio",
         "command": "python3",
         "args": [
-            f"{APM_CACHE_PATH}/mcp/kuberly-platform/kuberly_platform.py",
+            "${workspaceFolder}/apm_modules/kuberly/kuberly-skills/mcp/"
+            "kuberly-platform/kuberly_platform.py",
             "mcp",
             "--repo",
-            ".",
+            "${workspaceFolder}",
         ],
     }
+
+
+_SESSION_START_COMMAND = (
+    "sh apm_modules/kuberly/kuberly-skills/scripts/hooks/"
+    "refresh_kuberly_graph_cursor_session.sh"
+)
+
+
+def _session_start_entry_owned(entry: Any) -> bool:
+    """True if this sessionStart hook was installed by kuberly-skills (or legacy paths)."""
+    if not isinstance(entry, dict):
+        return False
+    cmd = entry.get("command", "")
+    if not isinstance(cmd, str):
+        return False
+    needles = (
+        "refresh_kuberly_graph_cursor_session",
+        "refresh_kuberly_graph_session.sh",
+        f"{APM_CACHE_PATH}/mcp/kuberly-platform/kuberly_platform.py",
+        "kuberly_platform.py generate",
+        "scripts/kuberly_graph.py generate",
+    )
+    return any(n in cmd for n in needles)
+
+
+def _merge_cursor_session_start_hooks(out: dict[str, Any]) -> None:
+    """Merge Cursor `sessionStart` hooks (flat list shape, not UserPromptSubmit matchers)."""
+    out.setdefault("hooks", {})
+    hooks = out["hooks"]
+    if not isinstance(hooks, dict):
+        return
+    current = hooks.get("sessionStart", [])
+    if not isinstance(current, list):
+        current = []
+    filtered = [e for e in current if not _session_start_entry_owned(e)]
+    canonical = {"command": _SESSION_START_COMMAND, "timeout": 120}
+    hooks["sessionStart"] = filtered + [canonical]
 
 
 # --- merge helpers ----------------------------------------------------------
@@ -207,6 +245,7 @@ def _merge_cursor_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
         if k == "version":
             continue
         out[k] = v
+    _merge_cursor_session_start_hooks(out)
     return out
 
 

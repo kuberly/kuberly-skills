@@ -1,0 +1,26 @@
+---
+description: Use kuberly-platform (graph MCP + orchestration) before ad-hoc greps when working in this Terragrunt monorepo.
+alwaysApply: true
+---
+
+# kuberly-platform — graph-first infra orchestration
+
+This repo uses **`${workspaceFolder}/apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/kuberly_platform.py`** (after `apm install`). Treat it as the **first** source of truth for structure, dependencies, drift, blast radius, and multi-persona orchestration — not as an optional optimization.
+
+## When to use it
+
+On any task that touches **modules, components, applications, env parity, impact of a change, or “what depends on X?”**:
+
+1. **Prefer MCP** (server name **`kuberly-platform`** in `.cursor/mcp.json`): `stats`, `query_nodes`, `get_neighbors`, `blast_radius`, `shortest_path`, `drift`, and for large changes `plan_persona_fanout` / session tools as documented in **`CLAUDE.md`** / **`AGENTS.md`**.
+2. **If MCP is unavailable** (tool errors with “server does not exist”, connection errors, or missing tool schemas): use the **CLI** from the repo root (same code path as MCP):
+   - `python3 apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/kuberly_platform.py generate . -o .claude` — refresh graph artifacts if cache is stale or missing.
+   - `... kuberly_platform.py blast <node> --repo .` / `path` / `query` — same logic as MCP tools.
+3. **Last resort**: read **`.claude/graph.json`** or **`GRAPH_REPORT.md`** only when MCP and CLI are blocked — and say that you fell back.
+
+## Cursor setup
+
+If agents cannot see **`kuberly-platform`**, enable or fix the server under **Cursor Settings → MCP** (stdio `python3` + args from **`.cursor/mcp.json`**). The server reads **`.claude/graph.json`** on startup; ensure it exists (run **`generate`** once after clone / `apm install`).
+
+## Do not
+
+- Answer graph questions (edge counts, dependents, drift) by **only** reading static reports when MCP or CLI can run — keep reports as **cache**, not the primary interface.
