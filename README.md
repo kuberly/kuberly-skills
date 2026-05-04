@@ -86,14 +86,14 @@ Skills follow the [Agent Skills](https://agentskills.io) layout: each skill is a
 dependencies:
   apm:
     - git: https://github.com/kuberly/kuberly-skills.git
-      ref: v0.7.0
+      ref: v0.7.1
 ```
 
 Or HTTPS one-liner (see [APM dependencies](https://microsoft.github.io/apm/guides/dependencies/)):
 
 ```yaml
   apm:
-    - https://github.com/kuberly/kuberly-skills.git#v0.7.0
+    - https://github.com/kuberly/kuberly-skills.git#v0.7.1
 ```
 
 Public GitHub access needs no token. APM reads **`GITHUB_TOKEN`/`GH_TOKEN`** if present (rate-limit relief or private mirrors).
