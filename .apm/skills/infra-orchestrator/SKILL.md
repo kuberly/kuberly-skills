@@ -259,12 +259,12 @@ For GCP / Azure, point at `clouds/gcp/modules/<module>/` or `clouds/azure/module
 
 Persona definitions live in **`kuberly-skills`** (this package) at `agents/<name>.md`. APM ships them inside `apm_modules/kuberly/kuberly-skills/agents/` after `apm install`. The consumer repo's `scripts/sync_agents.sh` (also from this package) copies them into `.claude/agents/<name>.md`. Wire that script into the consumer's `ensure-apm-skills` pre-commit hook so personas stay synced on every install.
 
-**Hooks and the `kuberly-graph` MCP server are auto-deployed by APM** (v0.10.3+). On `apm install`, APM:
+**Hooks and the `kuberly-graph` MCP server are auto-wired by APM + a sidecar sync script** (v0.10.4+):
 
-- Merges `.apm/hooks/orchestrator-hooks.json` into the consumer's `.claude/settings.json` — wires both the SessionStart graph generator and the UserPromptSubmit pre-flight router. Hook scripts are copied to `.claude/hooks/kuberly-skills/...` automatically.
-- Registers the self-defined `kuberly-graph` MCP server (declared in this package's `apm.yml`) into the consumer's `.mcp.json` — no manual entry, no `sync_mcp.sh` step.
+- For Cursor / Codex / VS Code: APM writes the wiring directly via `.apm/hooks/orchestrator-hooks.json` and the self-defined MCP server in this package's `apm.yml`.
+- For Claude Code: apm-cli 0.9.x reports hook integration but does not actually write `.claude/settings.json`, and does not target project-scope `.mcp.json` at all. `scripts/sync_claude_config.py` (Python 3 stdlib, idempotent) bridges that gap — it merges canonical entries pointing at the apm cache path. Wire it from the consumer's `ensure-apm-skills` pre-commit hook so it runs automatically after `apm install` (alongside `sync_agents.sh`).
 
-Consumers no longer hand-maintain `.mcp.json` or `.claude/settings.json` for kuberly-skills wiring. Strip any pre-v0.10.3 manual entries after upgrading.
+Both wirings reference `apm_modules/kuberly/kuberly-skills/...`, so `apm install` is the single update mechanism — no copy step.
 
 The `UserPromptSubmit` hook does pre-flight graph entity lookups and emits a STOP banner when the user names an entity that is not in the graph — preventing the canonical "spawn two personas to re-discover X is not deployed" failure mode. See `scripts/hooks/README.md` in this package for the implementation details.
 
