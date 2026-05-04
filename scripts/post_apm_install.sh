@@ -44,22 +44,40 @@ SYNC_CLAUDE="$PKG/scripts/sync_claude_config.py"
 # 3. Pre-commit framework: ensure git hook is installed.
 # The consumer's .pre-commit-config.yaml lists ensure-apm-skills (which calls
 # this script). For the entry to actually fire on `git commit`, pre-commit
-# must have written .git/hooks/pre-commit. New clones rarely do this manually;
-# self-heal here so every `apm install` makes future commits auto-sync.
+# must have written a hook script. New clones rarely run `pre-commit install`
+# manually; self-heal here so every `apm install` makes future commits sync.
+#
+# Three cases for where the hook can live:
+#   a. Default — .git/hooks/pre-commit (pre-commit's auto-install location)
+#   b. Custom — core.hooksPath is set (e.g. .githooks/) and that path's
+#      pre-commit script invokes the framework. Pre-commit refuses to
+#      auto-install over core.hooksPath; treat this as already-wired if the
+#      custom hook calls `pre-commit`.
+#   c. Missing — neither (a) nor (b); install if pre-commit CLI present.
 PCC="$ROOT/.pre-commit-config.yaml"
-GIT_DIR="$(git -C "$ROOT" rev-parse --git-dir 2>/dev/null)"
-PRE_HOOK="$ROOT/$GIT_DIR/hooks/pre-commit"
 if [[ -f "$PCC" ]]; then
-  needs_install=1
-  if [[ -f "$PRE_HOOK" ]] && grep -q "pre-commit" "$PRE_HOOK" 2>/dev/null; then
-    needs_install=0
-  fi
-  if [[ "$needs_install" == "1" ]]; then
-    if command -v pre-commit >/dev/null 2>&1; then
-      ( cd "$ROOT" && pre-commit install --install-hooks ) >&2 \
-        && echo "post_apm_install: pre-commit git hook installed"
+  HOOKS_PATH="$(git -C "$ROOT" config --get core.hooksPath 2>/dev/null || true)"
+
+  if [[ -n "$HOOKS_PATH" ]]; then
+    # case (b): custom hooksPath. Don't fight it — verify the user's hook
+    # actually invokes pre-commit, otherwise warn.
+    CUSTOM_HOOK="$ROOT/$HOOKS_PATH/pre-commit"
+    if [[ -f "$CUSTOM_HOOK" ]] && grep -q "pre-commit" "$CUSTOM_HOOK" 2>/dev/null; then
+      :  # silently OK — user's custom hook already calls pre-commit
     else
-      echo "post_apm_install: pre-commit CLI not found — install with 'pip install pre-commit' or 'brew install pre-commit', then run 'pre-commit install'" >&2
+      echo "post_apm_install: core.hooksPath=$HOOKS_PATH but '$CUSTOM_HOOK' does not invoke pre-commit. Wire it manually or 'git config --unset-all core.hooksPath'." >&2
+    fi
+  else
+    # case (a) or (c): default location.
+    GIT_DIR="$(git -C "$ROOT" rev-parse --git-dir 2>/dev/null)"
+    PRE_HOOK="$ROOT/$GIT_DIR/hooks/pre-commit"
+    if [[ ! -f "$PRE_HOOK" ]] || ! grep -q "pre-commit" "$PRE_HOOK" 2>/dev/null; then
+      if command -v pre-commit >/dev/null 2>&1; then
+        ( cd "$ROOT" && pre-commit install --install-hooks ) >&2 \
+          && echo "post_apm_install: pre-commit git hook installed"
+      else
+        echo "post_apm_install: pre-commit CLI not found — 'pip install pre-commit' or 'brew install pre-commit', then 'pre-commit install'" >&2
+      fi
     fi
   fi
 fi
