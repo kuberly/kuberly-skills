@@ -96,6 +96,22 @@ class TaskKindInferenceTests(unittest.TestCase):
     def test_empty_task_is_unknown(self) -> None:
         self.assertEqual(self.g.infer_task_kind(""), ("unknown", "low"))
 
+    def test_new_application_keywords(self) -> None:
+        kind, _ = self.g.infer_task_kind("add new application called billing")
+        self.assertEqual(kind, "new-application")
+
+    def test_new_database_keywords(self) -> None:
+        kind, _ = self.g.infer_task_kind("add database for the orders service")
+        self.assertEqual(kind, "new-database")
+
+    def test_plan_review_keywords(self) -> None:
+        kind, _ = self.g.infer_task_kind("review the terragrunt plan output on PR 42")
+        self.assertEqual(kind, "plan-review")
+
+    def test_cicd_yaml_phrasing(self) -> None:
+        kind, _ = self.g.infer_task_kind("create ci yaml for my backend")
+        self.assertEqual(kind, "cicd")
+
 
 class PersonaDAGTests(unittest.TestCase):
     def test_resource_bump_dag_shape(self) -> None:
@@ -122,6 +138,20 @@ class PersonaDAGTests(unittest.TestCase):
         self.assertTrue(diag["parallel"])
         self.assertCountEqual(diag["personas"],
                               ["troubleshooter", "infra-scope-planner"])
+
+    def test_v0_11_new_task_kinds_present(self) -> None:
+        for kind in ("new-application", "new-database", "plan-review"):
+            self.assertIn(kind, PERSONA_DAGS, f"missing DAG for {kind}")
+
+    def test_plan_review_dispatches_only_terragrunt_plan_reviewer(self) -> None:
+        dag = PERSONA_DAGS["plan-review"]
+        self.assertEqual(len(dag), 1)
+        self.assertEqual(dag[0]["personas"], ["terragrunt-plan-reviewer"])
+        self.assertFalse(dag[0]["needs_approval"])
+
+    def test_terragrunt_plan_reviewer_in_expected_set(self) -> None:
+        from kuberly_graph import EXPECTED_PERSONAS
+        self.assertIn("terragrunt-plan-reviewer", EXPECTED_PERSONAS)
 
 
 class PlanPersonaFanoutTests(unittest.TestCase):

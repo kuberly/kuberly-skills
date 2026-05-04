@@ -42,19 +42,31 @@ EXPECTED_PERSONAS = {
     "pr-reviewer-in-context",
     "pr-reviewer-cold",
     "findings-reconciler",
+    "terragrunt-plan-reviewer",
 }
 
 # Keyword scoring for task_kind inference. Lower-cased substring match.
+# Customer-language keywords come first (they're how operators actually phrase
+# requests). Generic phrasing follows.
 KEYWORDS = {
     "incident":      ["slow", "oom", "crash", "page", "incident", "failing", "error",
                       "broken", "timeout", "down", "unhealthy", "5xx"],
     "resource-bump": ["bump", "raise", "increase", "decrease", "tune", "size",
                       "more cpu", "more memory", "more ram", "right-size", "rightsizing"],
+    "new-application": ["new application", "add application", "new app", "add app",
+                        "create application", "create app", "deploy a new app",
+                        "scaffold app", "add backend", "add frontend", "add worker"],
+    "new-database":  ["new database", "add database", "new db", "add db",
+                      "new aurora", "new postgres", "new mysql", "new redis cluster",
+                      "provision database"],
     "new-module":    ["scaffold", "new module", "add module", "create module", "introduce"],
     "drift-fix":     ["drift", "align", "match envs", "consistent", "sync env", "parity"],
     "cicd":          ["github actions", "codebuild", "workflow", "pipeline", "oidc",
-                      "ci/cd", "ci cd"],
+                      "ci/cd", "ci cd", "ci yaml", "ci file", "github yaml"],
     "cleanup":       ["delete", "remove", "decommission", "drop module", "retire"],
+    "plan-review":   ["review plan", "review the plan", "check plan", "check the plan",
+                      "plan output", "terragrunt plan output", "review terragrunt plan",
+                      "plan from pr", "plan comment", "review pr plan"],
 }
 
 # Persona DAG per task_kind. Each phase: id, personas, parallel, needs_approval.
@@ -80,6 +92,20 @@ PERSONA_DAGS = {
         {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
         *_REVIEW_RECONCILE,
     ],
+    "new-application": [
+        # Adding a new application is a CUE / applications/ JSON change
+        # against existing cluster modules. Same shape as new-module but
+        # the implementer touches applications/, not clouds/.
+        {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
+        {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
+        *_REVIEW_RECONCILE,
+    ],
+    "new-database": [
+        # New DB is usually a new components/<env>/<db>.json + module reference.
+        {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
+        {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
+        *_REVIEW_RECONCILE,
+    ],
     "new-module": [
         {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
         {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
@@ -100,14 +126,18 @@ PERSONA_DAGS = {
         {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
         *_REVIEW_RECONCILE,
     ],
+    # Plan review: kuberly platform posts `terragrunt run plan` output as PR /
+    # commit comments. The plan-reviewer reads those, checks against scope.md,
+    # and signs off (or refuses). No code edits, no fanout afterwards.
+    "plan-review": [
+        {"id": "plan-review", "personas": ["terragrunt-plan-reviewer"],
+         "parallel": False, "needs_approval": False},
+    ],
     # Fallback: dispatch the planner alone, replan once scope.md exists.
     "unknown": [
         {"id": "scope", "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
     ],
     # Pre-flight halt: caller named modules that don't exist as graph nodes.
-    # Empty persona list — the orchestrator must clarify with the user before
-    # any fanout. Spawning personas here is the canonical "burn 100k tokens
-    # to re-discover X is not deployed" failure mode.
     "stop-target-absent": [
         {"id": "halt", "personas": [], "parallel": False, "needs_approval": False},
     ],
@@ -2519,7 +2549,7 @@ def run_mcp_server(graph: KuberlyGraph):
                     "target_envs":    {"type": "array", "items": {"type": "string"}, "description": "Optional: target environments. Drift slice is computed only when set."},
                     "current_branch": {"type": "string", "description": "Result of `git rev-parse --abbrev-ref HEAD` — enables the branch gate."},
                     "session_name":   {"type": "string", "description": "Optional override for the session slug; defaults to slugified task."},
-                    "task_kind":      {"type": "string", "enum": ["resource-bump", "incident", "new-module", "drift-fix", "cicd", "cleanup", "unknown", "stop-target-absent"], "description": "Override task_kind inference. Note: `stop-target-absent` is normally set automatically when `named_modules` are supplied but none resolve to graph nodes — the orchestrator should not pass this value, the planner emits it."},
+                    "task_kind":      {"type": "string", "enum": ["resource-bump", "incident", "new-application", "new-database", "new-module", "drift-fix", "cicd", "cleanup", "plan-review", "unknown", "stop-target-absent"], "description": "Override task_kind inference. Note: `stop-target-absent` is normally set automatically when `named_modules` are supplied but none resolve to graph nodes — the orchestrator should not pass this value, the planner emits it."},
                     "format":         _FORMAT_PROP,
                 },
                 "required": ["task"],
