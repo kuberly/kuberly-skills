@@ -321,22 +321,51 @@ class KuberlyPlatform:
                 nid = f"app:{env_name}/{app_name}"
                 data = load_json_safe(jf)
                 meta = {}
-                runtime_module = None  # for an explicit edge to the runtime module
+                runtime_module = None  # explicit edge target (module name in clouds/aws/modules/)
                 if data:
-                    # Two app shapes coexist:
-                    #   EKS/CUE-style: `deployment.{port, replicas, container.image, container.env}`
-                    #   ECS/Lambda-style: `application.{name, type}` + `common`/`monitoring`/...
-                    dep = data.get("deployment") or {}
+                    # Five app shapes are recognized. See the
+                    # `application-types-and-deploy-paths` skill for full
+                    # discrimination rules.
+                    #
+                    #   1. top-level `argo-app` key      -> CUE -> ArgoCD ApplicationSet -> K8s
+                    #   2. top-level `deployment` key    -> CUE -> ArgoCD ApplicationSet -> K8s
+                    #   3. `application.type = "ecs"`            -> module:aws/ecs_app
+                    #   4. `application.type = "lambda"`         -> module:aws/lambda_app
+                    #   5. `application.type = "bedrock_agentcore"` -> module:aws/bedrock_agentcore_app
+                    #
+                    # An app belongs to exactly one shape. Order of checks
+                    # below matters when a JSON happens to carry overlapping
+                    # keys (top-level wins; the new ECS/Lambda shape uses
+                    # `application.type`, not a top-level discriminator).
+
+                    if data.get("argo-app") is not None:
+                        meta["runtime"] = "argo-app"
+                        runtime_module = "argocd"
+                        # Re-extract from inside argo-app for nicer metadata
+                        argo = data["argo-app"]
+                        dep = (argo or {}).get("deployment") or {}
+                    elif data.get("deployment") is not None and data.get("application") is None:
+                        meta["runtime"] = "deployment"
+                        runtime_module = "argocd"
+                        dep = data.get("deployment") or {}
+                    else:
+                        dep = data.get("deployment") or {}
+
+                    # Common deployment.* metadata (works for argo-app, deployment,
+                    # and ECS-shape JSONs that include a deployment block).
                     if dep:
-                        meta["port"] = dep.get("port")
-                        meta["replicas"] = dep.get("replicas")
-                        container = dep.get("container", {})
-                        img = container.get("image", {})
+                        if dep.get("port") is not None:
+                            meta["port"] = dep["port"]
+                        if dep.get("replicas") is not None:
+                            meta["replicas"] = dep["replicas"]
+                        container = dep.get("container") or {}
+                        img = container.get("image") or {}
                         if img.get("repository"):
                             meta["image"] = img["repository"]
-                        env_block = container.get("env", {})
-                        meta["secret_count"] = len(env_block.get("secrets", []) or [])
-                        meta["env_var_count"] = len(env_block.get("env_vars", {}) or {})
+                        env_block = container.get("env") or {}
+                        if env_block:
+                            meta["secret_count"] = len(env_block.get("secrets", []) or [])
+                            meta["env_var_count"] = len(env_block.get("env_vars", {}) or {})
 
                     app_block = data.get("application") or {}
                     if app_block:
@@ -344,11 +373,17 @@ class KuberlyPlatform:
                         # which module to invoke (ecs_app vs lambda_app vs ...).
                         rt = app_block.get("type") or ""
                         if rt:
-                            meta["runtime"] = rt   # e.g. "ecs", "lambda"
-                            # Conventional module names per runtime:
-                            #   ecs    -> ecs_app
-                            #   lambda -> lambda_app
-                            runtime_module = f"{rt}_app" if rt in {"ecs", "lambda"} else None
+                            meta["runtime"] = rt   # e.g. "ecs", "lambda", "bedrock_agentcore"
+                            # Conventional module names per runtime — match
+                            # clouds/aws/modules/<name>/.
+                            module_map = {
+                                "ecs":                "ecs_app",
+                                "lambda":             "lambda_app",
+                                "bedrock_agentcore":  "bedrock_agentcore_app",
+                                "ecs-app":            "ecs_app",      # alt spelling
+                                "lambda-app":         "lambda_app",
+                            }
+                            runtime_module = module_map.get(rt)
                         if app_block.get("name"):
                             meta["app_name"] = app_block["name"]
                         if app_block.get("namespace_name"):
@@ -363,12 +398,12 @@ class KuberlyPlatform:
                               environment=env_name, **meta)
                 self.add_edge(env_nid, nid, relation="deploys")
 
-                # Application -> runtime module edge (e.g. app:dev/admin-delight
-                # -> module:aws/ecs_app). Lets blast_radius surface "all apps
-                # affected if the ecs_app module changes."
+                # Application -> runtime module edge. Lets blast_radius surface
+                # "all apps affected if the ecs_app/lambda_app/argocd module
+                # changes." For argo-app and deployment shapes the conceptual
+                # "module" is argocd (the ApplicationSet syncs the CUE-rendered
+                # manifests); there is no per-app HCL module for those.
                 if runtime_module:
-                    # Pick the AWS provider as the conventional default; if the
-                    # repo has multi-cloud apps we'd need a per-app cloud hint.
                     rt_nid = f"module:aws/{runtime_module}"
                     self.add_edge(nid, rt_nid, relation="uses_module")
 
