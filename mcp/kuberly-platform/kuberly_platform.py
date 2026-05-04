@@ -321,21 +321,56 @@ class KuberlyPlatform:
                 nid = f"app:{env_name}/{app_name}"
                 data = load_json_safe(jf)
                 meta = {}
+                runtime_module = None  # for an explicit edge to the runtime module
                 if data:
-                    dep = data.get("deployment", {})
-                    meta["port"] = dep.get("port")
-                    meta["replicas"] = dep.get("replicas")
-                    container = dep.get("container", {})
-                    img = container.get("image", {})
-                    meta["image"] = img.get("repository", "")
-                    # count secrets
-                    env_block = container.get("env", {})
-                    meta["secret_count"] = len(env_block.get("secrets", []))
-                    meta["env_var_count"] = len(env_block.get("env_vars", {}))
+                    # Two app shapes coexist:
+                    #   EKS/CUE-style: `deployment.{port, replicas, container.image, container.env}`
+                    #   ECS/Lambda-style: `application.{name, type}` + `common`/`monitoring`/...
+                    dep = data.get("deployment") or {}
+                    if dep:
+                        meta["port"] = dep.get("port")
+                        meta["replicas"] = dep.get("replicas")
+                        container = dep.get("container", {})
+                        img = container.get("image", {})
+                        if img.get("repository"):
+                            meta["image"] = img["repository"]
+                        env_block = container.get("env", {})
+                        meta["secret_count"] = len(env_block.get("secrets", []) or [])
+                        meta["env_var_count"] = len(env_block.get("env_vars", {}) or {})
+
+                    app_block = data.get("application") or {}
+                    if app_block:
+                        # Discriminator the orchestrator uses to pick task_kind +
+                        # which module to invoke (ecs_app vs lambda_app vs ...).
+                        rt = app_block.get("type") or ""
+                        if rt:
+                            meta["runtime"] = rt   # e.g. "ecs", "lambda"
+                            # Conventional module names per runtime:
+                            #   ecs    -> ecs_app
+                            #   lambda -> lambda_app
+                            runtime_module = f"{rt}_app" if rt in {"ecs", "lambda"} else None
+                        if app_block.get("name"):
+                            meta["app_name"] = app_block["name"]
+                        if app_block.get("namespace_name"):
+                            meta["namespace"] = app_block["namespace_name"]
+
+                    # Cluster target — common across all shapes
+                    common = data.get("common") or {}
+                    if common.get("cluster_name"):
+                        meta["cluster"] = common["cluster_name"]
 
                 self.add_node(nid, type="application", label=app_name,
                               environment=env_name, **meta)
                 self.add_edge(env_nid, nid, relation="deploys")
+
+                # Application -> runtime module edge (e.g. app:dev/admin-delight
+                # -> module:aws/ecs_app). Lets blast_radius surface "all apps
+                # affected if the ecs_app module changes."
+                if runtime_module:
+                    # Pick the AWS provider as the conventional default; if the
+                    # repo has multi-cloud apps we'd need a per-app cloud hint.
+                    rt_nid = f"module:aws/{runtime_module}"
+                    self.add_edge(nid, rt_nid, relation="uses_module")
 
     def scan_modules(self):
         """Scan clouds/*/modules/ for Terragrunt modules and their dependency DAG."""
@@ -359,22 +394,42 @@ class KuberlyPlatform:
                 mod_name = mod_dir.name
                 nid = f"module:{provider}/{mod_name}"
 
-                # Read kuberly.json metadata if present
+                # Read kuberly.json metadata if present.
+                # Field names vary across forks: `desc` (mami) or `description`.
                 meta = {}
+                declared_deps: list[str] = []
                 kj = mod_dir / "kuberly.json"
                 if kj.exists():
                     kdata = load_json_safe(kj)
                     if kdata:
-                        meta["description"] = kdata.get("description", "")
-                        meta["version"] = kdata.get("version", "")
-                        meta["types"] = kdata.get("types", [])
-                        meta["author"] = kdata.get("author", "")
+                        # Prefer 'desc' (current spec) but accept 'description' as fallback.
+                        desc = kdata.get("desc") or kdata.get("description") or ""
+                        if desc:
+                            meta["description"] = desc
+                        if kdata.get("version"):
+                            meta["version"] = kdata.get("version")
+                        if kdata.get("types"):
+                            meta["types"] = kdata.get("types")
+                        if kdata.get("author"):
+                            meta["author"] = kdata.get("author")
+                        # `deps` is the module's authoritative dep list — more
+                        # reliable than parsing terragrunt.hcl when present.
+                        d = kdata.get("deps") or []
+                        if isinstance(d, list):
+                            declared_deps = [str(x) for x in d if x]
 
                 self.add_node(nid, type="module", label=mod_name,
                               provider=provider, path=str(mod_dir.relative_to(self.repo)), **meta)
                 self.add_edge(provider_nid, nid, relation="provides")
 
-                # Parse terragrunt.hcl for dependencies
+                # Edges from kuberly.json `deps`. These are AUTHORITATIVE — the
+                # module author declared them. Cross-link to same-provider sibling.
+                for dep_name in declared_deps:
+                    dep_nid = f"module:{provider}/{dep_name}"
+                    self.add_edge(nid, dep_nid, relation="depends_on")
+
+                # Parse terragrunt.hcl for dependencies (heuristic, picks up
+                # additional refs the kuberly.json author may have omitted).
                 tg = mod_dir / "terragrunt.hcl"
                 if tg.exists():
                     for dep in parse_hcl_dependencies(tg):
