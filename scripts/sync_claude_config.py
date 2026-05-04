@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""sync_claude_config.py — merge kuberly-skills wiring into consumer Claude Code config.
+"""sync_claude_config.py — merge kuberly-skills wiring into consumer config.
 
-APM does not natively populate Claude Code's `.claude/settings.json` (hooks)
-or project-scope `.mcp.json` (MCP servers). This script bridges that gap:
-after `apm install` lands kuberly-skills under `apm_modules/kuberly/kuberly-skills/`,
-it merges canonical entries — pointing at that apm cache path — into both files.
+APM has fixed semantics for hook + MCP deploy that don't fully reach Claude
+Code's project-scope config (`.claude/settings.json` + `.mcp.json`) and
+leaves Cursor's hook file empty. This script bridges those gaps: after
+`apm install` lands kuberly-skills under `apm_modules/kuberly/kuberly-skills/`,
+it merges canonical entries — pointing at that apm cache path — into:
 
-Idempotent: same input -> no-op; nothing else in either file is touched.
+  - `.claude/settings.json`  (Claude Code hooks)
+  - `.mcp.json`              (Claude Code project-scope MCP servers)
+  - `.cursor/hooks.json`     (Cursor hooks)
+  - `.cursor/mcp.json`       (Cursor project-scope MCP servers)
+
+Idempotent: same input -> no-op; nothing else in any file is touched.
+User-authored entries that don't reference the apm cache path survive.
 
 Run from the consumer repo root, typically via the `ensure-apm-skills`
 pre-commit hook:
@@ -28,16 +35,15 @@ from typing import Any
 # kuberly-skills package after install. Stable across versions.
 APM_CACHE_PATH = "apm_modules/kuberly/kuberly-skills"
 
-# Anything in `.claude/settings.json` whose command contains this marker is
-# considered "owned by kuberly-skills" and may be replaced. The marker
-# deliberately matches the apm cache path so user hooks pointing elsewhere
-# (e.g. their own scripts) survive untouched.
+# Anything whose command contains this marker is "owned by kuberly-skills"
+# and may be replaced on each run. Hooks pointing elsewhere (user's own
+# scripts) survive untouched.
 KUBERLY_OWNED_MARKER = APM_CACHE_PATH
 
 # --- canonical entries ------------------------------------------------------
 
-def _kuberly_hooks() -> dict[str, list[dict[str, Any]]]:
-    """The two hooks kuberly-skills owns. Returns Claude Code matcher form."""
+def _hooks_block() -> dict[str, list[dict[str, Any]]]:
+    """The two hooks kuberly-skills owns — same shape for Claude and Cursor."""
     return {
         "SessionStart": [
             {
@@ -73,9 +79,30 @@ def _kuberly_hooks() -> dict[str, list[dict[str, Any]]]:
     }
 
 
-def _kuberly_mcp_server() -> dict[str, Any]:
-    """The kuberly-graph MCP server entry for project-scope `.mcp.json`."""
+def _mcp_server_claude() -> dict[str, Any]:
+    """kuberly-graph MCP server for Claude Code project-scope `.mcp.json`."""
     return {
+        "command": "python3",
+        "args": [
+            f"{APM_CACHE_PATH}/mcp/kuberly-graph/kuberly_graph.py",
+            "mcp",
+            "--repo",
+            ".",
+        ],
+    }
+
+
+def _mcp_server_cursor() -> dict[str, Any]:
+    """kuberly-graph MCP server for Cursor `.cursor/mcp.json`.
+
+    Cursor adds `type`, `tools`, `id` fields. Format mirrors what APM writes
+    natively for self-defined stdio servers, so the two paths produce
+    interchangeable output.
+    """
+    return {
+        "type": "local",
+        "tools": ["*"],
+        "id": "",
         "command": "python3",
         "args": [
             f"{APM_CACHE_PATH}/mcp/kuberly-graph/kuberly_graph.py",
@@ -110,14 +137,17 @@ def _matcher_is_kuberly_owned(matcher: Any) -> bool:
     return True
 
 
-def _merge_settings(existing: dict[str, Any]) -> dict[str, Any]:
-    """Return a new settings dict with kuberly hooks installed (idempotent)."""
+def _merge_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
+    """Merge kuberly hooks into a settings/hooks dict (idempotent).
+
+    Same logic for Claude (`.claude/settings.json`) and Cursor
+    (`.cursor/hooks.json`) — both runtimes use the same hooks shape.
+    """
     out = json.loads(json.dumps(existing))  # deep copy via JSON round-trip
     out.setdefault("hooks", {})
     if not isinstance(out["hooks"], dict):
-        # User had something weird here; refuse to clobber.
-        return existing
-    for event, kuberly_matchers in _kuberly_hooks().items():
+        return existing  # something weird — refuse to clobber
+    for event, kuberly_matchers in _hooks_block().items():
         current = out["hooks"].get(event, [])
         if not isinstance(current, list):
             current = []
@@ -127,13 +157,13 @@ def _merge_settings(existing: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _merge_mcp(existing: dict[str, Any]) -> dict[str, Any]:
-    """Return a new mcp dict with kuberly-graph installed (idempotent)."""
+def _merge_mcp_file(existing: dict[str, Any], server_entry: dict[str, Any]) -> dict[str, Any]:
+    """Merge kuberly-graph into an mcpServers dict (idempotent)."""
     out = json.loads(json.dumps(existing))
     out.setdefault("mcpServers", {})
     if not isinstance(out["mcpServers"], dict):
         return existing
-    out["mcpServers"]["kuberly-graph"] = _kuberly_mcp_server()
+    out["mcpServers"]["kuberly-graph"] = server_entry
     return out
 
 
@@ -193,20 +223,40 @@ def main() -> int:
         )
         return 0
 
-    settings_path = root / ".claude" / "settings.json"
-    mcp_path = root / ".mcp.json"
-
-    settings_before = _load_json(settings_path, {"hooks": {}})
-    mcp_before = _load_json(mcp_path, {"mcpServers": {}})
-
-    settings_after = _merge_settings(settings_before)
-    mcp_after = _merge_mcp(mcp_before)
+    # The four files we manage. Each tuple: (path, default, merger, label).
+    targets = [
+        (
+            root / ".claude" / "settings.json",
+            {"hooks": {}},
+            lambda d: _merge_hooks_file(d),
+            ".claude/settings.json",
+        ),
+        (
+            root / ".mcp.json",
+            {"mcpServers": {}},
+            lambda d: _merge_mcp_file(d, _mcp_server_claude()),
+            ".mcp.json",
+        ),
+        (
+            root / ".cursor" / "hooks.json",
+            {"hooks": {}},
+            lambda d: _merge_hooks_file(d),
+            ".cursor/hooks.json",
+        ),
+        (
+            root / ".cursor" / "mcp.json",
+            {"mcpServers": {}},
+            lambda d: _merge_mcp_file(d, _mcp_server_cursor()),
+            ".cursor/mcp.json",
+        ),
+    ]
 
     changed = []
-    if _write_if_changed(settings_path, settings_after):
-        changed.append(str(settings_path.relative_to(root)))
-    if _write_if_changed(mcp_path, mcp_after):
-        changed.append(str(mcp_path.relative_to(root)))
+    for path, default, merger, label in targets:
+        before = _load_json(path, default)
+        after = merger(before)
+        if _write_if_changed(path, after):
+            changed.append(label)
 
     if changed:
         print(

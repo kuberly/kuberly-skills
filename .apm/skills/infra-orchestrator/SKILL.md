@@ -259,12 +259,24 @@ For GCP / Azure, point at `clouds/gcp/modules/<module>/` or `clouds/azure/module
 
 Persona definitions live in **`kuberly-skills`** (this package) at `agents/<name>.md`. APM ships them inside `apm_modules/kuberly/kuberly-skills/agents/` after `apm install`. The consumer repo's `scripts/sync_agents.sh` (also from this package) copies them into `.claude/agents/<name>.md`. Wire that script into the consumer's `ensure-apm-skills` pre-commit hook so personas stay synced on every install.
 
-**Hooks and the `kuberly-graph` MCP server are auto-wired by APM + a sidecar sync script** (v0.10.4+):
+**Hooks, MCP server, and persona subagents are auto-wired by APM + sidecar sync scripts** (v0.10.5+):
 
-- For Cursor / Codex / VS Code: APM writes the wiring directly via `.apm/hooks/orchestrator-hooks.json` and the self-defined MCP server in this package's `apm.yml`.
-- For Claude Code: apm-cli 0.9.x reports hook integration but does not actually write `.claude/settings.json`, and does not target project-scope `.mcp.json` at all. `scripts/sync_claude_config.py` (Python 3 stdlib, idempotent) bridges that gap — it merges canonical entries pointing at the apm cache path. Wire it from the consumer's `ensure-apm-skills` pre-commit hook so it runs automatically after `apm install` (alongside `sync_agents.sh`).
+- **Persona subagents** — `scripts/sync_agents.sh` copies `agents/*.md` into both `.claude/agents/` and `.cursor/agents/` so Claude Code and Cursor pick them up.
+- **Hooks + MCP** — `scripts/sync_claude_config.py` merges canonical entries (pointing at the apm cache path) into all four runtime config files: `.claude/settings.json`, `.mcp.json`, `.cursor/hooks.json`, `.cursor/mcp.json`. Idempotent. Preserves user-authored entries that don't reference the apm cache.
 
-Both wirings reference `apm_modules/kuberly/kuberly-skills/...`, so `apm install` is the single update mechanism — no copy step.
+apm-cli 0.9.x ships its own MCP/hook integrators for Cursor / Codex / VS Code, but on Claude Code's project-scope config and on `.cursor/hooks.json` it reports integration without actually writing. The sync scripts bridge that gap deterministically.
+
+Wire both from the consumer's `ensure-apm-skills` pre-commit hook so they run after `apm install`:
+
+```bash
+SYNC_AGENTS="${ROOT}/apm_modules/kuberly/kuberly-skills/scripts/sync_agents.sh"
+[[ -x "$SYNC_AGENTS" ]] && bash "$SYNC_AGENTS"
+
+SYNC_CLAUDE="${ROOT}/apm_modules/kuberly/kuberly-skills/scripts/sync_claude_config.py"
+[[ -f "$SYNC_CLAUDE" ]] && python3 "$SYNC_CLAUDE"
+```
+
+All wirings reference `apm_modules/kuberly/kuberly-skills/...`, so `apm install` is the single update mechanism — no copy step for MCP/hook content.
 
 The `UserPromptSubmit` hook does pre-flight graph entity lookups and emits a STOP banner when the user names an entity that is not in the graph — preventing the canonical "spawn two personas to re-discover X is not deployed" failure mode. See `scripts/hooks/README.md` in this package for the implementation details.
 
