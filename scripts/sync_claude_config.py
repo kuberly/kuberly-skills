@@ -158,11 +158,16 @@ def _merge_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
 
 
 def _merge_mcp_file(existing: dict[str, Any], server_entry: dict[str, Any]) -> dict[str, Any]:
-    """Merge kuberly-platform into an mcpServers dict (idempotent)."""
+    """Merge kuberly-platform into an mcpServers dict (idempotent).
+
+    Also removes any stale `kuberly-graph` entry — v0.12.0 renamed the
+    server, no consumer should keep pointing at the old name.
+    """
     out = json.loads(json.dumps(existing))
     out.setdefault("mcpServers", {})
     if not isinstance(out["mcpServers"], dict):
         return existing
+    out["mcpServers"].pop("kuberly-graph", None)  # drop legacy on every sync
     out["mcpServers"]["kuberly-platform"] = server_entry
     return out
 
