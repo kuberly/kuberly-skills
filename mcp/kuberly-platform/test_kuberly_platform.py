@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Tests for the orchestration layer in kuberly_graph.py.
+Tests for the orchestration layer in kuberly_platform.py.
 
-Stdlib only (unittest + tempfile). Builds a small synthetic KuberlyGraph
+Stdlib only (unittest + tempfile). Builds a small synthetic KuberlyPlatform
 in-memory plus a tempdir "fake repo" — no dependency on the real repo state.
 
 The path-resolution shim below makes this script runnable in two layouts:
-  - upstream (kuberly-skills): mcp/kuberly-graph/{kuberly_graph,test_kuberly_graph}.py
-  - consumer (post-apm install): scripts/test_kuberly_graph_orchestration.py
-    alongside scripts/mcp/kuberly-graph/kuberly_graph.py
+  - upstream (kuberly-skills): mcp/kuberly-platform/{kuberly_platform,test_kuberly_platform}.py
+  - consumer (post-apm install): scripts/test_kuberly_platform_orchestration.py
+    alongside scripts/mcp/kuberly-platform/kuberly_platform.py
 """
 from __future__ import annotations
 
@@ -18,14 +18,14 @@ import unittest
 from pathlib import Path
 
 _script_dir = Path(__file__).resolve().parent
-_pkg = _script_dir / "mcp" / "kuberly-graph"
-if (_pkg / "kuberly_graph.py").is_file():
+_pkg = _script_dir / "mcp" / "kuberly-platform"
+if (_pkg / "kuberly_platform.py").is_file():
     sys.path.insert(0, str(_pkg))
 else:
     sys.path.insert(0, str(_script_dir))
-from kuberly_graph import (  # noqa: E402
+from kuberly_platform import (  # noqa: E402
     EXPECTED_PERSONAS,
-    KuberlyGraph,
+    KuberlyPlatform,
     PERSONA_DAGS,
     _slugify,
 )
@@ -33,7 +33,7 @@ from kuberly_graph import (  # noqa: E402
 
 def _fake_repo() -> tempfile.TemporaryDirectory:
     """Make a tempdir that looks enough like a kuberly-stack repo to satisfy
-    KuberlyGraph (root.hcl marker, a couple of module dirs, persona stubs)."""
+    KuberlyPlatform (root.hcl marker, a couple of module dirs, persona stubs)."""
     tmp = tempfile.TemporaryDirectory()
     root = Path(tmp.name)
     (root / "root.hcl").write_text("# fake\n")
@@ -69,7 +69,7 @@ def _fake_repo() -> tempfile.TemporaryDirectory:
 class TaskKindInferenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = _fake_repo()
-        self.g = KuberlyGraph(self.tmp.name)
+        self.g = KuberlyPlatform(self.tmp.name)
         self.g.build()
 
     def tearDown(self) -> None:
@@ -150,14 +150,14 @@ class PersonaDAGTests(unittest.TestCase):
         self.assertFalse(dag[0]["needs_approval"])
 
     def test_terragrunt_plan_reviewer_in_expected_set(self) -> None:
-        from kuberly_graph import EXPECTED_PERSONAS
+        from kuberly_platform import EXPECTED_PERSONAS
         self.assertIn("terragrunt-plan-reviewer", EXPECTED_PERSONAS)
 
 
 class PlanPersonaFanoutTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = _fake_repo()
-        self.g = KuberlyGraph(self.tmp.name)
+        self.g = KuberlyPlatform(self.tmp.name)
         self.g.build()
 
     def tearDown(self) -> None:
@@ -232,7 +232,7 @@ class StopTargetAbsentTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tmp = _fake_repo()
-        self.g = KuberlyGraph(self.tmp.name)
+        self.g = KuberlyPlatform(self.tmp.name)
         self.g.build()
 
     def tearDown(self) -> None:
@@ -297,7 +297,7 @@ class StopTargetAbsentTests(unittest.TestCase):
 class OpenSpecExistingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = _fake_repo()
-        self.g = KuberlyGraph(self.tmp.name)
+        self.g = KuberlyPlatform(self.tmp.name)
         self.g.build()
 
     def tearDown(self) -> None:
@@ -333,7 +333,7 @@ class OpenSpecExistingTests(unittest.TestCase):
 class SessionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = _fake_repo()
-        self.g = KuberlyGraph(self.tmp.name)
+        self.g = KuberlyPlatform(self.tmp.name)
         self.g.build()
 
     def tearDown(self) -> None:
@@ -414,7 +414,7 @@ class SlugifyTests(unittest.TestCase):
 class SessionStatusTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = _fake_repo()
-        self.g = KuberlyGraph(self.tmp.name)
+        self.g = KuberlyPlatform(self.tmp.name)
         self.g.build()
         self.g.session_init(name="bump", task="bump loki", modules=["loki"],
                             current_branch="feat/x")

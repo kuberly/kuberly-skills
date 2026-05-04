@@ -94,7 +94,7 @@ orchestrator owns context.md and decisions.md"""
 
 def graph_summary(node_ids: list[str]) -> str:
     if not GRAPH_JSON.is_file():
-        return "_kuberly-graph not generated yet — run `python3 scripts/kuberly_graph.py generate --repo .`_"
+        return "_kuberly-platform not generated yet — run `python3 scripts/kuberly_platform.py generate --repo .`_"
     try:
         graph = json.loads(GRAPH_JSON.read_text())
     except Exception as exc:

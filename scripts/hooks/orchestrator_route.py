@@ -89,7 +89,7 @@ STRONG_INFRA_VERBS = (
 
 NUDGE_BASE = """[infra-orchestrator] non-trivial infra task. Routing:
 1. Invoke `infra-orchestrator` skill before editing.
-2. Graph-first: call `mcp__kuberly-graph__plan_persona_fanout` then `session_init`.
+2. Graph-first: call `mcp__kuberly-platform__plan_persona_fanout` then `session_init`.
 3. Sequential: scope-planner alone first; fan out only after scope confirms target exists.
 4. New feature branch before any edit (see infra-bootstrap-mandatory).
 5. Plan-only: no `apply`/`destroy`. Only `terragrunt run plan`, `validate`, `fmt`, lint.

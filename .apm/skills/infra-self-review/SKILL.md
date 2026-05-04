@@ -53,7 +53,7 @@ Inputs:
 
 Checks:
 - **OpenSpec deltas.** Do `proposal.md`, `tasks.md`, and any spec deltas under `openspec/changes/<name>/specs/` actually match the diff?
-- **Drift.** If multiple envs are in scope, does the change land consistently? Use `mcp__kuberly-graph__drift` to verify.
+- **Drift.** If multiple envs are in scope, does the change land consistently? Use `mcp__kuberly-platform__drift` to verify.
 - **Shared-infra blast.** If `components/<cluster>/shared-infra.json` was edited, does the change account for every dependent component (run `blast_radius`)?
 - **Plan correctness.** Do the plan summaries match intent? Any unexpected resource replacements, identity changes, or destroys?
 - **Plan-only adherence.** No `apply` / `destroy` was attempted.

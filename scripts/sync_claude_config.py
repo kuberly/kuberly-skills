@@ -52,12 +52,12 @@ def _hooks_block() -> dict[str, list[dict[str, Any]]]:
                         "type": "command",
                         "command": (
                             f'python3 "$CLAUDE_PROJECT_DIR/{APM_CACHE_PATH}'
-                            f'/mcp/kuberly-graph/kuberly_graph.py" generate '
+                            f'/mcp/kuberly-platform/kuberly_platform.py" generate '
                             f'"$CLAUDE_PROJECT_DIR" -o '
                             f'"$CLAUDE_PROJECT_DIR/.claude" 2>/dev/null'
                         ),
                         "timeout": 10,
-                        "statusMessage": "Refreshing kuberly-graph...",
+                        "statusMessage": "Refreshing kuberly-platform...",
                     }
                 ]
             }
@@ -80,11 +80,11 @@ def _hooks_block() -> dict[str, list[dict[str, Any]]]:
 
 
 def _mcp_server_claude() -> dict[str, Any]:
-    """kuberly-graph MCP server for Claude Code project-scope `.mcp.json`."""
+    """kuberly-platform MCP server for Claude Code project-scope `.mcp.json`."""
     return {
         "command": "python3",
         "args": [
-            f"{APM_CACHE_PATH}/mcp/kuberly-graph/kuberly_graph.py",
+            f"{APM_CACHE_PATH}/mcp/kuberly-platform/kuberly_platform.py",
             "mcp",
             "--repo",
             ".",
@@ -93,7 +93,7 @@ def _mcp_server_claude() -> dict[str, Any]:
 
 
 def _mcp_server_cursor() -> dict[str, Any]:
-    """kuberly-graph MCP server for Cursor `.cursor/mcp.json`.
+    """kuberly-platform MCP server for Cursor `.cursor/mcp.json`.
 
     Cursor adds `type`, `tools`, `id` fields. Format mirrors what APM writes
     natively for self-defined stdio servers, so the two paths produce
@@ -105,7 +105,7 @@ def _mcp_server_cursor() -> dict[str, Any]:
         "id": "",
         "command": "python3",
         "args": [
-            f"{APM_CACHE_PATH}/mcp/kuberly-graph/kuberly_graph.py",
+            f"{APM_CACHE_PATH}/mcp/kuberly-platform/kuberly_platform.py",
             "mcp",
             "--repo",
             ".",
@@ -158,12 +158,12 @@ def _merge_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
 
 
 def _merge_mcp_file(existing: dict[str, Any], server_entry: dict[str, Any]) -> dict[str, Any]:
-    """Merge kuberly-graph into an mcpServers dict (idempotent)."""
+    """Merge kuberly-platform into an mcpServers dict (idempotent)."""
     out = json.loads(json.dumps(existing))
     out.setdefault("mcpServers", {})
     if not isinstance(out["mcpServers"], dict):
         return existing
-    out["mcpServers"]["kuberly-graph"] = server_entry
+    out["mcpServers"]["kuberly-platform"] = server_entry
     return out
 
 
@@ -223,43 +223,57 @@ def main() -> int:
         )
         return 0
 
-    # The four files we manage. Each tuple: (path, default, merger, label).
-    targets = [
-        (
-            root / ".claude" / "settings.json",
-            {"hooks": {}},
-            lambda d: _merge_hooks_file(d),
-            ".claude/settings.json",
-        ),
-        (
-            root / ".mcp.json",
-            {"mcpServers": {}},
-            lambda d: _merge_mcp_file(d, _mcp_server_claude()),
-            ".mcp.json",
-        ),
-        (
-            root / ".cursor" / "hooks.json",
-            {"hooks": {}},
-            lambda d: _merge_hooks_file(d),
-            ".cursor/hooks.json",
-        ),
-        (
-            root / ".cursor" / "mcp.json",
-            {"mcpServers": {}},
-            lambda d: _merge_mcp_file(d, _mcp_server_cursor()),
-            ".cursor/mcp.json",
-        ),
+    # The four files we manage, grouped by runtime. Each tuple:
+    # (runtime_label, [(path, default, merger, file_label), ...])
+    runtimes = [
+        ("claude-code", [
+            (root / ".claude" / "settings.json",
+             {"hooks": {}},
+             lambda d: _merge_hooks_file(d),
+             ".claude/settings.json"),
+            (root / ".mcp.json",
+             {"mcpServers": {}},
+             lambda d: _merge_mcp_file(d, _mcp_server_claude()),
+             ".mcp.json"),
+        ]),
+        ("cursor", [
+            (root / ".cursor" / "hooks.json",
+             {"hooks": {}},
+             lambda d: _merge_hooks_file(d),
+             ".cursor/hooks.json"),
+            (root / ".cursor" / "mcp.json",
+             {"mcpServers": {}},
+             lambda d: _merge_mcp_file(d, _mcp_server_cursor()),
+             ".cursor/mcp.json"),
+        ]),
     ]
 
-    changed = []
-    for path, default, merger, label in targets:
-        before = _load_json(path, default)
-        after = merger(before)
-        if _write_if_changed(path, after):
-            changed.append(label)
+    # Track per-runtime state so the summary shows what got configured.
+    summary: list[tuple[str, list[str], list[str]]] = []
+    for runtime, files in runtimes:
+        wrote = []
+        already = []
+        for path, default, merger, label in files:
+            before = _load_json(path, default)
+            after = merger(before)
+            if _write_if_changed(path, after):
+                wrote.append(label)
+            else:
+                already.append(label)
+        summary.append((runtime, wrote, already))
 
-    if changed:
-        print("sync_config: " + ",".join(changed))
+    # Always print the configured-runtime summary so it's obvious that
+    # Claude Code is wired (apm-cli 0.9.x doesn't list it as a target —
+    # this script is the wire).
+    parts = []
+    any_change = False
+    for runtime, wrote, already in summary:
+        managed = wrote + already
+        verb = "updated" if wrote else "current"
+        if wrote:
+            any_change = True
+        parts.append(f"{runtime}: {verb} ({', '.join(managed)})")
+    print("sync_config configured -> " + " | ".join(parts))
     return 0
 
 

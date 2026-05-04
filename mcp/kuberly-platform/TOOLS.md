@@ -1,6 +1,6 @@
-# kuberly-graph MCP — tool catalog
+# kuberly-platform MCP — tool catalog
 
-A flat metadata table of every tool the `kuberly-graph` MCP server exposes,
+A flat metadata table of every tool the `kuberly-platform` MCP server exposes,
 plus a hint at typical token cost. The orchestrator reads this when planning
 ("what's the cheapest way to answer X?"). Personas declare a tools-list
 subset in their frontmatter so they don't pay the schema-load cost for

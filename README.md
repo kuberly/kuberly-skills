@@ -22,7 +22,7 @@ These skills are useful regardless of stack — no kuberly-specific tooling requ
 | **`schema-migration-safety`** | Expand-contract for DB schema changes; backfill / index / NOT NULL patterns |
 | **`mcp-tool-authoring`** | Designing MCP tool surfaces agents can actually use — schemas, errors, auth |
 
-The remaining skills assume the kuberly-stack layout (Terragrunt monorepo, OpenSpec, `shared-infra.json`, `kuberly-graph` MCP). They're still readable as patterns; adapt or skip.
+The remaining skills assume the kuberly-stack layout (Terragrunt monorepo, OpenSpec, `shared-infra.json`, `kuberly-platform` MCP). They're still readable as patterns; adapt or skip.
 
 ## Layout
 

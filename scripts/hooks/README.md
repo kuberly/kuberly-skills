@@ -45,7 +45,7 @@ never block the prompt), and runs in well under 50 ms.
 ```
 
 `$CLAUDE_PROJECT_DIR` is set by Claude Code; the hook resolves
-`.claude/graph.json` relative to it. If your repo vendors `kuberly_graph.py`
+`.claude/graph.json` relative to it. If your repo vendors `kuberly_platform.py`
 under a different path, the only requirement is that `.claude/graph.json`
 exists — the SessionStart hook (also from this package) generates it.
 

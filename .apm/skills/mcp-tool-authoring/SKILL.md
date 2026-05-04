@@ -124,4 +124,4 @@ Compare to the wrong shape (verbose, restates name, no return info):
 
 ## kuberly-stack notes
 
-The `kuberly-graph` MCP referenced across infra skills is an internal example of these patterns: tools are scoped per-tenant via a server-side context, return paginated graph slices, and use `code` errors so the orchestrator skills can branch on `not_found` vs `unauthorized`.
+The `kuberly-platform` MCP referenced across infra skills is an internal example of these patterns: tools are scoped per-tenant via a server-side context, return paginated graph slices, and use `code` errors so the orchestrator skills can branch on `not_found` vs `unauthorized`.

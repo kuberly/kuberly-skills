@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-kuberly-graph: Knowledge graph generator for kuberly-stack Terragrunt/OpenTofu monorepos.
+kuberly-platform: Knowledge graph generator for kuberly-stack Terragrunt/OpenTofu monorepos.
 
 Parses components, applications, modules, and their dependencies to produce:
   - graph.json  — queryable graph structure
@@ -249,7 +249,7 @@ def load_json_safe(path: Path) -> dict | None:
 # Graph builder
 # ---------------------------------------------------------------------------
 
-class KuberlyGraph:
+class KuberlyPlatform:
     def __init__(self, repo_root: str):
         self.repo = Path(repo_root)
         self.nodes: dict[str, dict] = {}
@@ -935,7 +935,7 @@ class KuberlyGraph:
             halt_block = (
                 f"\n## Pre-flight halt — target absent\n"
                 f"Named module(s) {names} have **no matching node** in the "
-                f"kuberly-graph. The fanout DAG was overridden to "
+                f"kuberly-platform. The fanout DAG was overridden to "
                 f"`stop-target-absent` (zero personas). Confirm with the user "
                 f"before any persona dispatch — likely the target is not "
                 f"deployed in this fork, the user means a different name, or "
@@ -1227,7 +1227,7 @@ class KuberlyGraph:
 # Output generators
 # ---------------------------------------------------------------------------
 
-def write_graph_json(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = False):
+def write_graph_json(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = False):
     data = graph.to_json()
     path = out_dir / "graph.json"
     path.write_text(json.dumps(data, indent=2, default=str))
@@ -1235,7 +1235,7 @@ def write_graph_json(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = Fals
         print(f"wrote {path} ({len(data['nodes'])} nodes, {len(data['edges'])} edges)")
 
 
-def write_graph_html(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = False):
+def write_graph_html(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = False):
     data = graph.to_json()
 
     # Color scheme by node type
@@ -1435,7 +1435,7 @@ network.on('click', params => {{
         print(f"wrote {path}")
 
 
-def write_graph_report(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = False):
+def write_graph_report(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = False):
     stats = graph.compute_stats()
     drift = graph.cross_env_drift()
 
@@ -1492,7 +1492,7 @@ def write_graph_report(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = Fa
         print(f"wrote {path}")
 
 
-def write_mermaid_dag(graph: KuberlyGraph, out_dir: Path, *, verbose: bool = False):
+def write_mermaid_dag(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = False):
     """Generate Mermaid diagrams: module DAG, per-env, and full overview."""
 
     def sanitize(nid: str) -> str:
@@ -1689,20 +1689,20 @@ def format_blast_radius(result: dict) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
-def load_graph(repo_path: str) -> KuberlyGraph:
+def load_graph(repo_path: str) -> KuberlyPlatform:
     """Load and build a graph from a repo path."""
     repo = Path(repo_path).resolve()
     if not (repo / "root.hcl").exists():
         print(f"Error: {repo} does not look like a kuberly-stack repo (no root.hcl)")
         sys.exit(1)
-    g = KuberlyGraph(str(repo))
+    g = KuberlyPlatform(str(repo))
     g.build()
     return g
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="kuberly-graph: knowledge graph for kuberly-stack")
+        description="kuberly-platform: knowledge graph for kuberly-stack")
     sub = parser.add_subparsers(dest="command", help="Command to run")
 
     # --- generate ---
@@ -1763,7 +1763,7 @@ def main():
         n_drift = len(drift["components"]) + len(drift["applications"])
 
         print(
-            f"kuberly-graph: nodes={len(g.nodes)} edges={len(g.edges)} "
+            f"kuberly-platform: nodes={len(g.nodes)} edges={len(g.edges)} "
             f"envs={n_envs} modules={n_mods} apps={n_apps} "
             f"critical={n_crit} drift={n_drift}"
         )
@@ -1850,7 +1850,7 @@ def _status_badge(s: str | None) -> str:
     return f"{EMOJI.get(s or '', '-')} {s or '—'}"
 
 
-def _card_query_nodes(result: list[dict], args: dict, graph: KuberlyGraph) -> str:
+def _card_query_nodes(result: list[dict], args: dict, graph: KuberlyPlatform) -> str:
     if not result:
         return f"## query_nodes — 0 matches\n\n_No nodes match the filter._"
 
@@ -1885,7 +1885,7 @@ def _card_query_nodes(result: list[dict], args: dict, graph: KuberlyGraph) -> st
     return "\n".join(lines).rstrip()
 
 
-def _card_get_node(result: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_get_node(result: dict, args: dict, graph: KuberlyPlatform) -> str:
     if "error" in result:
         return f"## err get_node — error\n\n`{result['error']}`"
     info = result.get("node_info", {})
@@ -1932,12 +1932,12 @@ def _card_get_node(result: dict, args: dict, graph: KuberlyGraph) -> str:
     return "\n".join(lines)
 
 
-def _card_get_neighbors(result: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_get_neighbors(result: dict, args: dict, graph: KuberlyPlatform) -> str:
     # Same shape as get_node — reuse the renderer
     return _card_get_node(result, args, graph).replace("get_node", "get_neighbors")
 
 
-def _card_blast_radius(result: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_blast_radius(result: dict, args: dict, graph: KuberlyPlatform) -> str:
     if "error" in result:
         return f"## err blast_radius — error\n\n`{result['error']}`"
     info = result.get("node_info", {})
@@ -1991,7 +1991,7 @@ def _card_blast_radius(result: dict, args: dict, graph: KuberlyGraph) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _card_shortest_path(result: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_shortest_path(result: dict, args: dict, graph: KuberlyPlatform) -> str:
     if "error" in result:
         return f"## err shortest_path — error\n\n`{result['error']}`"
     path = result.get("path", [])
@@ -2009,7 +2009,7 @@ def _card_shortest_path(result: dict, args: dict, graph: KuberlyGraph) -> str:
     return "\n".join(lines)
 
 
-def _card_drift(result: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_drift(result: dict, args: dict, graph: KuberlyPlatform) -> str:
     comps = result.get("components", {})
     apps = result.get("applications", {})
     if not comps and not apps:
@@ -2051,7 +2051,7 @@ def _card_drift(result: dict, args: dict, graph: KuberlyGraph) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _card_stats(result: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_stats(result: dict, args: dict, graph: KuberlyPlatform) -> str:
     types = result.get("type_counts", {})
     crit = result.get("critical_nodes", [])
     chains = result.get("longest_chains", [])
@@ -2106,7 +2106,7 @@ def _card_stats(result: dict, args: dict, graph: KuberlyGraph) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _card_plan_persona_fanout(plan: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_plan_persona_fanout(plan: dict, args: dict, graph: KuberlyPlatform) -> str:
     """Fanout briefing card — terse `key: value` lines, table for the DAG.
 
     Token-minimal as of v0.10.6: no emoji, no decorative headers, no
@@ -2189,7 +2189,7 @@ def _card_plan_persona_fanout(plan: dict, args: dict, graph: KuberlyGraph) -> st
     return "\n".join(lines)
 
 
-def _card_session_init(result: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_session_init(result: dict, args: dict, graph: KuberlyPlatform) -> str:
     if "error" in result:
         return f"## err session_init — error\n\n`{result['error']}`"
     phases = result.get("phases", [])
@@ -2217,7 +2217,7 @@ def _card_session_init(result: dict, args: dict, graph: KuberlyGraph) -> str:
     return "\n".join(lines)
 
 
-def _card_session_status(status: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_session_status(status: dict, args: dict, graph: KuberlyPlatform) -> str:
     if "error" in status:
         return f"## err session_status — error\n\n`{status['error']}`"
 
@@ -2305,7 +2305,7 @@ def _card_session_status(status: dict, args: dict, graph: KuberlyGraph) -> str:
     return "\n".join(lines)
 
 
-def _card_session_set_status(result: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_session_set_status(result: dict, args: dict, graph: KuberlyPlatform) -> str:
     if "error" in result:
         return f"## err session_set_status — error\n\n`{result['error']}`"
     return (
@@ -2316,7 +2316,7 @@ def _card_session_set_status(result: dict, args: dict, graph: KuberlyGraph) -> s
     )
 
 
-def _card_session_read(result: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_session_read(result: dict, args: dict, graph: KuberlyPlatform) -> str:
     if "error" in result:
         return f"## err session_read — error\n\n`{result['error']}`"
     fname = result.get("file", "?")
@@ -2327,7 +2327,7 @@ def _card_session_read(result: dict, args: dict, graph: KuberlyGraph) -> str:
     )
 
 
-def _card_session_write(result: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_session_write(result: dict, args: dict, graph: KuberlyPlatform) -> str:
     if "error" in result:
         return f"## err session_write — error\n\n`{result['error']}`"
     return (
@@ -2336,7 +2336,7 @@ def _card_session_write(result: dict, args: dict, graph: KuberlyGraph) -> str:
     )
 
 
-def _card_session_list(result: dict, args: dict, graph: KuberlyGraph) -> str:
+def _card_session_list(result: dict, args: dict, graph: KuberlyPlatform) -> str:
     if "error" in result:
         return f"## err session_list — error\n\n`{result['error']}`"
     files = result.get("files", [])
@@ -2420,7 +2420,7 @@ _RENDERERS = {
 }
 
 
-def render_tool_result(name: str, result, args: dict, graph: KuberlyGraph,
+def render_tool_result(name: str, result, args: dict, graph: KuberlyPlatform,
                        fmt: str = "card") -> str:
     """Format a raw tool result. fmt: card | json | compact."""
     if fmt == "json":
@@ -2443,7 +2443,7 @@ def render_tool_result(name: str, result, args: dict, graph: KuberlyGraph,
 # MCP Server (stdio JSON-RPC)
 # ---------------------------------------------------------------------------
 
-def run_mcp_server(graph: KuberlyGraph):
+def run_mcp_server(graph: KuberlyPlatform):
     """Run an MCP server over stdio that exposes graph query tools."""
     import select as _select
 
@@ -2650,7 +2650,7 @@ def run_mcp_server(graph: KuberlyGraph):
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": {
-                        "name": "kuberly-graph",
+                        "name": "kuberly-platform",
                         "version": "1.3.0",
                     },
                 },
@@ -2690,7 +2690,7 @@ def run_mcp_server(graph: KuberlyGraph):
             "error": {"code": -32601, "message": f"Unknown method: {method}"},
         }
 
-    def dispatch_tool(g: KuberlyGraph, name: str, args: dict):
+    def dispatch_tool(g: KuberlyPlatform, name: str, args: dict):
         if name == "query_nodes":
             return g.query_nodes(
                 node_type=args.get("node_type"),
@@ -2748,7 +2748,7 @@ def run_mcp_server(graph: KuberlyGraph):
             raise ValueError(f"Unknown tool: {name}")
 
     # stdio JSON-RPC loop
-    sys.stderr.write(f"kuberly-graph MCP server started ({len(graph.nodes)} nodes, {len(graph.edges)} edges)\n")
+    sys.stderr.write(f"kuberly-platform MCP server started ({len(graph.nodes)} nodes, {len(graph.edges)} edges)\n")
     sys.stderr.flush()
 
     buf = ""

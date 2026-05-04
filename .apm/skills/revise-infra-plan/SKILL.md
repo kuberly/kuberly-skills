@@ -15,12 +15,12 @@ This is a **sub-flow of `infra-orchestrator`**. It can also stand alone when a u
 
 ## Before asking anything
 
-If a question can be answered by **the kuberly-graph MCP** or by **reading existing code/docs**, do that first — do not ask. Specifically:
+If a question can be answered by **the kuberly-platform MCP** or by **reading existing code/docs**, do that first — do not ask. Specifically:
 
-1. `mcp__kuberly-graph__query_nodes` for "what envs / components / modules exist".
-2. `mcp__kuberly-graph__get_neighbors` for "what does X depend on".
-3. `mcp__kuberly-graph__blast_radius` for "what breaks if I change X".
-4. `mcp__kuberly-graph__drift` for "what's different between env A and env B".
+1. `mcp__kuberly-platform__query_nodes` for "what envs / components / modules exist".
+2. `mcp__kuberly-platform__get_neighbors` for "what does X depend on".
+3. `mcp__kuberly-platform__blast_radius` for "what breaks if I change X".
+4. `mcp__kuberly-platform__drift` for "what's different between env A and env B".
 5. `Read` on `AGENTS.md`, `INFRASTRUCTURE_CONFIGURATION_GUIDE.md`, `MODULE_CONVENTIONS.md`, `ARCHITECTURE.md`, the OpenSpec change folder, and the specific module / component JSON in scope.
 
 If invoked from `infra-orchestrator`, delegate the lookup to an **Explore subagent** — do not run greps yourself.
