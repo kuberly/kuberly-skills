@@ -29,11 +29,15 @@ The remaining skills assume the kuberly-stack layout (Terragrunt monorepo, OpenS
 | Path | Purpose |
 |------|---------|
 | `.apm/skills/<name>/` | Each skill is a directory with **`SKILL.md`** at the leaf (flat layout for APM deploy). |
-| **Claude Code** | After **`apm install`** in the infra repo, APM copies the same skills into **`.claude/skills/`** when that tree exists — see **`apm-skills-bootstrap`** and **kuberly-stack** **`.claude/README.md`**. |
-| **`docs/RUNTIME_SKILLS.md`** | How ECS/EKS runtime packs are named in **`.apm/skills/`** |
-| `.apm/skills/overlays/` | Optional tenant-specific skills |
-| `references/` | Long-form markdown linked from `SKILL.md` |
-| `scripts/validate-skills.sh` | Local + CI validation |
+| `agents/<name>.md` | Persona subagent definitions (orchestrator's roster). Synced into the consumer's `.claude/agents/` via `scripts/sync_agents.sh` after `apm install`. |
+| `scripts/init_agent_session.py` | Manage `.agents/prompts/<session>/` directories (filesystem-based shared memory for the orchestrator and personas). |
+| `scripts/sync_agents.sh` | Copy `agents/*.md` from the apm cache to the consumer's `.claude/agents/`. |
+| **Claude Code** | After **`apm install`** in the infra repo, APM copies skills into **`.claude/skills/`**; `sync_agents.sh` then copies persona files into **`.claude/agents/`**. |
+| **`docs/RUNTIME_SKILLS.md`** | How ECS/EKS runtime packs are named in **`.apm/skills/`**. |
+| **`docs/AGENT_SESSIONS.md`** | Multi-agent session protocol — file layout under `.agents/prompts/<session>/`, each persona's read/write rules, sync mechanics. |
+| `.apm/skills/overlays/` | Optional tenant-specific skills. |
+| `references/` | Long-form markdown linked from `SKILL.md`. |
+| `scripts/validate-skills.sh` | Local + CI validation. |
 
 Skills follow the [Agent Skills](https://agentskills.io) layout: each skill is a directory containing **`SKILL.md`** with YAML frontmatter (`name`, `description`).
 
@@ -87,14 +91,14 @@ Skills follow the [Agent Skills](https://agentskills.io) layout: each skill is a
 dependencies:
   apm:
     - git: https://github.com/kuberly/kuberly-skills.git
-      ref: v0.7.2
+      ref: v0.8.0
 ```
 
 Or HTTPS one-liner (see [APM dependencies](https://microsoft.github.io/apm/guides/dependencies/)):
 
 ```yaml
   apm:
-    - https://github.com/kuberly/kuberly-skills.git#v0.7.2
+    - https://github.com/kuberly/kuberly-skills.git#v0.8.0
 ```
 
 Public GitHub access needs no token. APM reads **`GITHUB_TOKEN`/`GH_TOKEN`** if present (rate-limit relief or private mirrors).

@@ -29,7 +29,7 @@ Customer developers should get **skills** and **agent config** from the public *
 
 ## What `ensure_apm_skills` does (kuberly-stack)
 
-**`scripts/ensure_apm_skills.sh`** runs at **pre-commit** when **`apm.yml`** declares **non-empty** `dependencies.apm`. It **`mkdir -p .claude/skills`** so **Claude Code** gets the same org skills as Cursor, then runs **`apm install`**. It fails the commit if **`apm.lock.yaml`** changed so you **`git add apm.lock.yaml`** and commit again (same pattern as fmt hooks).
+**`scripts/ensure_apm_skills.sh`** runs at **pre-commit** when **`apm.yml`** declares **non-empty** `dependencies.apm`. It **`mkdir -p .claude/skills`** so **Claude Code** gets the same org skills as Cursor, then runs **`apm install`**. It fails the commit if **`apm.lock.yaml`** changed so you **`git add apm.lock.yaml`** and commit again (same pattern as fmt hooks). It then calls **`apm_modules/kuberly/kuberly-skills/scripts/sync_agents.sh`** to copy persona files (orchestrator subagents) from the apm cache into **`.claude/agents/`** (APM does not deploy these natively; the sync script bridges that gap — see **`docs/AGENT_SESSIONS.md`** in this package).
 
 - Skip entirely: **`export KUBERLY_SKIP_APM_SYNC=1`** (or remove / empty **`apm:`** deps while bootstrapping).
 - If **`apm`** CLI is missing, the hook **warns** and **does not** fail the commit (install APM when you are ready to consume skills).
@@ -39,8 +39,9 @@ Customer developers should get **skills** and **agent config** from the public *
 ## Claude Code (primary IDE for many teams)
 
 - Read **`CLAUDE.md`** at the infra repo root, then **`AGENTS.md`** for full rules.
-- After **`apm install`**, use skills from **`.claude/skills/<name>/`** the same way you would under **`.cursor/skills/`**.
-- Install the **Caveman** plugin for shorter replies — **`docs/agent-packaging/CAVEMAN.md`** in **kuberly-stack**.
+- After **`apm install`** + **`sync_agents.sh`**, use skills from **`.claude/skills/<name>/`** and persona subagents from **`.claude/agents/<name>.md`**.
+- Persona subagents (`infra-scope-planner`, `iac-developer`, `troubleshooter`, `app-cicd-engineer`, `pr-reviewer-in-context`, `pr-reviewer-cold`, `findings-reconciler`) are invoked via the `Agent` tool with `subagent_type: "<name>"`. Orchestrator workflow lives in **`infra-orchestrator`** skill; protocol in **`docs/AGENT_SESSIONS.md`**.
+- Install the **Caveman** plugin for shorter replies.
 
 ## Which skills to use for “normal” infra edits
 
