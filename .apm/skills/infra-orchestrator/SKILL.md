@@ -22,6 +22,18 @@ Pairs with **`revise-infra-plan`** (interview workflow) and **`infra-self-review
 - **Manage session state directly** in `.agents/prompts/<session>/` — this is the crucial part of your role and is **never** delegated.
 - Synthesize results from each persona's output file and report back to the user.
 
+## Recommended entry sequence
+
+For any non-trivial task, the first three calls are mechanical:
+
+1. `mcp__kuberly-graph__plan_persona_fanout({ task, named_modules?, current_branch })` — returns `task_kind`, `scope` (blast radius + likely-changed files + drift), `gates` (branch + OpenSpec + personas-synced), the persona DAG with per-phase `parallel`/`needs_approval` flags, and a ready-to-paste `context_md` body. **Replaces what the orchestrator used to chain by hand: `query_nodes` → `blast_radius` → `drift` → manual policy reasoning.**
+2. `mcp__kuberly-graph__session_init({ name, task, modules, current_branch })` — creates `.agents/prompts/<slug>/` with `context.md` (seeded from the plan above), `findings/`, `tasks/`. Identical layout to `scripts/init_agent_session.py`.
+3. Fan out **phase 1** of the returned DAG: one assistant message with one `Agent` call per persona in the phase. Use `run_in_background: true` when you have other prep to do while a long-running persona finishes.
+
+If `gates.branch.verdict == "block"` or `gates.openspec.required == true && existing_change_folder == null`, **stop and surface to the user** before delegating implementation. Read-only personas (planner, troubleshooter, reviewers, reconciler) can still run.
+
+If `confidence == "low"` from the plan, ask the user to confirm the inferred `task_kind` — or pass an explicit `task_kind` on a re-call.
+
 ## Hard rules
 
 - **Never** do implementation, file editing, broad searching, or shell work yourself. The only things you do directly are: query the **kuberly-graph MCP**, read/write `.agents/prompts/<session>/`, and ask the user clarifying questions.
@@ -36,19 +48,35 @@ Pairs with **`revise-infra-plan`** (interview workflow) and **`infra-self-review
 
 ## Session lifecycle
 
+Two equivalent paths — pick the one that fits the moment:
+
+**A. From inside Claude Code (preferred — no shell hop):**
+
+```
+mcp__kuberly-graph__session_init({ name: "<slug>", task: "<one-line goal>",
+                                    modules: ["loki", ...], current_branch: "<branch>" })
+mcp__kuberly-graph__session_write({ name, file: "decisions.md", content: "..." })
+mcp__kuberly-graph__session_read({  name, file: "scope.md" })
+mcp__kuberly-graph__session_list({  name })
+```
+
+`session_init` seeds `context.md` from a fresh `plan_persona_fanout` for the same task, so step 1 of the entry sequence and the session creation can be a single round-trip. All session writes are path-validated and refused if they resolve outside the session dir.
+
+**B. Shell / CLI:**
+
 ```bash
-# 1. Create the session
 python3 scripts/init_agent_session.py init <session-name> \
     --task "<one-line goal>" \
     --node component:<env>/<name>      # repeatable, prefills graph references
 
-# 2. (Orchestrator work happens — fan out to personas, write decisions.md)
+# ... orchestrator work ...
 
-# 3. Cleanup when the PR is open
 python3 scripts/init_agent_session.py cleanup <session-name>
 ```
 
 If `init_agent_session.py` is not in the consumer repo's `scripts/`, run it from the apm cache: `python3 apm_modules/kuberly/kuberly-skills/scripts/init_agent_session.py init …`
+
+Both paths produce the **same** `.agents/prompts/<slug>/` layout. The directory must be `.gitignore`d in the consumer repo.
 
 ## Tools you actually use
 
