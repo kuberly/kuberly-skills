@@ -2,7 +2,7 @@
 
 ## Pull request templates
 
-- **Skills-only changes:** use GitHub **`.github/PULL_REQUEST_TEMPLATE/skills.md`** (or paste that checklist in Bitbucket). In Cursor, load skill **`git-pr-templates`** (`references/skills-repo-pr.md`).
+- **Skills-only changes:** use **`.github/PULL_REQUEST_TEMPLATE/skills.md`**. Hosts without native `.github` PR templates: paste sections from skill **`git-pr-templates`** (`references/skills-repo-pr.md`).
 - **Customer infra fork** (mirrors kuberly-stack): use **`.github/PULL_REQUEST_TEMPLATE/infra_fork.md`** for Problem / Solution / OpenSpec / Testing / Risks / Mermaid — or skill **`git-pr-templates`** (`references/infra-fork-pr.md`).
 
 ## Pull request checklist (author)
@@ -14,4 +14,4 @@
 
 ## Checks
 
-Run **`./scripts/validate-skills.sh`** before pushing. **Bitbucket Pipelines** runs the same script on each pipeline build.
+Run **`./scripts/validate-skills.sh`** before pushing. CI runs the same script on each PR via **`.github/workflows/skills-validate.yml`**.

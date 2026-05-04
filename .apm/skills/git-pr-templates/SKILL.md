@@ -22,4 +22,4 @@ Use this skill when you need **paste-ready PR sections** that match what reviewe
 - Opening or editing a **skills** repo pull request (checklist + risk tone).
 - Opening a **customer infra fork** pull request where the team uses **`infra_fork.md`** sections (Problem / Solution / OpenSpec / Testing / Risks / Mermaid).
 
-Pair with **`infra-change-git-pr-workflow`** for branch choice, push, and merge target. When the merge target is **whatever branch is checked out right now**, pair with **`current-branch-feature-pr`** so the PR **base** is that branch after you branch off for work.
+Pair with **`infra-change-git-pr-workflow`** for branch choice, push, and merge target — that skill covers both Path A (integration branch) and Path B (already on the merge target).

@@ -104,7 +104,7 @@ Once reviewers are clean, report:
 - **Verification commands run** — `pre-commit`, the exact `terragrunt run plan` invocations, and a fenced plan excerpt per module (for the PR body).
 - **Final review verdict** — both reviewers clean, count of findings discarded with reasons.
 - **Residual risks / optional follow-ups** — anything noted but deferred (out-of-scope drift, optional refactors, OpenSpec items still `proposed` not `applied`).
-- **Branch + PR hand-off (mandatory).** Confirm the change lives on a feature branch, then hand off to `infra-change-git-pr-workflow` (or `current-branch-feature-pr` if the session started from a long-lived dev branch) for the OpenSpec archive + push + PR steps. Reporting "done" without an open PR — or with commits on an integration branch — is not allowed.
+- **Branch + PR hand-off (mandatory).** Confirm the change lives on a feature branch, then hand off to `infra-change-git-pr-workflow` (Path A for integration-branch base; Path B if the session started from a long-lived dev branch) for the OpenSpec archive + push + PR steps. Reporting "done" without an open PR — or with commits on an integration branch — is not allowed.
 
 ## Related
 

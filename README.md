@@ -49,8 +49,7 @@ Skills follow the [Agent Skills](https://agentskills.io) layout: each skill is a
 | **`observability-mcp-roadmap`** | Until your MCP ships — interim pointer |
 | **`github-reusable-ci-kuberly-stack`** | App repo CI calling **kuberly-stack** reusable GitOps / ECR workflows |
 | **`openspec-changelog-audit`** | Mandatory **`CHANGELOG.md`** per OpenSpec change (audit + collect from forks) |
-| **`infra-change-git-pr-workflow`** | Branch from env integration branch → commit → PR with risks + Mermaid |
-| **`current-branch-feature-pr`** | Already on the merge target (a long-lived integration branch): branch from **current** `HEAD`, then PR **back into that same branch** with narrative + Mermaid |
+| **`infra-change-git-pr-workflow`** | Pick the merge base (integration branch or current long-lived branch) → feature branch → commit → PR with Problem/Solution/OpenSpec/Testing/Risks + Mermaid |
 | **`pre-commit-infra-mandatory`** | Install hooks, run pre-commit, re-add and re-commit after auto-fixes |
 | **`application-env-and-secrets`** | `env_vars`, `env.secrets`, and `components/.../secrets.json` + empty SM secrets |
 | **`apm-skills-bootstrap`** | Clone → `apm install` (default **Caveman** + add org **skills**), hooks, which skills to use for infra work |

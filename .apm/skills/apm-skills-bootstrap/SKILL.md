@@ -2,19 +2,19 @@
 name: apm-skills-bootstrap
 description: >-
   After cloning a kuberly-stack fork: run apm install, use pre-commit ensure-apm-skills hook,
-  and load Bitbucket kuberly/skills for Cursor and Claude Code (.cursor/skills and .claude/skills).
+  and load github.com/kuberly/kuberly-skills for Cursor and Claude Code (.cursor/skills and .claude/skills).
 ---
 
 # APM skills bootstrap (customer infra repo)
 
-Customer developers should get **skills** and **agent config** from the org **`skills`** repo (e.g. **Bitbucket** `kuberly/skills`) via **Microsoft APM** — see **`apm.yml`** / **`docs/agent-packaging/`** in **kuberly-stack**.
+Customer developers should get **skills** and **agent config** from the public **`kuberly-skills`** repo (`github.com/kuberly/kuberly-skills`) via **Microsoft APM** — see **`apm.yml`** in your fork.
 
-**Token cost:** upstream **`apm.yml`** pins **[Caveman](https://github.com/JuliusBrussee/caveman)** and **`git@bitbucket.org:kuberly/skills.git#…`** (SSH, not `https://`) so **`apm install`** deploys **Caveman** plus **kuberly** skills into **`.cursor/skills/`** and **`.claude/skills/`** (APM copies to every agent layout that exists — see **`docs/agent-packaging/README.md`** on **kuberly-stack**). Forks that use another org mirror should replace the **Bitbucket** line and re-run **`apm install`**; remove **Caveman** only if compliance forbids it.
+**Token cost:** upstream **`apm.yml`** pins **[Caveman](https://github.com/JuliusBrussee/caveman)** and **`git@github.com:kuberly/kuberly-skills.git#vX.Y.Z`** (SSH preferred for tag pinning; **`kuberly/kuberly-skills#vX.Y.Z`** also works) so **`apm install`** deploys **Caveman** plus **kuberly** skills into **`.cursor/skills/`** and **`.claude/skills/`** (APM copies to every agent layout that exists). Forks mirroring skills elsewhere (Bitbucket, GitLab, internal git host) replace the dependency line and re-run **`apm install`**; remove **Caveman** only if compliance forbids it.
 
 ## After every `git clone`
 
 1. Install **APM** ([APM Quick Start](https://microsoft.github.io/apm/getting-started/quick-start/)).
-2. Configure **git** credentials for private **Bitbucket** (SSH key or HTTPS app password) so `git ls-remote` works.
+2. Public **`github.com/kuberly/kuberly-skills`** needs no token; APM uses **`GITHUB_TOKEN`/`GH_TOKEN`** if present (rate-limit relief or private mirrors). For Bitbucket / GitLab / internal mirrors, configure normal git credentials so **`git ls-remote`** works.
 3. From the **infra repo root**:
 
    ```bash
@@ -46,9 +46,8 @@ Customer developers should get **skills** and **agent config** from the org **`s
 
 | Goal | Skill |
 |------|--------|
-| Branch → PR → Mermaid | **`infra-change-git-pr-workflow`** |
+| Branch → PR → Mermaid (Path A integration branch, or Path B already-on-merge-target) | **`infra-change-git-pr-workflow`** |
 | Pre-commit / autofix loop | **`pre-commit-infra-mandatory`** |
-| PR from **current** branch back to **same** branch (feature + Mermaid) | **`current-branch-feature-pr`** |
 | Terragrunt / `CLUSTER_NAME` / `KUBERLY_ROLE` | **`terragrunt-local-workflow`**, **`kuberly-cli-customer`** |
 | Repo map / OpenSpec | **`kuberly-stack-context`**, **`openspec-changelog-audit`** |
 | `components/` vs `applications/` | **`components-vs-applications`**, **`kuberly-gitops-execution-model`** |
@@ -60,8 +59,4 @@ Customer developers should get **skills** and **agent config** from the org **`s
 | K8s FinOps (Prometheus usage vs requests/limits) | **`kubernetes-finops-workloads`** |
 | PR body markdown (skills vs infra fork) | **`git-pr-templates`** |
 
-PR bodies: load **`git-pr-templates`** (same text as **`.github/PULL_REQUEST_TEMPLATE/`**, shipped under **`references/`** for APM). **Bitbucket** has no native `.github` PR templates — copy sections from **`references/`** or add a saved description template in repo settings.
-
-## Bitbucket vs GitHub
-
-This **`skills`** repo ships **`.github/`** for teams that mirror to **GitHub**; **Bitbucket** uses **`bitbucket-pipelines.yml`** for CI. PR template paths differ by host — keep both or configure Bitbucket’s default PR description to match **`infra_fork.md`**.
+PR bodies: load **`git-pr-templates`** (same text as **`.github/PULL_REQUEST_TEMPLATE/`**, shipped under **`references/`** for APM). On **Bitbucket** (or any host without native `.github` PR templates) copy sections from **`references/`** or add a saved description template in repo settings.
