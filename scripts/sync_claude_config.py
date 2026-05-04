@@ -35,10 +35,20 @@ from typing import Any
 # kuberly-skills package after install. Stable across versions.
 APM_CACHE_PATH = "apm_modules/kuberly/kuberly-skills"
 
-# Anything whose command contains this marker is "owned by kuberly-skills"
-# and may be replaced on each run. Hooks pointing elsewhere (user's own
-# scripts) survive untouched.
-KUBERLY_OWNED_MARKER = APM_CACHE_PATH
+# A command is "owned by kuberly-skills" (and may be replaced on each run)
+# if it contains ANY of these markers. Hooks pointing elsewhere (user's
+# own scripts) survive untouched. Multiple markers cover legacy paths
+# from before the v0.10.x sync model AND the v0.12.0 server rename.
+KUBERLY_OWNED_MARKERS = (
+    APM_CACHE_PATH,                # current — apm cache layout
+    "scripts/kuberly_graph.py",    # legacy — pre-v0.10.x vendored MCP
+    "scripts/kuberly_platform.py", # legacy — early-v0.12.x naming attempt
+    "scripts/mcp/kuberly-graph/",  # legacy — sync_mcp.sh interim layout
+    "scripts/mcp/kuberly-platform/", # legacy — same after v0.12.0 rename
+    "scripts/hooks/orchestrator_route",  # legacy — pre-v0.10.4 consumer-local hook
+    "Refreshing kuberly-graph",    # legacy — old statusMessage marker
+    "Refreshing kuberly-platform", # current — statusMessage marker
+)
 
 # --- canonical entries ------------------------------------------------------
 
@@ -115,11 +125,20 @@ def _mcp_server_cursor() -> dict[str, Any]:
 
 # --- merge helpers ----------------------------------------------------------
 
-def _matcher_is_kuberly_owned(matcher: Any) -> bool:
-    """A matcher is owned if every command it contains references the apm cache.
+def _is_kuberly_owned_command(cmd: str, status: str = "") -> bool:
+    """A command is ours if it contains any KUBERLY_OWNED_MARKERS substring,
+    in either the command itself or its statusMessage."""
+    haystack = (cmd or "") + " " + (status or "")
+    return any(m in haystack for m in KUBERLY_OWNED_MARKERS)
 
-    A matcher with mixed commands (some kuberly, some user) is left alone —
-    safer to over-preserve than to delete user hooks.
+
+def _matcher_is_kuberly_owned(matcher: Any) -> bool:
+    """A matcher is owned if every command it contains is recognizably ours.
+
+    Catches the current apm-cache layout AND legacy hand-wired layouts
+    (vendored scripts/kuberly_graph.py, scripts/mcp/kuberly-graph/, ...).
+    Mixed matchers (some kuberly, some user) are left alone — safer to
+    over-preserve than to delete user hooks.
     """
     if not isinstance(matcher, dict):
         return False
@@ -130,9 +149,10 @@ def _matcher_is_kuberly_owned(matcher: Any) -> bool:
         if not isinstance(hook, dict):
             return False
         cmd = hook.get("command", "")
+        status = hook.get("statusMessage", "")
         if not isinstance(cmd, str):
             return False
-        if KUBERLY_OWNED_MARKER not in cmd:
+        if not _is_kuberly_owned_command(cmd, status):
             return False
     return True
 
