@@ -47,4 +47,49 @@ then
   failed=1
 fi
 
+# README index parity: every skill on disk must appear in an "## Index" table,
+# and every skill named in those tables must exist on disk.
+if ! python3 <<'PY'
+import re, sys
+from pathlib import Path
+
+skills_dir = Path(".apm/skills")
+readme = Path("README.md")
+if not skills_dir.is_dir() or not readme.is_file():
+    raise SystemExit(0)
+
+on_disk = {p.parent.name for p in skills_dir.glob("*/SKILL.md")}
+
+indexed = set()
+in_index = False
+for line in readme.read_text().splitlines():
+    if line.startswith("## Index"):
+        in_index = True
+        continue
+    if line.startswith("## ") and in_index:
+        in_index = False
+    if in_index:
+        for m in re.finditer(r"\*\*`([a-z0-9][a-z0-9-]*)`\*\*", line):
+            indexed.add(m.group(1))
+
+missing_in_readme = sorted(on_disk - indexed)
+missing_on_disk  = sorted(indexed - on_disk)
+errors = False
+if missing_in_readme:
+    print("ERROR: skills exist on disk but are missing from README ## Index tables:")
+    for s in missing_in_readme:
+        print(f"  {s}")
+    errors = True
+if missing_on_disk:
+    print("ERROR: README ## Index tables reference nonexistent skills:")
+    for s in missing_on_disk:
+        print(f"  {s}")
+    errors = True
+if errors:
+    raise SystemExit(1)
+PY
+then
+  failed=1
+fi
+
 exit "$failed"

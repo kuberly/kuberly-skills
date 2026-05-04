@@ -4,6 +4,21 @@ Central **Agent Skills** for **kuberly-stack** customer forks and internal use. 
 
 Do not commit org-specific IAM ARNs, internal-only URLs, or customer PII into shared skills. Tenant-specific content belongs in **`.apm/skills/overlays/`** (if you use it) with strict access controls, or in generated fork-only files.
 
+## Not using kuberly-stack? Steal these.
+
+These skills are useful regardless of stack — no kuberly-specific tooling required:
+
+| Skill | What it gives you |
+|-------|-------------------|
+| **`loki-logql-alert-patterns`** | LogQL anti-patterns, cardinality hazards, alert recipes |
+| **`cloudtrail-last-hour-all-regions`** | Multi-region CloudTrail `lookup-events` with pagination; when to switch to Athena |
+| **`vpc-flow-logs-source-destination-grouping`** | Source/destination grouping in CW Insights and Athena |
+| **`kubernetes-finops-workloads`** | PromQL recipes for usage vs. requests/limits and ranking waste |
+| **`ecs-observability-troubleshooting`** | ECS service triage — logs, events, ALB |
+| **`troubleshooting-aws-observability`** | Incident routing across CloudWatch / CloudTrail / EKS |
+
+The remaining skills assume the kuberly-stack layout (Terragrunt monorepo, OpenSpec, `shared-infra.json`, `kuberly-graph` MCP). They're still readable as patterns; adapt or skip.
+
 ## Layout
 
 | Path | Purpose |
@@ -35,7 +50,7 @@ Skills follow the [Agent Skills](https://agentskills.io) layout: each skill is a
 | **`github-reusable-ci-kuberly-stack`** | App repo CI calling **kuberly-stack** reusable GitOps / ECR workflows |
 | **`openspec-changelog-audit`** | Mandatory **`CHANGELOG.md`** per OpenSpec change (audit + collect from forks) |
 | **`infra-change-git-pr-workflow`** | Branch from env integration branch → commit → PR with risks + Mermaid |
-| **`current-branch-feature-pr`** | Already on merge target (e.g. **`dev-new-kuberly`**): branch from **current** `HEAD`, then PR **back into that same branch** with narrative + Mermaid |
+| **`current-branch-feature-pr`** | Already on the merge target (a long-lived integration branch): branch from **current** `HEAD`, then PR **back into that same branch** with narrative + Mermaid |
 | **`pre-commit-infra-mandatory`** | Install hooks, run pre-commit, re-add and re-commit after auto-fixes |
 | **`application-env-and-secrets`** | `env_vars`, `env.secrets`, and `components/.../secrets.json` + empty SM secrets |
 | **`apm-skills-bootstrap`** | Clone → `apm install` (default **Caveman** + add org **skills**), hooks, which skills to use for infra work |
@@ -51,6 +66,7 @@ Skills follow the [Agent Skills](https://agentskills.io) layout: each skill is a
 | **`eks-observability-stack`** | Grafana / Prometheus / Loki / Tempo namespaces and secrets on EKS |
 | **`kubernetes-finops-workloads`** | PromQL FinOps: usage vs requests/limits, rank waste, Helm values via git |
 | **`ecs-observability-troubleshooting`** | ECS services — logs, events, ALB |
+| **`loki-logql-alert-patterns`** | LogQL anti-patterns, cardinality hazards, alert recipes |
 
 ## Releases
 
