@@ -16,6 +16,11 @@ These skills are useful regardless of stack — no kuberly-specific tooling requ
 | **`kubernetes-finops-workloads`** | PromQL recipes for usage vs. requests/limits and ranking waste |
 | **`ecs-observability-troubleshooting`** | ECS service triage — logs, events, ALB |
 | **`troubleshooting-aws-observability`** | Incident routing across CloudWatch / CloudTrail / EKS |
+| **`irsa-workload-identity`** | Bind K8s ServiceAccounts to cloud IAM (EKS / GKE / AKS); the four common breakages |
+| **`secrets-rotation-lifecycle`** | Dual-credential rotation, retire gates, audit checks across DB/API key/TLS |
+| **`helm-chart-authoring`** | Values shape, schema validation, dependencies, anti-patterns |
+| **`schema-migration-safety`** | Expand-contract for DB schema changes; backfill / index / NOT NULL patterns |
+| **`mcp-tool-authoring`** | Designing MCP tool surfaces agents can actually use — schemas, errors, auth |
 
 The remaining skills assume the kuberly-stack layout (Terragrunt monorepo, OpenSpec, `shared-infra.json`, `kuberly-graph` MCP). They're still readable as patterns; adapt or skip.
 
@@ -46,7 +51,11 @@ Skills follow the [Agent Skills](https://agentskills.io) layout: each skill is a
 | **`troubleshooting-aws-observability`** | Incident routing (CloudWatch / CloudTrail / EKS split) |
 | **`cloudtrail-last-hour-all-regions`** | `lookup-events` for the last hour, every region (pagination; when to use Athena) |
 | **`vpc-flow-logs-source-destination-grouping`** | Group flow logs by src/dst (Insights, Athena, hygiene) |
-| **`observability-mcp-roadmap`** | Until your MCP ships — interim pointer |
+| **`mcp-tool-authoring`** | Designing MCP tool surfaces — schemas, pagination, errors, auth |
+| **`irsa-workload-identity`** | K8s ServiceAccount → cloud IAM (EKS / GKE / AKS) with the four common breakages |
+| **`secrets-rotation-lifecycle`** | Dual-credential rotation, retire gates, audit (DB / API key / TLS) |
+| **`helm-chart-authoring`** | Helm chart skeleton, values shape, schema validation, anti-patterns |
+| **`schema-migration-safety`** | Expand-contract migrations; backfill / index / NOT NULL patterns |
 | **`github-reusable-ci-kuberly-stack`** | App repo CI calling **kuberly-stack** reusable GitOps / ECR workflows |
 | **`openspec-changelog-audit`** | Mandatory **`CHANGELOG.md`** per OpenSpec change (audit + collect from forks) |
 | **`infra-change-git-pr-workflow`** | Pick the merge base (integration branch or current long-lived branch) → feature branch → commit → PR with Problem/Solution/OpenSpec/Testing/Risks + Mermaid |
@@ -77,14 +86,14 @@ Skills follow the [Agent Skills](https://agentskills.io) layout: each skill is a
 dependencies:
   apm:
     - git: https://github.com/kuberly/kuberly-skills.git
-      ref: v0.6.20
+      ref: v0.7.0
 ```
 
 Or HTTPS one-liner (see [APM dependencies](https://microsoft.github.io/apm/guides/dependencies/)):
 
 ```yaml
   apm:
-    - https://github.com/kuberly/kuberly-skills.git#v0.6.20
+    - https://github.com/kuberly/kuberly-skills.git#v0.7.0
 ```
 
 Public GitHub access needs no token. APM reads **`GITHUB_TOKEN`/`GH_TOKEN`** if present (rate-limit relief or private mirrors).
