@@ -3,7 +3,7 @@
 #   - git@github.com:kuberly/kuberly-skills.git#vX.Y.Z   (SSH)
 #   - github.com/kuberly/kuberly-skills#vX.Y.Z           (HTTPS)
 name: kuberly-skills
-version: 0.10.2
+version: 0.10.3
 description: >-
   Kuberly org agent skills for kuberly-stack and customer forks (Cursor, Claude Code, Codex).
 type: hybrid
@@ -11,4 +11,16 @@ target: all
 
 dependencies:
   apm: []
-  mcp: []
+  # Self-defined MCP server: ships inside this package, no registry lookup.
+  # Consumers don't need a separate `.mcp.json` entry — APM merges this
+  # into the runtime's MCP configuration on `apm install`.
+  mcp:
+    - name: kuberly-graph
+      registry: false
+      transport: stdio
+      command: python3
+      args:
+        - "${CLAUDE_PLUGIN_ROOT}/mcp/kuberly-graph/kuberly_graph.py"
+        - mcp
+        - --repo
+        - "."

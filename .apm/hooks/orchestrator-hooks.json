@@ -1,0 +1,25 @@
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/mcp/kuberly-graph/kuberly_graph.py\" generate \"$CLAUDE_PROJECT_DIR\" -o \"$CLAUDE_PROJECT_DIR/.claude\" 2>/dev/null",
+          "timeout": 10,
+          "statusMessage": "Refreshing kuberly-graph..."
+        }
+      ]
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/orchestrator_route.py\"",
+          "timeout": 5
+        }
+      ]
+    }
+  ]
+}

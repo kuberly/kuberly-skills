@@ -259,23 +259,14 @@ For GCP / Azure, point at `clouds/gcp/modules/<module>/` or `clouds/azure/module
 
 Persona definitions live in **`kuberly-skills`** (this package) at `agents/<name>.md`. APM ships them inside `apm_modules/kuberly/kuberly-skills/agents/` after `apm install`. The consumer repo's `scripts/sync_agents.sh` (also from this package) copies them into `.claude/agents/<name>.md`. Wire that script into the consumer's `ensure-apm-skills` pre-commit hook so personas stay synced on every install.
 
-The companion **`UserPromptSubmit` hook** (`scripts/hooks/orchestrator_route.py` in this package) does pre-flight graph entity lookups and emits a STOP banner when the user names an entity that is not in the graph — preventing the canonical "spawn two personas to re-discover X is not deployed" failure mode. Wire it from the consumer's `.claude/settings.json` directly against the apm cache path:
+**Hooks and the `kuberly-graph` MCP server are auto-deployed by APM** (v0.10.3+). On `apm install`, APM:
 
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [{
-      "hooks": [{
-        "type": "command",
-        "command": "python3 \"$CLAUDE_PROJECT_DIR/apm_modules/kuberly/kuberly-skills/scripts/hooks/orchestrator_route.py\"",
-        "timeout": 5
-      }]
-    }]
-  }
-}
-```
+- Merges `.apm/hooks/orchestrator-hooks.json` into the consumer's `.claude/settings.json` — wires both the SessionStart graph generator and the UserPromptSubmit pre-flight router. Hook scripts are copied to `.claude/hooks/kuberly-skills/...` automatically.
+- Registers the self-defined `kuberly-graph` MCP server (declared in this package's `apm.yml`) into the consumer's `.mcp.json` — no manual entry, no `sync_mcp.sh` step.
 
-See `scripts/hooks/README.md` in this package for the full description.
+Consumers no longer hand-maintain `.mcp.json` or `.claude/settings.json` for kuberly-skills wiring. Strip any pre-v0.10.3 manual entries after upgrading.
+
+The `UserPromptSubmit` hook does pre-flight graph entity lookups and emits a STOP banner when the user names an entity that is not in the graph — preventing the canonical "spawn two personas to re-discover X is not deployed" failure mode. See `scripts/hooks/README.md` in this package for the implementation details.
 
 ## Related skills
 
