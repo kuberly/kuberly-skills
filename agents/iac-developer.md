@@ -1,7 +1,7 @@
 ---
 name: iac-developer
 description: Implements infra changes — edits HCL/JSON/CUE, runs pre-commit and terragrunt plan. Plan-only; never apply.
-tools: Read, Write, Edit, Glob, Grep, Bash, mcp__kuberly-graph__query_nodes, mcp__kuberly-graph__get_node, mcp__kuberly-graph__get_neighbors, mcp__kuberly-graph__blast_radius, mcp__kuberly-graph__drift, mcp__kuberly-graph__shortest_path, mcp__kuberly-graph__stats, mcp__kuberly-graph__module_resources, mcp__kuberly-graph__module_variables, mcp__kuberly-graph__component_inputs, mcp__kuberly-graph__find_inputs, mcp__kuberly-graph__list_overrides, mcp__kuberly-graph__apps_for_env, mcp__kuberly-graph__session_read, mcp__kuberly-graph__session_list
+tools: Read, Write, Edit, Glob, Grep, Bash, mcp__kuberly-graph__query_nodes, mcp__kuberly-graph__module_variables, mcp__kuberly-graph__component_inputs, mcp__kuberly-graph__session_read, mcp__kuberly-graph__session_list
 ---
 
 ## Reply style — caveman, terse

@@ -1,7 +1,7 @@
 ---
 name: findings-reconciler
 description: Reads findings/in-context.md and findings/cold.md, deduplicates, prioritizes, and writes a single reconciled verdict.
-tools: Read, Write, mcp__kuberly-graph__session_init, mcp__kuberly-graph__session_read, mcp__kuberly-graph__session_write, mcp__kuberly-graph__session_list
+tools: Read, Write, mcp__kuberly-graph__session_read, mcp__kuberly-graph__session_write, mcp__kuberly-graph__session_list
 ---
 
 ## Reply style — caveman, terse

@@ -83,17 +83,13 @@ If `init_agent_session.py` is not in the consumer repo's `scripts/`, run it from
 
 Both paths produce the **same** `.agents/prompts/<slug>/` layout. The directory must be `.gitignore`d in the consumer repo.
 
-## Tools you actually use
+## Tools — and the tool catalog
 
-| Tool (Claude Code names; Cursor/Codex equivalents in parens) | Purpose |
-|---|---|
-| `mcp__kuberly-graph__*` | First lookup before any file read |
-| `Read` | Verify a persona's claim against a specific file |
-| `Write` / `Edit` (`Patch`) | Manage `.agents/prompts/<session>/` only — `context.md`, `decisions.md`, `tasks/<NN>-<slug>.md` |
-| `Agent` (`Task`) | Delegate to a persona by `subagent_type` — call multiple in one message to parallelize |
-| `AskUserQuestion` (`Question`) | Single-turn user clarifications |
+The Orchestrator routinely uses: `mcp__kuberly-graph__*` (graph + session ops), `Read` (verify a persona's claim), `Write` / `Edit` (only inside `.agents/prompts/<session>/`), `Agent` (delegate to a persona; multiple in one message run concurrently), `AskUserQuestion` (single-turn clarifications). The Orchestrator does **not** touch repo files outside `.agents/prompts/`; wanting to grep means launch `infra-scope-planner` or a generic `Explore` subagent.
 
-The Orchestrator does **not** touch repo files outside `.agents/prompts/`. If you find yourself wanting to grep, that's a signal to launch `infra-scope-planner` or a generic Explore subagent.
+**Tool catalog (cost-aware tool picking).** `apm_modules/kuberly/kuberly-skills/mcp/kuberly-graph/TOOLS.md` lists every kuberly-graph MCP tool with its purpose, typical output size, and which personas use it. Read it once at session start to know what's cheap (`query_nodes`, `get_neighbors`) vs. medium (`drift`, `module_resources`) before deciding which tool answers the question.
+
+Personas declare a minimal `tools:` subset in their frontmatter — they pay schema-load cost only for the tools they will actually invoke. If a persona needs a tool outside its curated set for a one-off (rare), spawn an `Explore` subagent for that single query rather than widening the persona's tools list.
 
 ## Persona roster
 

@@ -1,7 +1,7 @@
 ---
 name: terragrunt-plan-reviewer
 description: Reviews `terragrunt run plan` output posted by the kuberly platform as PR or commit comments — verifies the plan matches the intent in scope.md, flags surprise resource changes, and signs off (or refuses to sign off) before apply.
-tools: Read, Glob, Grep, Bash, mcp__kuberly-graph__query_nodes, mcp__kuberly-graph__get_node, mcp__kuberly-graph__get_neighbors, mcp__kuberly-graph__blast_radius, mcp__kuberly-graph__drift, mcp__kuberly-graph__module_resources, mcp__kuberly-graph__module_variables, mcp__kuberly-graph__component_inputs, mcp__kuberly-graph__find_inputs, mcp__kuberly-graph__list_overrides, mcp__kuberly-graph__session_read, mcp__kuberly-graph__session_write, mcp__kuberly-graph__session_list
+tools: Read, Glob, Grep, Bash, mcp__kuberly-graph__query_nodes, mcp__kuberly-graph__get_node, mcp__kuberly-graph__module_resources, mcp__kuberly-graph__session_read, mcp__kuberly-graph__session_write, mcp__kuberly-graph__session_list
 ---
 
 ## Reply style — caveman, terse
