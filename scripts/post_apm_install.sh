@@ -11,7 +11,10 @@
 #   1. Sync persona files into .claude/agents/ and .cursor/agents/
 #   2. Merge canonical hook + MCP entries into .claude/settings.json,
 #      .mcp.json, .cursor/hooks.json, .cursor/mcp.json
-#   3. Report apm.lock.yaml drift (exit 1 if changed since last run)
+#   3. Ensure the pre-commit framework's git hook is installed (so the
+#      consumer's .pre-commit-config.yaml entries — including
+#      ensure-apm-skills — actually fire on commits)
+#   4. Report apm.lock.yaml drift (exit 1 if changed since last run)
 #
 # Env: KUBERLY_LOCK_BEFORE — set by the consumer bootstrap to the apm.lock.yaml
 # contents before `apm install` ran. Used for the drift check.
@@ -38,7 +41,30 @@ SYNC_AGENTS="$PKG/scripts/sync_agents.sh"
 SYNC_CLAUDE="$PKG/scripts/sync_claude_config.py"
 [[ -f "$SYNC_CLAUDE" ]] && python3 "$SYNC_CLAUDE"
 
-# 3. Lockfile drift report — only if caller passed KUBERLY_LOCK_BEFORE
+# 3. Pre-commit framework: ensure git hook is installed.
+# The consumer's .pre-commit-config.yaml lists ensure-apm-skills (which calls
+# this script). For the entry to actually fire on `git commit`, pre-commit
+# must have written .git/hooks/pre-commit. New clones rarely do this manually;
+# self-heal here so every `apm install` makes future commits auto-sync.
+PCC="$ROOT/.pre-commit-config.yaml"
+GIT_DIR="$(git -C "$ROOT" rev-parse --git-dir 2>/dev/null)"
+PRE_HOOK="$ROOT/$GIT_DIR/hooks/pre-commit"
+if [[ -f "$PCC" ]]; then
+  needs_install=1
+  if [[ -f "$PRE_HOOK" ]] && grep -q "pre-commit" "$PRE_HOOK" 2>/dev/null; then
+    needs_install=0
+  fi
+  if [[ "$needs_install" == "1" ]]; then
+    if command -v pre-commit >/dev/null 2>&1; then
+      ( cd "$ROOT" && pre-commit install --install-hooks ) >&2 \
+        && echo "post_apm_install: pre-commit git hook installed"
+    else
+      echo "post_apm_install: pre-commit CLI not found — install with 'pip install pre-commit' or 'brew install pre-commit', then run 'pre-commit install'" >&2
+    fi
+  fi
+fi
+
+# 4. Lockfile drift report — only if caller passed KUBERLY_LOCK_BEFORE
 LOCK="$ROOT/apm.lock.yaml"
 if [[ -n "${KUBERLY_LOCK_BEFORE:-}" && -f "$LOCK" ]]; then
   if [[ "$KUBERLY_LOCK_BEFORE" != "$(cat "$LOCK")" ]]; then
