@@ -111,6 +111,17 @@ Personas are defined at `.claude/agents/<name>.md` in the consumer repo (deploye
 
 When a generic role doesn't fit the named personas, fall back to Claude Code's built-in `Explore` (research-only) or `general-purpose` (anything else).
 
+## Cheap pre-flight: prefer Explore over a full persona
+
+A full persona costs 30–80k tokens because each one re-reads the session dir, re-queries the graph, and writes a structured file. For pure **existence** or **lookup** questions — *"is Loki deployed in prod?", "does this module have a `kuberly.json`?", "which envs reference X?"* — that is overkill. Two cheaper paths, in order:
+
+1. **The orchestrator's own `mcp__kuberly-graph__*` calls.** `query_nodes(label="loki")` answers "is X deployed" in one MCP call. The pre-flight graph slice from the `orchestrator_route` UserPromptSubmit hook (when present in `additionalContext`) already paid for this — read it before doing anything.
+2. **`Explore` subagent** (built-in, read-only, narrow). Use when you need to verify a claim against actual file contents (`grep`, file read) but don't want to spin up a full persona. Hand it the **exact** lookup, e.g. *"List every `applications/*/loki*.json` file and report whether each declares a memory limit. Report in under 100 words."* Explore returns excerpts, not analysis — perfect for fact-checking.
+
+**Rule:** if the answer to *"is this question 'does X exist?' or 'where is Y defined?'"* is yes, route through (1) or (2). Reserve `infra-scope-planner` for **producing a `scope.md`** that an `iac-developer` will consume. Reserve `troubleshooter` for **incidents with live observability signals**. A persona that returns "X is not deployed, nothing to do" is a sign you should have used Explore.
+
+If `plan_persona_fanout` returns a multi-persona phase 1 for a task whose target *might not exist* (named modules absent from the graph), do the pre-flight first and amend the DAG — drop personas whose work is moot.
+
 ## Parallel fan-out — the core pattern
 
 Personas can't message each other; they all return to you. **The filesystem is the inter-agent message bus.** That makes parallel fan-out cheap:
@@ -241,10 +252,30 @@ For GCP / Azure, point at `clouds/gcp/modules/<module>/` or `clouds/azure/module
 - After each persona returns, summarize outcomes — don't dump raw output. The persona's file is the canonical record.
 - Don't redo persona work. If you need to verify a claim, read the specific file yourself; don't re-dispatch.
 - **Proactively** update `context.md` and `decisions.md` — the moment you learn or decide something reusable.
+- **Token discipline (enforce on every dispatch).** Personas operate under a 12-tool-use cap with a ≤150-word reply ceiling — long content is written to their assigned file, not echoed back to you. Read the file yourself; do not ask the persona to "summarize what you found." If a persona returns close to the cap with no resolution, that's the signal to **re-scope** (split, drop, or downgrade to Explore), not to spawn a follow-up persona on the same question.
+- **Cheap before expensive.** Existence/lookup questions go through `mcp__kuberly-graph__*` or `Explore` (see "Cheap pre-flight" above). Reserve named personas for tasks that produce a structured file an implementation phase will consume.
 
 ## Distribution
 
 Persona definitions live in **`kuberly-skills`** (this package) at `agents/<name>.md`. APM ships them inside `apm_modules/kuberly/kuberly-skills/agents/` after `apm install`. The consumer repo's `scripts/sync_agents.sh` (also from this package) copies them into `.claude/agents/<name>.md`. Wire that script into the consumer's `ensure-apm-skills` pre-commit hook so personas stay synced on every install.
+
+The companion **`UserPromptSubmit` hook** (`scripts/hooks/orchestrator_route.py` in this package) does pre-flight graph entity lookups and emits a STOP banner when the user names an entity that is not in the graph — preventing the canonical "spawn two personas to re-discover X is not deployed" failure mode. Wire it from the consumer's `.claude/settings.json` directly against the apm cache path:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "python3 \"$CLAUDE_PROJECT_DIR/apm_modules/kuberly/kuberly-skills/scripts/hooks/orchestrator_route.py\"",
+        "timeout": 5
+      }]
+    }]
+  }
+}
+```
+
+See `scripts/hooks/README.md` in this package for the full description.
 
 ## Related skills
 

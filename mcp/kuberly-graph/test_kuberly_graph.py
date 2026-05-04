@@ -195,6 +195,75 @@ class PlanPersonaFanoutTests(unittest.TestCase):
         self.assertEqual(synced["found"], len(EXPECTED_PERSONAS))
 
 
+class StopTargetAbsentTests(unittest.TestCase):
+    """v0.10.2: planner halts the DAG when named modules don't exist in the
+    graph, so the orchestrator can't fan out personas to re-discover the
+    absence."""
+
+    def setUp(self) -> None:
+        self.tmp = _fake_repo()
+        self.g = KuberlyGraph(self.tmp.name)
+        self.g.build()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_unknown_module_triggers_stop(self) -> None:
+        plan = self.g.plan_persona_fanout(
+            task="bump tempo memory in prod",
+            named_modules=["tempo"],
+            current_branch="agrishko/some-feature",
+        )
+        self.assertEqual(plan["task_kind"], "stop-target-absent")
+        self.assertEqual(plan["confidence"], "high")
+        self.assertEqual(plan["unresolved_modules"], ["tempo"])
+        # The DAG must have zero personas — the whole point of the guard.
+        self.assertEqual(len(plan["phases"]), 1)
+        self.assertEqual(plan["phases"][0]["personas"], [])
+        self.assertEqual(plan["phases"][0]["id"], "halt")
+        # context.md surfaces the halt visibly.
+        self.assertIn("Pre-flight halt", plan["context_md"])
+        self.assertIn("`tempo`", plan["context_md"])
+
+    def test_resolved_module_does_not_trigger_stop(self) -> None:
+        plan = self.g.plan_persona_fanout(
+            task="bump loki memory",
+            named_modules=["loki"],
+            current_branch="agrishko/some-feature",
+        )
+        self.assertNotEqual(plan["task_kind"], "stop-target-absent")
+        self.assertEqual(plan["unresolved_modules"], [])
+        # Still has at least one persona phase.
+        any_personas = any(ph["personas"] for ph in plan["phases"])
+        self.assertTrue(any_personas)
+
+    def test_partial_resolution_keeps_normal_dag(self) -> None:
+        """One module resolves, one doesn't — proceed but flag the unresolved."""
+        plan = self.g.plan_persona_fanout(
+            task="bump loki and unicorn",
+            named_modules=["loki", "unicorn"],
+            current_branch="agrishko/some-feature",
+        )
+        self.assertNotEqual(plan["task_kind"], "stop-target-absent")
+        self.assertEqual(plan["unresolved_modules"], ["unicorn"])
+        any_personas = any(ph["personas"] for ph in plan["phases"])
+        self.assertTrue(any_personas)
+        self.assertIn("Partial resolution", plan["context_md"])
+
+    def test_no_named_modules_does_not_trigger_stop(self) -> None:
+        """The guard only fires when the caller supplied modules to look up."""
+        plan = self.g.plan_persona_fanout(
+            task="something with no named modules",
+            current_branch="agrishko/some-feature",
+        )
+        self.assertNotEqual(plan["task_kind"], "stop-target-absent")
+        self.assertEqual(plan["unresolved_modules"], [])
+
+    def test_stop_target_absent_in_persona_dags_registry(self) -> None:
+        self.assertIn("stop-target-absent", PERSONA_DAGS)
+        self.assertEqual(PERSONA_DAGS["stop-target-absent"][0]["personas"], [])
+
+
 class OpenSpecExistingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = _fake_repo()

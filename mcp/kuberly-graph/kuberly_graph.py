@@ -104,6 +104,13 @@ PERSONA_DAGS = {
     "unknown": [
         {"id": "scope", "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
     ],
+    # Pre-flight halt: caller named modules that don't exist as graph nodes.
+    # Empty persona list — the orchestrator must clarify with the user before
+    # any fanout. Spawning personas here is the canonical "burn 100k tokens
+    # to re-discover X is not deployed" failure mode.
+    "stop-target-absent": [
+        {"id": "halt", "personas": [], "parallel": False, "needs_approval": False},
+    ],
 }
 
 # ---------------------------------------------------------------------------
@@ -858,11 +865,35 @@ class KuberlyGraph:
 
         scope = self.scope_for_change(named_modules, target_envs)
         gates = self.gate_check(named_modules, current_branch, task)
+
+        # Existence pre-flight. If the caller named modules but NONE of them
+        # resolve to a graph node, override the DAG to a no-persona halt so
+        # the orchestrator can't fan out personas that would just re-discover
+        # the absence. This is the v0.10.2 root-cause guard for the "Loki
+        # not deployed but planner+troubleshooter both spawned" pattern.
+        unresolved_modules: list[str] = []
+        if named_modules:
+            found_labels = {
+                self.nodes[nid].get("label", "").lower()
+                for nid in scope.get("modules", [])
+                if nid in self.nodes
+            }
+            unresolved_modules = [
+                m for m in named_modules if m.lower() not in found_labels
+            ]
+            if not scope.get("modules"):
+                # Caller-supplied task_kind is honored everywhere else, but
+                # an empty resolution against named modules is a hard signal
+                # that overrides classification.
+                task_kind = "stop-target-absent"
+                confidence = "high"
+
         recommended = self.recommend_personas(task_kind)
 
         slug = _slugify(session_name or task)
         context_md = self._build_context_md(
             session=slug, task=task, scope=scope, gates=gates,
+            unresolved_modules=unresolved_modules,
         )
 
         return {
@@ -873,10 +904,12 @@ class KuberlyGraph:
             "phases":     recommended["phases"],
             "session_slug": slug,
             "context_md":  context_md,
+            "unresolved_modules": unresolved_modules,
         }
 
     def _build_context_md(self, session: str, task: str,
-                          scope: dict, gates: dict) -> str:
+                          scope: dict, gates: dict,
+                          unresolved_modules: list[str] | None = None) -> str:
         """Build the Markdown body session_init writes to context.md."""
         # Graph snapshot lines
         glines = [f"- **Modules in scope:** {', '.join(scope['modules']) or '(none resolved)'}"]
@@ -889,6 +922,29 @@ class KuberlyGraph:
                 glines.append(f"  - `{f}`")
         if scope["drift_slice"]:
             glines.append(f"- **Drift slice:** {scope['drift_slice']}")
+
+        # Pre-flight halt — named modules absent from graph
+        halt_block = ""
+        if unresolved_modules and not scope.get("modules"):
+            names = ", ".join(f"`{m}`" for m in unresolved_modules)
+            halt_block = (
+                f"\n## ⛔ Pre-flight halt — target absent\n"
+                f"Named module(s) {names} have **no matching node** in the "
+                f"kuberly-graph. The fanout DAG was overridden to "
+                f"`stop-target-absent` (zero personas). Confirm with the user "
+                f"before any persona dispatch — likely the target is not "
+                f"deployed in this fork, the user means a different name, or "
+                f"the graph is stale.\n"
+            )
+        elif unresolved_modules:
+            # Some resolved, some didn't — informational, not a halt.
+            names = ", ".join(f"`{m}`" for m in unresolved_modules)
+            halt_block = (
+                f"\n## ⚠️ Partial resolution\n"
+                f"These named module(s) did not resolve: {names}. Proceeding "
+                f"with the modules that did — confirm scope before fanning "
+                f"out implementation personas.\n"
+            )
 
         # OpenSpec note
         os_block = ""
@@ -911,7 +967,7 @@ class KuberlyGraph:
             created=datetime.now(timezone.utc).isoformat(timespec="seconds"),
             task=task or "_(orchestrator: fill in)_",
             graph_summary="\n".join(glines),
-        ) + os_block + br_block
+        ) + halt_block + os_block + br_block
 
     # ------------------------------------------------------------------
     # Session memory: thin wrappers over .agents/prompts/<name>/
@@ -2086,10 +2142,51 @@ def _card_plan_persona_fanout(plan: dict, args: dict, graph: KuberlyGraph) -> st
     ps = gates.get("personas_synced", {})
     ps_e = "🟢" if ps.get("verdict") == "ok" else "🟠"
 
+    unresolved = plan.get("unresolved_modules") or []
+    is_halt = plan.get("task_kind") == "stop-target-absent"
+
     lines = [
         f"# {EMOJI['fanout']} Persona fanout briefing",
         f"_session slug: `{plan.get('session_slug', '?')}`_",
         "",
+    ]
+
+    # Pre-flight halt banner — top of the card so the orchestrator can't miss it.
+    if is_halt:
+        names = ", ".join(f"`{m}`" for m in unresolved) or "_(unspecified)_"
+        lines.extend([
+            f"## {EMOJI['block']} STOP — pre-flight halt",
+            "",
+            f"Named module(s) {names} have **no matching node** in the "
+            f"kuberly-graph. The DAG below is intentionally empty "
+            f"(`stop-target-absent`).",
+            "",
+            "**Do not dispatch any persona.** Either:",
+            "",
+            "1. Confirm with the user that the target name is correct and the "
+            "graph is fresh.",
+            "2. If the user actually meant a different module, re-call "
+            "`plan_persona_fanout` with the corrected `named_modules`.",
+            "3. If the target genuinely is not deployed in this fork, the "
+            "task may not apply — surface that to the user.",
+            "",
+            "_(This is the v0.10.2 guard against the canonical "
+            "\"two personas burn 100k tokens to re-discover the target is "
+            "not deployed\" failure mode.)_",
+            "",
+        ])
+    elif unresolved:
+        names = ", ".join(f"`{m}`" for m in unresolved)
+        lines.extend([
+            f"## {EMOJI['warn']} Partial resolution",
+            "",
+            f"These named module(s) did not resolve and will be skipped: "
+            f"{names}. Verify scope before fanning out implementation "
+            f"personas.",
+            "",
+        ])
+
+    lines.extend([
         f"## {EMOJI['scope']} Classification",
         "",
         "| Field | Value |",
@@ -2098,7 +2195,7 @@ def _card_plan_persona_fanout(plan: dict, args: dict, graph: KuberlyGraph) -> st
         f"| confidence | {_confidence_badge(plan.get('confidence'))} |",
         "",
         f"## {EMOJI['blast']} Scope",
-    ]
+    ])
     mods = scope.get("modules", [])
     lines.append(
         f"- **Modules in scope:** {', '.join(f'`{m}`' for m in mods) if mods else '_(none resolved)_'}"
@@ -2541,7 +2638,7 @@ def run_mcp_server(graph: KuberlyGraph):
                     "target_envs":    {"type": "array", "items": {"type": "string"}, "description": "Optional: target environments. Drift slice is computed only when set."},
                     "current_branch": {"type": "string", "description": "Result of `git rev-parse --abbrev-ref HEAD` — enables the branch gate."},
                     "session_name":   {"type": "string", "description": "Optional override for the session slug; defaults to slugified task."},
-                    "task_kind":      {"type": "string", "enum": ["resource-bump", "incident", "new-module", "drift-fix", "cicd", "cleanup", "unknown"], "description": "Override task_kind inference."},
+                    "task_kind":      {"type": "string", "enum": ["resource-bump", "incident", "new-module", "drift-fix", "cicd", "cleanup", "unknown", "stop-target-absent"], "description": "Override task_kind inference. Note: `stop-target-absent` is normally set automatically when `named_modules` are supplied but none resolve to graph nodes — the orchestrator should not pass this value, the planner emits it."},
                     "format":         _FORMAT_PROP,
                 },
                 "required": ["task"],
