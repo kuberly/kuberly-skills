@@ -153,6 +153,8 @@ def _merge_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
 
     Same logic for Claude (`.claude/settings.json`) and Cursor
     (`.cursor/hooks.json`) — both runtimes use the same hooks shape.
+    Per-runtime extras (e.g. Cursor's required top-level `version: 1`)
+    are layered by the target's wrapper merger; see `_merge_cursor_hooks_file`.
 
     Events ever owned by kuberly-skills are cleaned even if we no longer
     add hooks to them (so the v0.13.0 drop of SessionStart actually
@@ -178,6 +180,33 @@ def _merge_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
         else:
             # Drop the empty key entirely so .claude/settings.json stays tidy.
             out["hooks"].pop(event, None)
+    return out
+
+
+def _merge_cursor_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
+    """Cursor-flavored variant of `_merge_hooks_file`.
+
+    Cursor 3.x rejects `.cursor/hooks.json` without a top-level
+    `version: 1` field — the file is reported as invalid and ALL hooks
+    silently fail to load (incl. our orchestrator-route + graph-refresh).
+    Caught by Cursor's bugbot in the v0.12 PR review.
+
+    `_merge_hooks_file` produces only `{"hooks": {...}}`; this wrapper
+    layers `version: 1` on top. Idempotent — if the user already has a
+    different version they wrote themselves, we don't override it.
+    """
+    inner = _merge_hooks_file(existing)
+    # Build a new ordered dict so `version` lands at the top — easier
+    # to read, matches Cursor's example schema. Preserve user's value
+    # if they already set one.
+    version = existing.get("version") if isinstance(existing, dict) else None
+    if not isinstance(version, (int, str)):
+        version = 1
+    out: dict[str, Any] = {"version": version}
+    for k, v in inner.items():
+        if k == "version":
+            continue
+        out[k] = v
     return out
 
 
@@ -267,8 +296,8 @@ def main() -> int:
         ]),
         ("cursor", [
             (root / ".cursor" / "hooks.json",
-             {"hooks": {}},
-             lambda d: _merge_hooks_file(d),
+             {"version": 1, "hooks": {}},
+             lambda d: _merge_cursor_hooks_file(d),
              ".cursor/hooks.json"),
             (root / ".cursor" / "mcp.json",
              {"mcpServers": {}},
