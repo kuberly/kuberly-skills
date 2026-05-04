@@ -42,6 +42,7 @@ Skills follow the [Agent Skills](https://agentskills.io) layout: each skill is a
 | Skill | Use when |
 |-------|----------|
 | **`kuberly-stack-context`** | First orientation in the monorepo |
+| **`infra-bootstrap-mandatory`** | **MANDATORY** at session start — `apm install`, feature branch, PR back to merge base. Run this before any file edit. |
 | **`components-vs-applications`** | `components/` vs `applications/` and RAG / retrieval hints |
 | **`kuberly-gitops-execution-model`** | Kuberly-side plan/apply from git; branch ↔ many clusters & app envs |
 | **`short-session-memory`** | Ephemeral debug loop vs durable git / OpenSpec / PR notes |
@@ -86,14 +87,14 @@ Skills follow the [Agent Skills](https://agentskills.io) layout: each skill is a
 dependencies:
   apm:
     - git: https://github.com/kuberly/kuberly-skills.git
-      ref: v0.7.1
+      ref: v0.7.2
 ```
 
 Or HTTPS one-liner (see [APM dependencies](https://microsoft.github.io/apm/guides/dependencies/)):
 
 ```yaml
   apm:
-    - https://github.com/kuberly/kuberly-skills.git#v0.7.1
+    - https://github.com/kuberly/kuberly-skills.git#v0.7.2
 ```
 
 Public GitHub access needs no token. APM reads **`GITHUB_TOKEN`/`GH_TOKEN`** if present (rate-limit relief or private mirrors).
