@@ -1,0 +1,53 @@
+name: Validate skills
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+jobs:
+  skills:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find SKILL.md files and validate YAML frontmatter
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          files=(.apm/skills/**/SKILL.md)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No .apm/skills/**/SKILL.md found"
+            exit 1
+          fi
+          failed=0
+          for f in "${files[@]}"; do
+            if ! head -n 1 "$f" | grep -q '^---$'; then
+              echo "::error file=$f::Missing opening --- frontmatter"
+              failed=1
+              continue
+            fi
+            if ! grep -q '^name:' "$f"; then
+              echo "::error file=$f::Frontmatter must include name:"
+              failed=1
+            fi
+            if ! grep -q '^description:' "$f"; then
+              echo "::error file=$f::Frontmatter must include description:"
+              failed=1
+            fi
+            if grep -Ei '(aws_secret_access_key|BEGIN (RSA |OPENSSH )?PRIVATE KEY|api_key\s*[:=])' "$f"; then
+              echo "::error file=$f::Possible secret material — remove before merge"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: Optional — apm audit (if apm installed)
+        continue-on-error: true
+        run: |
+          pip install --quiet apm-cli || true
+          if command -v apm >/dev/null 2>&1; then
+            apm audit -f markdown -o apm-audit.md || true
+            cat apm-audit.md 2>/dev/null || true
+          fi

@@ -1,0 +1,31 @@
+# Minimal pattern: app repo → kuberly-stack reusable-gitops-flat-env.yml
+# Replace YOUR_ORG/kuberly-stack and @REF; set secrets/vars on the APP repo in GitHub Settings → Actions.
+
+name: GitOps image
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    uses: YOUR_ORG/kuberly-stack/.github/workflows/reusable-gitops-flat-env.yml@REF
+    secrets:
+      GITOPS_ENV_OIDC_ARNS_JSON: ${{ secrets.GITOPS_ENV_OIDC_ARNS_JSON }}
+      # OIDC-only: omit static key secrets. For key-based auth, add the secret names the reusable
+      # workflow expects — copy the full `secrets:` block from `.github/examples/merge-flow.yml`.
+      KUBERLY_WEBHOOK_SECRET: ${{ secrets.KUBERLY_WEBHOOK_SECRET }}
+    with:
+      app_name: backend
+      gitops_environment: dev
+      infra_repo: YOUR_ORG/customer-infra
+      infra_ref: REF
+      gitops_branches: main
+      aws_region: eu-central-1
+      docker_context: .
+      kuberly_webhook_url: ${{ vars.KUBERLY_WEBHOOK_URL }}
+      kuberly_build_id: ${{ vars.KUBERLY_BUILD_ID }}

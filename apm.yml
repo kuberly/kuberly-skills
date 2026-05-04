@@ -1,0 +1,14 @@
+# Microsoft APM — https://github.com/microsoft/apm
+# Consumers (kuberly-stack and forks) depend on this repo via:
+#   - git@github.com:kuberly/kuberly-skills.git#vX.Y.Z   (SSH)
+#   - github.com/kuberly/kuberly-skills#vX.Y.Z           (HTTPS)
+name: kuberly-skills
+version: 0.6.20
+description: >-
+  Kuberly org agent skills for kuberly-stack and customer forks (Cursor, Claude Code, Codex).
+type: hybrid
+target: all
+
+dependencies:
+  apm: []
+  mcp: []
