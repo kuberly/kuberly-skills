@@ -1213,6 +1213,19 @@ class KuberlyPlatform:
         self.scan_catalog()
         self.link_components_to_modules()
 
+    def load_from_cache(self, cache_path: Path) -> None:
+        """Hydrate `nodes` and `edges` from a previously-generated graph.json.
+
+        Skips the expensive repo walk in `build()`. Stats and drift are
+        computed lazily from the loaded nodes/edges so they don't go stale.
+        """
+        with cache_path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            raise ValueError(f"{cache_path} is not a valid graph dump")
+        self.nodes = {n["id"]: n for n in (data.get("nodes") or []) if isinstance(n, dict) and n.get("id")}
+        self.edges = list(data.get("edges") or [])
+
     # -- export --
     def to_json(self) -> dict:
         return {
@@ -1690,13 +1703,47 @@ def format_blast_radius(result: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def load_graph(repo_path: str) -> KuberlyPlatform:
-    """Load and build a graph from a repo path."""
+    """Build a graph from the repo on disk (used by the `generate` CLI path).
+
+    Walks the repo tree and produces a fresh in-memory graph. Expensive on
+    repos with many modules — for the MCP server, prefer `load_graph_cached`
+    which reads the pre-computed `.claude/graph.json`.
+    """
     repo = Path(repo_path).resolve()
     if not (repo / "root.hcl").exists():
         print(f"Error: {repo} does not look like a kuberly-stack repo (no root.hcl)")
         sys.exit(1)
     g = KuberlyPlatform(str(repo))
     g.build()
+    return g
+
+
+def load_graph_cached(repo_path: str) -> KuberlyPlatform:
+    """Hydrate a KuberlyPlatform from `.claude/graph.json` (MCP-startup path).
+
+    The MCP server should NOT build the graph from the repo on every cold
+    start — that's expensive and racy with concurrent edits. The pre-commit
+    hook (post_apm_install.sh) regenerates `.claude/graph.json` on every
+    commit, so the cached file is always current as of the latest commit.
+
+    Raises SystemExit(1) with a clear message if the cache is missing — the
+    consumer needs to either commit something (which fires the regen hook)
+    or run `bash apm_modules/kuberly/kuberly-skills/scripts/post_apm_install.sh`
+    once to bootstrap.
+    """
+    repo = Path(repo_path).resolve()
+    cache = repo / ".claude" / "graph.json"
+    if not cache.is_file():
+        print(
+            f"Error: {cache} not found. The MCP server reads this cached graph; "
+            "regenerate it once with:\n"
+            f"  python3 {Path(__file__).resolve()} generate {repo} -o {repo}/.claude\n"
+            "After that, the pre-commit hook keeps it fresh on every commit.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    g = KuberlyPlatform(str(repo))
+    g.load_from_cache(cache)
     return g
 
 
@@ -1797,7 +1844,11 @@ def main():
         print(f"\n{len(results)} nodes matched.")
 
     elif args.command == "mcp":
-        run_mcp_server(load_graph(args.repo))
+        # MCP server reads the cached `.claude/graph.json` rather than
+        # rebuilding from the repo on every cold start. The pre-commit hook
+        # (post_apm_install.sh in kuberly-skills) regenerates the cache on
+        # every commit. Bootstrap path: run `generate` once after `apm install`.
+        run_mcp_server(load_graph_cached(args.repo))
 
 
 # ---------------------------------------------------------------------------

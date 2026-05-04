@@ -14,7 +14,12 @@
 #   3. Ensure the pre-commit framework's git hook is installed (so the
 #      consumer's .pre-commit-config.yaml entries — including
 #      ensure-apm-skills — actually fire on commits)
-#   4. Report apm.lock.yaml drift (exit 1 if changed since last run)
+#   4. Refresh `.claude/graph.json` (and sibling artifacts) by running the
+#      kuberly-platform graph generator. This script runs from the
+#      ensure-apm-skills pre-commit hook, so every commit captures a
+#      fresh graph state. The MCP server reads the cached file rather
+#      than rebuilding from the repo on each cold start.
+#   5. Report apm.lock.yaml drift (exit 1 if changed since last run)
 #
 # Env: KUBERLY_LOCK_BEFORE — set by the consumer bootstrap to the apm.lock.yaml
 # contents before `apm install` ran. Used for the drift check.
@@ -82,7 +87,17 @@ if [[ -f "$PCC" ]]; then
   fi
 fi
 
-# 4. Lockfile drift report — only if caller passed KUBERLY_LOCK_BEFORE
+# 4. Refresh kuberly-graph cache so MCP can read it on next session.
+# Runs only if root.hcl exists (kuberly-stack repo marker). Silent on
+# success — emits the one-line stats banner from kuberly_platform.py.
+GRAPH_GEN="$PKG/mcp/kuberly-platform/kuberly_platform.py"
+if [[ -f "$GRAPH_GEN" && -f "$ROOT/root.hcl" ]]; then
+  mkdir -p "$ROOT/.claude"
+  python3 "$GRAPH_GEN" generate "$ROOT" -o "$ROOT/.claude" 2>&1 \
+    | sed 's/^/graph: /' || true
+fi
+
+# 5. Lockfile drift report — only if caller passed KUBERLY_LOCK_BEFORE
 LOCK="$ROOT/apm.lock.yaml"
 if [[ -n "${KUBERLY_LOCK_BEFORE:-}" && -f "$LOCK" ]]; then
   if [[ "$KUBERLY_LOCK_BEFORE" != "$(cat "$LOCK")" ]]; then

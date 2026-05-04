@@ -53,25 +53,16 @@ KUBERLY_OWNED_MARKERS = (
 # --- canonical entries ------------------------------------------------------
 
 def _hooks_block() -> dict[str, list[dict[str, Any]]]:
-    """The two hooks kuberly-skills owns — same shape for Claude and Cursor."""
+    """The hooks kuberly-skills owns. Same shape for Claude and Cursor.
+
+    Only UserPromptSubmit lives here. SessionStart was previously used to
+    regenerate `.claude/graph.json` on every Claude Code session start —
+    v0.13.0 moved that to the pre-commit pipeline (post_apm_install.sh)
+    so each commit captures a fresh graph state and the MCP server reads
+    the cached file at startup. SessionStart-on-every-Claude-launch is no
+    longer needed and was removed to cut cold-start time.
+    """
     return {
-        "SessionStart": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": (
-                            f'python3 "$CLAUDE_PROJECT_DIR/{APM_CACHE_PATH}'
-                            f'/mcp/kuberly-platform/kuberly_platform.py" generate '
-                            f'"$CLAUDE_PROJECT_DIR" -o '
-                            f'"$CLAUDE_PROJECT_DIR/.claude" 2>/dev/null'
-                        ),
-                        "timeout": 10,
-                        "statusMessage": "Refreshing kuberly-platform...",
-                    }
-                ]
-            }
-        ],
         "UserPromptSubmit": [
             {
                 "hooks": [
@@ -162,18 +153,31 @@ def _merge_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
 
     Same logic for Claude (`.claude/settings.json`) and Cursor
     (`.cursor/hooks.json`) — both runtimes use the same hooks shape.
+
+    Events ever owned by kuberly-skills are cleaned even if we no longer
+    add hooks to them (so the v0.13.0 drop of SessionStart actually
+    removes legacy entries from upgraded consumers).
     """
+    HISTORICAL_EVENTS = ("SessionStart", "UserPromptSubmit")
     out = json.loads(json.dumps(existing))  # deep copy via JSON round-trip
     out.setdefault("hooks", {})
     if not isinstance(out["hooks"], dict):
         return existing  # something weird — refuse to clobber
-    for event, kuberly_matchers in _hooks_block().items():
+    new_block = _hooks_block()
+    for event in HISTORICAL_EVENTS:
         current = out["hooks"].get(event, [])
         if not isinstance(current, list):
             current = []
-        # Drop any kuberly-owned matchers — about to re-add the canonical ones.
+        # Drop any kuberly-owned matchers from the existing list.
         filtered = [m for m in current if not _matcher_is_kuberly_owned(m)]
-        out["hooks"][event] = filtered + kuberly_matchers
+        # Add canonical matchers for events kuberly-skills currently owns.
+        kuberly_matchers = new_block.get(event, [])
+        merged = filtered + kuberly_matchers
+        if merged:
+            out["hooks"][event] = merged
+        else:
+            # Drop the empty key entirely so .claude/settings.json stays tidy.
+            out["hooks"].pop(event, None)
     return out
 
 
