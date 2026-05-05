@@ -20,11 +20,12 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -z "$ROOT" || ! -f "$ROOT/apm.yml" ]] && exit 0
 
-# Snapshot lockfile so post_apm_install.sh can detect drift.
+# Snapshot lockfile (byte-accurate) for post_apm_install drift / stabilize.
 LOCK="$ROOT/apm.lock.yaml"
 if [[ -f "$LOCK" ]]; then
-  export KUBERLY_LOCK_BEFORE
-  KUBERLY_LOCK_BEFORE="$(cat "$LOCK")"
+  export KUBERLY_LOCK_BEFORE_PATH
+  KUBERLY_LOCK_BEFORE_PATH="$(mktemp "${TMPDIR:-/tmp}/kuberly-apm-lock.XXXXXX")"
+  cp "$LOCK" "$KUBERLY_LOCK_BEFORE_PATH"
 fi
 
 # APM deploys skills only into existing layouts — make sure .claude exists.
@@ -39,7 +40,11 @@ fi
 # Delegate to kuberly-skills (does sync_agents + sync_claude_config + drift check).
 POST="$ROOT/apm_modules/kuberly/kuberly-skills/scripts/post_apm_install.sh"
 if [[ -x "$POST" ]]; then
-  exec bash "$POST"
+  bash "$POST"
+  rc=$?
+  rm -f "${KUBERLY_LOCK_BEFORE_PATH:-}"
+  exit "$rc"
 fi
 
+rm -f "${KUBERLY_LOCK_BEFORE_PATH:-}"
 exit 0

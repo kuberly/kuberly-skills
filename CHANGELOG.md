@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.32.5 — 2026-05-06
+
+- **FIX:** **`ensure_apm_skills.sh`** snapshots **`apm.lock.yaml`** via a temp
+  file (**`KUBERLY_LOCK_BEFORE_PATH`**) instead of a shell variable (avoids
+  stripping trailing newlines). **`post_apm_install.sh`** restores the snapshot
+  with **`cp`** when only non-semantic bytes differ after **`apm install`**,
+  so pre-commit stops failing on **`generated_at`**-only churn.
+- **BUMP:** apm.yml 0.32.4 → 0.32.5.
+
 ## v0.32.4 — 2026-05-06
 
 - **FIX:** **`post_apm_install.sh`** — lockfile drift check ignores **`generated_at`**

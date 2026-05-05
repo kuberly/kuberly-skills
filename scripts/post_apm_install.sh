@@ -3,7 +3,7 @@
 # the consumer's runtime configs. Idempotent. Stdlib-only assumptions.
 #
 # Consumers ship a tiny bootstrap (`scripts/ensure_apm_skills.sh`) that runs
-# `apm install` and then `exec`s this script. Centralizing the post-install
+# `apm install` and then runs this script. Centralizing the post-install
 # work here means a release of kuberly-skills can change the wiring without
 # every consumer editing their own bootstrap.
 #
@@ -25,12 +25,11 @@
 #      you need a fresh graph. Override: KUBERLY_GRAPH_ON_HOOK=1 forces
 #      generation during hooks; KUBERLY_SKIP_GRAPH_ON_HOOK=1 skips even
 #      outside pre-commit.
-#   5. Report apm.lock.yaml drift (exit 1 if changed since last run).
-#      Comparison ignores `generated_at` because `apm install` may bump
-#      that timestamp without any dependency resolution change.
+#   5. Report apm.lock.yaml drift (exit 1 if dependency resolution changed).
 #
-# Env: KUBERLY_LOCK_BEFORE — set by the consumer bootstrap to the apm.lock.yaml
-# contents before `apm install` ran. Used for the drift check.
+# Env: KUBERLY_LOCK_BEFORE_PATH — temp copy of apm.lock.yaml before `apm install`
+# (set by ensure_apm_skills.sh). Used for drift check and to restore bytes when
+# only generated_at changes.
 
 set -euo pipefail
 
@@ -118,18 +117,23 @@ if [[ -f "$GRAPH_GEN" && -f "$ROOT/root.hcl" ]]; then
   fi
 fi
 
-# 5. Lockfile drift report — only if caller passed KUBERLY_LOCK_BEFORE.
-# Ignore generated_at: apm often rewrites only that field on install.
+# 5. Lockfile drift report — only if caller passed KUBERLY_LOCK_BEFORE_PATH.
+# Ignore generated_at for *comparison*. If semantic content is unchanged but
+# bytes differ (usually generated_at), restore the snapshot so pre-commit does
+# not fail on timestamp-only churn.
 _lock_ignore_generated_at() {
-  printf '%s' "$1" | grep -v '^generated_at:'
+  grep -v '^generated_at:' "$1" 2>/dev/null || true
 }
 LOCK="$ROOT/apm.lock.yaml"
-if [[ -n "${KUBERLY_LOCK_BEFORE:-}" && -f "$LOCK" ]]; then
-  before="$(_lock_ignore_generated_at "$KUBERLY_LOCK_BEFORE")"
-  after="$(_lock_ignore_generated_at "$(cat "$LOCK")")"
-  if [[ "$before" != "$after" ]]; then
+if [[ -n "${KUBERLY_LOCK_BEFORE_PATH:-}" && -f "${KUBERLY_LOCK_BEFORE_PATH}" && -f "$LOCK" ]]; then
+  before_sem="$(_lock_ignore_generated_at "$KUBERLY_LOCK_BEFORE_PATH")"
+  after_sem="$(_lock_ignore_generated_at "$LOCK")"
+  if [[ "$before_sem" != "$after_sem" ]]; then
     echo "post_apm_install: apm.lock.yaml changed — git add apm.lock.yaml && commit" >&2
     exit 1
+  fi
+  if ! cmp -s "$KUBERLY_LOCK_BEFORE_PATH" "$LOCK"; then
+    cp "$KUBERLY_LOCK_BEFORE_PATH" "$LOCK"
   fi
 fi
 
