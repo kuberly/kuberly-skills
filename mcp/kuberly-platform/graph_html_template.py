@@ -352,6 +352,160 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     color: var(--ink-mute);
     line-height: 1.4;
   }
+  .kpi.kpi-warn { border-left: 3px solid #f5b042; }
+  .kpi.kpi-ok   { border-left: 3px solid #5fd098; }
+  .kpi.kpi-blue { border-left: 3px solid var(--blue-soft); }
+  .kpi.kpi-warn .value { color: #f5d9a0; }
+  .kpi.kpi-ok   .value { color: #b6e8c8; }
+
+  /* v0.35.0 dashboard sections — Findings / Module age / App→Secret / Network */
+  .findings-tier {
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
+    padding: 10px 14px 12px;
+    background: var(--bg-card);
+    margin-bottom: 10px;
+  }
+  .findings-tier h3 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-faint);
+    margin-bottom: 8px;
+  }
+  .findings-tier.high   { border-left: 3px solid #ff5e5e; }
+  .findings-tier.medium { border-left: 3px solid #f5b042; }
+  .findings-tier.low    { border-left: 3px solid var(--ink-mute); }
+  .finding-row {
+    display: grid;
+    grid-template-columns: 200px 1fr 200px;
+    gap: 10px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--ink-line-soft);
+    font-size: 12px;
+    color: var(--ink);
+  }
+  .finding-row:last-child { border-bottom: none; }
+  .finding-row .rule { font-family: var(--font-mono); color: #ff8b8b; font-size: 11px; }
+  .findings-tier.medium .finding-row .rule { color: #f5b042; }
+  .findings-tier.low    .finding-row .rule { color: var(--ink-mute); }
+  .finding-row .where {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--ink-faint);
+    text-align: right;
+  }
+
+  /* Module age heatmap */
+  .age-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 6px;
+  }
+  .age-cell {
+    background: var(--bg-card);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    font-size: 11px;
+  }
+  .age-cell .name {
+    font-family: var(--font-mono);
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .age-cell .meta {
+    color: var(--ink-faint);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    margin-top: 3px;
+  }
+  .age-cell.fresh { border-left: 3px solid #5fd098; }
+  .age-cell.warm  { border-left: 3px solid #f5b042; }
+  .age-cell.cold  { border-left: 3px solid #ff8b3d; }
+  .age-cell.frozen{ border-left: 3px solid var(--ink-mute); }
+
+  /* App → Secret → IAM */
+  .asi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 10px;
+  }
+  .asi-card {
+    background: var(--bg-card);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
+    padding: 10px 14px 12px;
+  }
+  .asi-card .head {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink);
+    font-weight: 600;
+    margin-bottom: 4px;
+    word-break: break-all;
+  }
+  .asi-card .meta {
+    color: var(--ink-mute);
+    font-size: 11px;
+    font-family: var(--font-mono);
+    margin-bottom: 6px;
+  }
+  .asi-card .role {
+    color: var(--blue-soft);
+    font-size: 11px;
+    font-family: var(--font-mono);
+    word-break: break-all;
+  }
+  .asi-card .pol {
+    color: var(--ink-faint);
+    font-size: 10px;
+    font-family: var(--font-mono);
+    margin-top: 4px;
+  }
+
+  /* Network reachability table */
+  .net-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 10px;
+  }
+  .net-card {
+    background: var(--bg-card);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
+    padding: 10px 14px 12px;
+  }
+  .net-card.world { border-left: 3px solid #ff5e5e; }
+  .net-card .name {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .net-card .desc {
+    color: var(--ink-mute);
+    font-size: 11px;
+    margin-top: 2px;
+  }
+  .net-card .row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    padding: 3px 0;
+    border-bottom: 1px solid var(--ink-line-soft);
+  }
+  .net-card .row:last-child { border-bottom: none; }
+  .net-card .dir {
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    color: var(--ink-faint);
+    width: 50px;
+  }
+  .net-card .src.world { color: #ff8b8b; }
 
   /* v0.34.0: category cards (Compute / Data / Identity / Networking / ...) */
   .cat-grid {
@@ -1424,6 +1578,217 @@ function renderIamView(iam) {
   return `$${banner}<div class="iam-groups">$${groupBlocks}</div>$${oidcHtml}$${irsaHtml}`;
 }
 
+/* v0.35.0: Secret refs (HCL inputs / component JSONs → Secrets Manager). */
+function renderSecretRefs(sr) {
+  const secrets = (sr && sr.secrets) || [];
+  const orphans = (sr && sr.orphan_refs) || [];
+  if (!secrets.length && !orphans.length) {
+    return `<p style="color:var(--ink-mute)">No <span class="mono">aws_secretsmanager_secret</span> resources discovered yet.</p>`;
+  }
+  const rows = secrets.slice(0, 100).map(s => {
+    const refs = (s.referenced_by || []).map(r =>
+      `<div class="row-meta">$${esc(r.file)} <span style="color:var(--ink-faint)">→ $${esc(r.key)}</span></div>`
+    ).join("");
+    return `<div class="cat-row">
+      <div class="row-head">
+        <div class="row-addr">$${esc(s.name || s.address)}</div>
+        <div class="row-kind">$${esc(s.module)} · $${esc(s.env)}</div>
+      </div>
+      $${refs || `<div class="row-meta" style="color:var(--ink-faint)">no component file references this secret name verbatim</div>`}
+    </div>`;
+  }).join("");
+  const orphanHtml = orphans.length
+    ? `<details style="margin-top:10px"><summary style="color:var(--ink-mute);font-family:var(--font-mono);font-size:11px;cursor:pointer">$${orphans.length} orphan secret-key reference$${orphans.length === 1 ? "" : "s"} (no matching aws_secretsmanager_secret found)</summary>`
+      + orphans.map(r =>
+          `<div class="row-meta">$${esc(r.file)} <span style="color:var(--ink-faint)">→ $${esc(r.key)} = $${esc(r.value)}</span></div>`
+        ).join("") + `</details>`
+    : "";
+  return `<div>$${rows}$${orphanHtml}</div>`;
+}
+
+/* v0.35.0: CUE schema tree — files + their top-level fields. */
+function renderCueSchemas(cs) {
+  const files = (cs && cs.files) || [];
+  if (!files.length) {
+    return `<p style="color:var(--ink-mute)">No <span class="mono">cue/</span> schema files found in this repo.</p>`;
+  }
+  return `<p style="color:var(--ink-faint);font-size:11px;font-family:var(--font-mono);margin-bottom:8px">$${cs.file_count} schema file$${cs.file_count === 1 ? "" : "s"} · $${cs.field_count} top-level fields</p>` + files.slice(0, 30).map(f => {
+    const fields = (f.fields || []).map(fld =>
+      `<span class="kind-chip"><strong>$${esc(fld.name)}</strong> $${esc(fld.type)}</span>`
+    ).join("");
+    return `<details class="cat-card" style="margin-bottom:8px"><summary style="cursor:pointer">
+      <span class="mono" style="color:var(--ink)">$${esc(f.file)}</span>
+      <span style="color:var(--ink-faint);font-family:var(--font-mono);font-size:11px;margin-left:8px">$${f.field_count} fields$${f.package ? ' · pkg ' + esc(f.package) : ''}</span>
+    </summary><div class="kind-row" style="margin-top:8px">$${fields}</div></details>`;
+  }).join("");
+}
+
+/* v0.35.0: CI/CD workflow origins. */
+function renderWorkflows(wf) {
+  const flows = (wf && wf.workflows) || [];
+  if (!flows.length) {
+    return `<p style="color:var(--ink-mute)">No <span class="mono">.github/workflows</span> files found.</p>`;
+  }
+  return flows.map(f => {
+    const mods = (f.module_refs || []).map(m =>
+      `<span class="kind-chip">$${esc(m)}</span>`).join("") ||
+      `<span style="color:var(--ink-faint);font-size:11px">no module refs</span>`;
+    const comps = (f.component_refs || []).map(c =>
+      `<span class="kind-chip">$${esc(c.env)}/$${esc(c.name)}</span>`).join("") || "";
+    const triggers = (f.triggers || []).map(t =>
+      `<span class="finding-pill" style="background:rgba(22,119,255,0.10);border-color:rgba(22,119,255,0.30);color:#cfe2ff">$${esc(t)}</span>`
+    ).join("");
+    return `<div class="cat-card" style="margin-bottom:10px">
+      <div class="cat-head" style="cursor:default">
+        <div class="title"><span class="icon">⚙</span><span class="mono">$${esc(f.file)}</span></div>
+        <div class="findings">$${triggers}</div>
+      </div>
+      <div class="kind-row" style="margin-top:8px">$${mods}</div>
+      $${comps ? `<div class="kind-row" style="margin-top:6px">$${comps}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+/* v0.35.0: Rendered-apps panel (output of manual render_apps.py). */
+function renderRenderedApps(byEnv, drift) {
+  const envs = Object.keys(byEnv || {});
+  if (!envs.length) {
+    return `<p style="color:var(--ink-mute)">No rendered manifest data yet. Run the manual renderer to populate this view:</p>
+      <button type="button" class="kbd kbd-copy" data-copy="python3 apm_modules/kuberly/kuberly-skills/scripts/render_apps.py" title="Copy">
+        render_apps.py <span class="kbd-tick">copy</span>
+      </button>
+      <button type="button" class="kbd kbd-copy" data-copy="python3 apm_modules/kuberly/kuberly-skills/scripts/diff_apps.py" title="Copy" style="margin-left:6px">
+        diff_apps.py <span class="kbd-tick">copy</span>
+      </button>`;
+  }
+  return envs.map(env => {
+    const e = byEnv[env];
+    const driftEnv = (drift && drift[env]) || null;
+    const driftByApp = {};
+    if (driftEnv) {
+      for (const a of (driftEnv.apps || [])) driftByApp[a.app] = a;
+    }
+    const apps = (e.apps || []).map(a => {
+      const kinds = Object.entries(a.kind_counts || {})
+        .sort((x, y) => y[1] - x[1])
+        .map(([k, n]) => `<span class="kind-chip">$${esc(k)}<strong>$${n}</strong></span>`).join("");
+      const d = driftByApp[a.app];
+      const driftSub = d
+        ? `<span style="color:$${(d.summary.missing_in_cluster || d.summary.extra_in_cluster) ? '#f5b042' : '#5fd098'};font-family:var(--font-mono);font-size:11px">declared $${d.summary.declared} · running $${d.summary.running} · missing $${d.summary.missing_in_cluster} · extra $${d.summary.extra_in_cluster}</span>`
+        : `<span style="color:var(--ink-faint);font-size:11px;font-family:var(--font-mono)">no drift data — run diff_apps.py</span>`;
+      const errBlock = a.ok ? "" :
+        `<div style="color:#ff8b8b;font-family:var(--font-mono);font-size:11px">render failed: $${esc((a.error || []).join(' / '))}</div>`;
+      return `<div class="cat-card" style="margin-bottom:8px">
+        <div class="cat-head" style="cursor:default">
+          <div class="title"><span class="mono" style="color:var(--ink)">$${esc(a.app)}</span></div>
+          <div class="count" style="font-size:18px">$${a.resource_count || 0}</div>
+        </div>
+        <div class="head-sub">$${driftSub}</div>
+        $${errBlock}
+        <div class="kind-row" style="margin-top:8px">$${kinds}</div>
+      </div>`;
+    }).join("");
+    return `<details class="cat-card" open style="margin-bottom:12px">
+      <summary style="cursor:pointer"><span class="mono" style="color:var(--ink)">env: $${esc(env)}</span>
+        <span style="color:var(--ink-faint);font-family:var(--font-mono);font-size:11px;margin-left:8px">$${e.app_count} apps · $${e.resource_count} rendered resources · $${esc(e.generated_at)}</span>
+      </summary>
+      <div style="margin-top:8px">$${apps}</div>
+    </details>`;
+  }).join("");
+}
+
+/* v0.35.0: Security findings — high/medium/low tiers, expandable. */
+function renderFindings(f) {
+  const items = (f && f.items) || {};
+  const sum = (f && f.summary) || {};
+  if (!sum.total) {
+    return `<p style="color:var(--ink-mute)">No security findings detected — all clear.</p>`;
+  }
+  const tier = (sev, label) => {
+    const rows = (items[sev] || []);
+    if (!rows.length) return "";
+    return `<details class="findings-tier $${sev}" $${sev === 'high' ? 'open' : ''}>
+      <summary><h3>$${esc(label)} ($${rows.length})</h3></summary>
+      $${rows.slice(0, 50).map(r => `<div class="finding-row">
+        <div class="rule">$${esc(r.rule)}</div>
+        <div>$${esc(r.detail || "")}</div>
+        <div class="where">$${esc(r.module || "")} · $${esc(r.env || "")}</div>
+      </div>`).join("")}
+      $${rows.length > 50 ? `<div style="color:var(--ink-faint);font-size:11px;margin-top:6px;font-family:var(--font-mono)">… $${rows.length - 50} more</div>` : ""}
+    </details>`;
+  };
+  return tier("high", "High") + tier("medium", "Medium") + tier("low", "Low");
+}
+
+/* v0.35.0: Module age heatmap. */
+function renderModuleAge(rows) {
+  if (!rows || !rows.length) {
+    return `<p style="color:var(--ink-mute)">No state overlay loaded — run state_graph.py to populate.</p>`;
+  }
+  function bucket(s) {
+    if (s == null)        return ["frozen", "—"];
+    if (s < 86400)        return ["fresh", Math.floor(s / 3600) + "h"];
+    if (s < 7 * 86400)    return ["warm",  Math.floor(s / 86400) + "d"];
+    if (s < 30 * 86400)   return ["cold",  Math.floor(s / 86400) + "d"];
+    return ["frozen", Math.floor(s / 86400) + "d"];
+  }
+  const cells = rows.slice(0, 100).map(r => {
+    const [klass, age] = bucket(r.age_seconds);
+    return `<div class="age-cell $${klass}">
+      <div class="name">$${esc(r.module)}</div>
+      <div class="meta">$${age} ago · $${r.resources} res · $${(r.envs || []).join(",")}</div>
+    </div>`;
+  }).join("");
+  return `<div class="age-grid">$${cells}</div>`;
+}
+
+/* v0.35.0: App → ServiceAccount → IAM Role → Secret rollup. */
+function renderAppSecretIam(rows) {
+  if (!rows || !rows.length) {
+    return `<p style="color:var(--ink-mute)">No IRSA bindings loaded — needs k8s overlay (k8s_graph.py) + state overlay with IAM roles.</p>`;
+  }
+  const cards = rows.map(r => {
+    const wls = (r.workloads || []).slice(0, 4)
+      .map(w => `$${esc(w.kind)} $${esc(w.name)}`).join(", ");
+    return `<div class="asi-card">
+      <div class="head">$${esc(r.service_account)} <span style="color:var(--ink-faint);font-weight:400">@ $${esc(r.ns)}</span></div>
+      $${wls ? `<div class="meta">used by: $${wls}</div>` : `<div class="meta" style="color:var(--ink-faint)">no workload binds this SA</div>`}
+      <div class="role">role: $${esc(r.iam_role)}</div>
+      <div class="pol">$${r.policy_attachments} attached policies · $${r.inline_policies} inline · env $${esc(r.env || "—")}</div>
+    </div>`;
+  }).join("");
+  return `<div class="asi-grid">$${cards}</div>`;
+}
+
+/* v0.35.0: Network reachability — per-SG ingress sources. */
+function renderNetwork(rows) {
+  if (!rows || !rows.length) {
+    return `<p style="color:var(--ink-mute)">No security groups loaded — schema-v3 state overlay needed.</p>`;
+  }
+  const sources = (srcs) => (srcs || []).map(s => {
+    const isWorld = s === "0.0.0.0/0";
+    const cls = isWorld ? "src world" : "src";
+    return `<span class="$${cls}">$${esc(s)}</span>`;
+  }).join(", ") || `<span style="color:var(--ink-faint)">—</span>`;
+  const cards = rows.slice(0, 60).map(sg => {
+    const cardCls = "net-card" + (sg.open_to_world ? " world" : "");
+    const ing = (sg.ingress || []).slice(0, 8).map(r =>
+      `<div class="row"><span class="dir">in</span><span>$${esc(r.proto)} $${esc(r.ports)}</span> from $${sources(r.sources)}</div>`
+    ).join("");
+    const eg = (sg.egress || []).slice(0, 4).map(r =>
+      `<div class="row"><span class="dir">out</span><span>$${esc(r.proto)} $${esc(r.ports)}</span> to $${sources(r.sources)}</div>`
+    ).join("");
+    return `<div class="$${cardCls}">
+      <div class="name">$${esc(sg.name || sg.addr)}</div>
+      $${sg.description ? `<div class="desc">$${esc(sg.description)}</div>` : ""}
+      <div class="meta" style="color:var(--ink-faint);font-size:10px;font-family:var(--font-mono);margin:6px 0">$${esc(sg.module || "")} · $${esc(sg.env || "")}</div>
+      $${ing || `<div style="color:var(--ink-faint);font-size:11px">no ingress rules collected</div>`}
+      $${eg}
+    </div>`;
+  }).join("");
+  return `<div class="net-grid">$${cards}</div>`;
+}
+
 /* v0.34.6: AWS-style layered architecture diagram. Each architectural
  * band ("Compute", "Data & Storage", ...) holds service tiles with the
  * AWS iconify icon, label, count, and a sample address. Click a tile
@@ -1710,11 +2075,23 @@ function renderDashboard() {
   const m = DASHBOARD.meta || {};
   const kpis = DASHBOARD.kpis || {};
 
-  const kpiLabels = { modules: "Modules", components: "Components", applications: "Applications",
-    k8s_pods: "K8s pods", drift: "Drift gaps", critical: "Top hub" };
-  const kpiHtml = ["modules", "components", "applications", "k8s_pods", "drift", "critical"].map(k => {
+  /* v0.35.0: customer-focused KPIs.
+   *  findings:   security findings count + severity breakdown
+   *  resources:  AWS resources actually deployed
+   *  state_age:  youngest state snapshot age + oldest
+   *  app_health: live workload health from k8s overlay
+   *  applications: app JSON sidecars
+   *  drift:      cross-env drift count
+   */
+  const kpiLabels = { findings: "Security findings", resources: "AWS resources",
+    state_age: "State age", app_health: "App health",
+    applications: "Applications", drift: "Cross-env drift" };
+  const kpiAccent = { findings: "warn", resources: "blue",
+    state_age: "blue", app_health: "ok",
+    applications: "blue", drift: "warn" };
+  const kpiHtml = ["findings", "state_age", "app_health", "resources", "applications", "drift"].map(k => {
     const x = kpis[k] || {};
-    return `<div class="kpi"><div class="label">$${esc(kpiLabels[k] || k)}</div><div class="value">$${esc(x.value)}</div><div class="sub">$${esc(x.sub || "")}</div></div>`;
+    return `<div class="kpi kpi-$${kpiAccent[k] || ''}"><div class="label">$${esc(kpiLabels[k] || k)}</div><div class="value">$${esc(x.value)}</div><div class="sub">$${esc(x.sub || "")}</div></div>`;
   }).join("");
 
   const cov = DASHBOARD.coverage || {};
@@ -1813,8 +2190,48 @@ function renderDashboard() {
     </section>
 
     <section class="section">
+      <h2>Security findings</h2>
+      $${renderFindings(DASHBOARD.findings || {})}
+    </section>
+
+    <section class="section">
+      <h2>Module age — last applied</h2>
+      $${renderModuleAge(DASHBOARD.module_age || [])}
+    </section>
+
+    <section class="section">
       <h2>IAM identity & access</h2>
       $${renderIamView(DASHBOARD.iam || {})}
+    </section>
+
+    <section class="section">
+      <h2>Apps → IAM → Secrets</h2>
+      $${renderAppSecretIam(DASHBOARD.app_secret_iam || [])}
+    </section>
+
+    <section class="section">
+      <h2>Network reachability — security groups</h2>
+      $${renderNetwork(DASHBOARD.network || [])}
+    </section>
+
+    <section class="section">
+      <h2>Secrets — references and Secrets Manager</h2>
+      $${renderSecretRefs(DASHBOARD.secret_refs || {})}
+    </section>
+
+    <section class="section">
+      <h2>Application manifests — rendered from CUE</h2>
+      $${renderRenderedApps(DASHBOARD.rendered_apps || {}, DASHBOARD.app_drift || {})}
+    </section>
+
+    <section class="section">
+      <h2>CUE schemas</h2>
+      $${renderCueSchemas(DASHBOARD.cue_schemas || {})}
+    </section>
+
+    <section class="section">
+      <h2>CI/CD — workflows by module</h2>
+      $${renderWorkflows(DASHBOARD.workflows || {})}
     </section>
 
     <section class="section">
@@ -2010,6 +2427,28 @@ function renderDashboard() {
   /* Charts + category-card click-to-expand wiring. */
   try { renderDashboardCharts(DASHBOARD.categories || {}); }
   catch (e) { console.warn("charts", e); }
+  /* v0.35.0: generic click-to-copy for any .kbd-copy button rendered on
+   * the dashboard (render_apps.py / diff_apps.py prompts, etc.) */
+  document.querySelectorAll(".kbd-copy").forEach(btn => {
+    if (btn.__wired) return;
+    btn.__wired = true;
+    btn.addEventListener("click", async () => {
+      const text = btn.getAttribute("data-copy") || "";
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        const tick = btn.querySelector(".kbd-tick");
+        if (tick) {
+          const prev = tick.textContent;
+          tick.textContent = "copied ✓";
+          setTimeout(() => { tick.textContent = prev || "copy"; }, 1600);
+        }
+      } catch (e) {
+        const r = document.createRange(); r.selectNodeContents(btn);
+        const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+      }
+    });
+  });
   document.querySelectorAll(".cat-card").forEach(card => {
     const head = card.querySelector(".cat-head");
     if (!head) return;

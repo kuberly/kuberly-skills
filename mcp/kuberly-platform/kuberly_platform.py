@@ -2843,6 +2843,600 @@ def _compute_categories(resource_nodes: list[dict]) -> dict:
     return by_cat
 
 
+# v0.35.0 (Tier 2): repo-walking signal helpers.
+def _scan_secret_references(repo: Path,
+                            resource_nodes: list[dict]) -> dict:
+    """Walk components/<env>/*.json, collect every value at a key whose name
+    contains "secret"/"password"/"api_key"/"token". Cross-reference with
+    aws_secretsmanager_secret addresses extracted from state.
+
+    Output:
+      {
+        "secrets": [
+          {"address": "aws_secretsmanager_secret.x", "name": "...", "module": "...",
+           "env": "...", "referenced_by": [{"file": "...", "key": "...", "value": "..."}]},
+          ...
+        ],
+        "orphan_refs": [{"file": "...", "key": "...", "value": "..."}]
+      }
+    Heuristic: a JSON value matches a known secret name → that secret is
+    referenced from that component file. Otherwise the reference is
+    "orphan" (may be a creation-time intent or external secret).
+    """
+    secret_re_keys = ("secret", "password", "api_key", "apikey", "token", "credential")
+    components_dir = repo / "components"
+    refs_by_value: dict[str, list[dict]] = {}
+    if components_dir.is_dir():
+        for env_dir in sorted(components_dir.iterdir()):
+            if not env_dir.is_dir() or env_dir.name.startswith("."):
+                continue
+            for jp in sorted(env_dir.glob("*.json")):
+                try:
+                    data = json.loads(jp.read_text())
+                except (ValueError, OSError):
+                    continue
+                rel = str(jp.relative_to(repo))
+                # Walk recursively up to a sensible depth.
+                stack: list[tuple[object, list[str]]] = [(data, [])]
+                visited = 0
+                while stack and visited < 5000:
+                    visited += 1
+                    obj, path = stack.pop()
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            kl = str(k).lower()
+                            if isinstance(v, (str,)) and len(v) <= 256 \
+                               and any(tok in kl for tok in secret_re_keys):
+                                refs_by_value.setdefault(v, []).append({
+                                    "file": rel, "key": ".".join(path + [str(k)]),
+                                    "value": v,
+                                })
+                            elif isinstance(v, (dict, list)):
+                                stack.append((v, path + [str(k)]))
+                    elif isinstance(obj, list):
+                        for i, item in enumerate(obj):
+                            if isinstance(item, (dict, list)):
+                                stack.append((item, path + [str(i)]))
+    # Cross-ref with aws_secretsmanager_secret resources.
+    secrets_out: list[dict] = []
+    referenced_values: set[str] = set()
+    for n in resource_nodes:
+        if n.get("resource_type") != "aws_secretsmanager_secret":
+            continue
+        ess_list = n.get("essentials") or []
+        first = ess_list[0] if ess_list and isinstance(ess_list[0], dict) else {}
+        sec_name = first.get("name") or n.get("resource_name") or ""
+        addr = n.get("label") or ""
+        # Match value heuristically: secret name appears verbatim OR ends with
+        # the resource_name component.
+        matches: list[dict] = []
+        for val, refs in refs_by_value.items():
+            if val == sec_name or val.endswith(n.get("resource_name") or ""):
+                matches.extend(refs)
+                referenced_values.add(val)
+        secrets_out.append({
+            "address": addr,
+            "name": sec_name,
+            "module": n.get("module") or "",
+            "env": n.get("environment") or "",
+            "referenced_by": matches[:10],
+        })
+    secrets_out.sort(key=lambda x: (-len(x["referenced_by"]), x["env"], x["name"]))
+    orphans = []
+    for val, refs in refs_by_value.items():
+        if val in referenced_values:
+            continue
+        for r in refs[:3]:
+            orphans.append(r)
+    orphans = orphans[:50]
+    return {"secrets": secrets_out[:200], "orphan_refs": orphans}
+
+
+def _scan_cue_schemas(repo: Path) -> dict:
+    """Lightweight CUE schema field extractor. We don't have the cue binary
+    requirement here — instead we walk `cue/**/*.cue`, pluck top-level
+    `Field: type` declarations using a regex, and report a flat list of
+    schema files + their declared fields. Best-effort.
+    """
+    cue_dir = repo / "cue"
+    out_files: list[dict] = []
+    if not cue_dir.is_dir():
+        return {"files": [], "field_count": 0}
+    field_re = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(.+?)\s*$')
+    pkg_re = re.compile(r'^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)\s*$')
+    for cf in sorted(cue_dir.rglob("*.cue")):
+        if "cue.mod" in cf.parts:
+            continue
+        rel = str(cf.relative_to(repo))
+        try:
+            text = cf.read_text(errors="replace")
+        except OSError:
+            continue
+        package = ""
+        fields: list[dict] = []
+        for line in text.splitlines():
+            ls = line.strip()
+            if not ls or ls.startswith("//") or ls.startswith("import"):
+                continue
+            m = pkg_re.match(line)
+            if m:
+                package = m.group(1)
+                continue
+            indent = len(line) - len(line.lstrip(" ")) - len(line.lstrip(" \t"))
+            if indent > 0:
+                continue
+            m = field_re.match(line)
+            if not m:
+                continue
+            name, ftype = m.group(1), m.group(2)
+            # Trim long type expressions for the dashboard.
+            if len(ftype) > 80:
+                ftype = ftype[:80] + "…"
+            fields.append({"name": name, "type": ftype})
+        if not fields:
+            continue
+        out_files.append({
+            "file": rel,
+            "package": package,
+            "field_count": len(fields),
+            "fields": fields[:60],
+        })
+    out_files.sort(key=lambda x: (-x["field_count"], x["file"]))
+    return {
+        "files": out_files,
+        "file_count": len(out_files),
+        "field_count": sum(f["field_count"] for f in out_files),
+    }
+
+
+def _load_rendered_apps(repo: Path) -> dict:
+    """Auto-load any `.kuberly/rendered_apps_<env>.json` that the manual
+    render_apps.py script has produced. Returns {} if none — the dashboard
+    section degrades to a "run render_apps.py" hint."""
+    out_dir = repo / ".kuberly"
+    if not out_dir.is_dir():
+        return {}
+    by_env: dict[str, dict] = {}
+    for p in sorted(out_dir.glob("rendered_apps_*.json")):
+        env = p.stem[len("rendered_apps_"):]
+        try:
+            data = json.loads(p.read_text())
+        except (ValueError, OSError):
+            continue
+        # Strip per-resource detail to keep the dashboard payload small —
+        # the dashboard only needs counts + kind breakdowns, not every line.
+        apps_summary = []
+        for a in data.get("apps", []):
+            apps_summary.append({
+                "app": a.get("app", ""),
+                "ok": a.get("ok", False),
+                "resource_count": a.get("resource_count", 0),
+                "kind_counts": a.get("kind_counts", {}),
+                "error": a.get("error"),
+            })
+        by_env[env] = {
+            "env": env,
+            "generated_at": data.get("generated_at", ""),
+            "app_count": data.get("app_count", len(apps_summary)),
+            "resource_count": data.get("resource_count", 0),
+            "apps": apps_summary,
+        }
+    return by_env
+
+
+def _load_app_drift(repo: Path) -> dict:
+    """Auto-load any `.kuberly/app_drift_<env>.json` that the manual
+    diff_apps.py script has produced. Returns {} if none."""
+    out_dir = repo / ".kuberly"
+    if not out_dir.is_dir():
+        return {}
+    by_env: dict[str, dict] = {}
+    for p in sorted(out_dir.glob("app_drift_*.json")):
+        env = p.stem[len("app_drift_"):]
+        try:
+            data = json.loads(p.read_text())
+        except (ValueError, OSError):
+            continue
+        apps_lite = []
+        for a in data.get("apps", []):
+            apps_lite.append({
+                "app": a.get("app", ""),
+                "summary": a.get("summary", {}),
+                "missing": [{"kind": r.get("kind", ""), "name": r.get("name", "")}
+                            for r in (a.get("missing_in_cluster") or [])[:8]],
+                "extra":   [{"kind": r.get("kind", ""), "name": r.get("name", "")}
+                            for r in (a.get("extra_in_cluster") or [])[:8]],
+            })
+        by_env[env] = {
+            "env": env,
+            "generated_at": data.get("generated_at", ""),
+            "apps": apps_lite,
+        }
+    return by_env
+
+
+def _scan_workflow_origins(repo: Path) -> dict:
+    """Map `.github/workflows/*.yml` jobs to the module dirs they reference.
+
+    Heuristic: scan the YAML text for module-style strings like
+    `clouds/aws/modules/<m>` or `components/<env>/<m>.json`. Returns:
+      {
+        "workflows": [
+          {"file": ".github/workflows/x.yml", "module_refs": [...],
+           "component_refs": [...], "trigger": "..."}
+        ]
+      }
+    No PyYAML dep — line-based scan is enough for our heuristic.
+    """
+    wf_dir = repo / ".github" / "workflows"
+    out = []
+    if not wf_dir.is_dir():
+        return {"workflows": []}
+    mod_re = re.compile(r"clouds/aws/modules/([a-z0-9_]+)")
+    comp_re = re.compile(r"components/([a-z0-9_-]+)/([a-z0-9_-]+)\.json")
+    trigger_re = re.compile(r'^\s*on:\s*(\S.*)?$')
+    for wf in sorted(wf_dir.glob("*.y*ml")):
+        try:
+            text = wf.read_text(errors="replace")
+        except OSError:
+            continue
+        modules = sorted(set(mod_re.findall(text)))
+        comps = sorted(set(comp_re.findall(text)))
+        # Try to pluck the trigger types.
+        triggers = []
+        for line in text.splitlines():
+            m = trigger_re.match(line)
+            if m and m.group(1):
+                triggers.append(m.group(1).strip("[]{}, "))
+                break
+        # Look for `on:` block lines: push / pull_request / workflow_call / schedule
+        for line in text.splitlines():
+            ls = line.strip()
+            if ls in ("push:", "pull_request:", "workflow_call:",
+                      "workflow_dispatch:", "schedule:"):
+                triggers.append(ls.rstrip(":"))
+        triggers = sorted(set(triggers))
+        out.append({
+            "file": str(wf.relative_to(repo)),
+            "module_refs": modules,
+            "component_refs": [{"env": e, "name": n} for e, n in comps],
+            "triggers": triggers,
+        })
+    return {"workflows": out}
+
+
+# v0.35.0: customer-facing dashboard signals — replaces Modules/Components
+# meta with what an operator actually wants to know about their stack.
+def _compute_security_findings(resource_nodes: list[dict]) -> dict:
+    """Aggregate security findings from schema-v3 essentials.
+
+    Severities (informational only — we don't grade compliance frameworks):
+      high   — public/world ingress, public S3, unencrypted at rest
+      medium — cross-account IAM trust, missing encryption hints
+      low    — informational notes worth surfacing but not urgent
+    """
+    findings: dict[str, list[dict]] = {"high": [], "medium": [], "low": []}
+    for n in resource_nodes:
+        rtype = n.get("resource_type") or ""
+        ess_list = n.get("essentials") or []
+        if not ess_list:
+            continue
+        ess = ess_list[0] if isinstance(ess_list[0], dict) else {}
+        addr = n.get("label") or ""
+        env = n.get("environment") or ""
+        mod = n.get("module") or ""
+        # 0.0.0.0/0 ingress
+        if rtype == "aws_security_group_rule":
+            cidrs = ess.get("cidr_blocks") or []
+            if isinstance(cidrs, list) and any(c == "0.0.0.0/0" for c in cidrs if isinstance(c, str)):
+                kind = ess.get("type") or "rule"
+                ports = (
+                    f"{ess.get('from_port')}-{ess.get('to_port')}"
+                    if ess.get("from_port") != ess.get("to_port")
+                    else f"{ess.get('from_port')}"
+                )
+                findings["high"].append({
+                    "rule": "open-to-internet",
+                    "address": addr, "module": mod, "env": env,
+                    "detail": f"{kind} {ports}/{ess.get('protocol','?')} from 0.0.0.0/0",
+                })
+        # Unencrypted EBS
+        if rtype == "aws_ebs_volume" and ess.get("encrypted") is False:
+            findings["high"].append({
+                "rule": "unencrypted-ebs",
+                "address": addr, "module": mod, "env": env,
+                "detail": f"{ess.get('size','?')} GB {ess.get('type','?')} not encrypted",
+            })
+        # Unencrypted EFS
+        if rtype == "aws_efs_file_system" and ess.get("encrypted") is False:
+            findings["high"].append({
+                "rule": "unencrypted-efs",
+                "address": addr, "module": mod, "env": env,
+                "detail": "EFS file system not encrypted at rest",
+            })
+        # IAM cross-account trust
+        if rtype == "aws_iam_role":
+            principals = ess.get("principals") or []
+            if isinstance(principals, list):
+                for p in principals:
+                    if not isinstance(p, str) or not p.startswith("aws:"):
+                        continue
+                    # aws:arn:aws:iam::<acct>:root or :role/X — flag if acct
+                    # is not the cluster's own account. We don't know the cluster
+                    # account here at this layer, so flag any external-looking
+                    # arn that isn't an AWS service principal.
+                    if ":root" in p or ":role/" in p:
+                        findings["medium"].append({
+                            "rule": "iam-cross-account-trust",
+                            "address": addr, "module": mod, "env": env,
+                            "detail": f"role can be assumed by {p}",
+                        })
+                        break  # one finding per role
+        # Federated trust (OIDC) — informational
+        if rtype == "aws_iam_role":
+            principals = ess.get("principals") or []
+            if isinstance(principals, list):
+                for p in principals:
+                    if isinstance(p, str) and p.startswith("federated:"):
+                        findings["low"].append({
+                            "rule": "iam-federated-trust",
+                            "address": addr, "module": mod, "env": env,
+                            "detail": p[10:][:80],
+                        })
+                        break
+        # Publicly-accessible RDS instance
+        if rtype == "aws_rds_cluster_instance" and ess.get("publicly_accessible") is True:
+            findings["high"].append({
+                "rule": "rds-publicly-accessible",
+                "address": addr, "module": mod, "env": env,
+                "detail": f"{ess.get('instance_class','?')} {ess.get('engine','?')} reachable from internet",
+            })
+        # CloudWatch log group with no retention (logs forever — cost finding,
+        # not security, but still worth surfacing).
+        if rtype == "aws_cloudwatch_log_group":
+            ret = ess.get("retention_in_days")
+            if ret is None or ret == 0:
+                findings["low"].append({
+                    "rule": "cw-log-no-retention",
+                    "address": addr, "module": mod, "env": env,
+                    "detail": "log group has no retention (kept forever)",
+                })
+    summary = {sev: len(v) for sev, v in findings.items()}
+    summary["total"] = sum(summary.values())
+    return {"summary": summary, "items": findings}
+
+
+def _compute_module_age(repo: Path, snap_times: dict[str, str],
+                        resource_nodes: list[dict]) -> dict:
+    """Module age summary — how recently each module's state was applied,
+    plus the env(s) where it's deployed.
+
+    Output:
+      [{"module": "eks", "envs": [...], "snapshot_at": "...", "resources": int,
+        "age_seconds": float | None}, ...]
+    """
+    from datetime import datetime, timezone
+    by_mod: dict[str, dict] = {}
+    for n in resource_nodes:
+        m = n.get("module") or ""
+        if not m:
+            continue
+        env = n.get("environment") or ""
+        if m not in by_mod:
+            by_mod[m] = {"module": m, "envs": set(), "resources": 0,
+                         "snapshot_at": "", "age_seconds": None}
+        by_mod[m]["envs"].add(env)
+        by_mod[m]["resources"] += 1
+        # Use the most-recent env snapshot we have a timestamp for.
+        sa = snap_times.get(env, "")
+        if sa and sa > by_mod[m]["snapshot_at"]:
+            by_mod[m]["snapshot_at"] = sa
+    now = datetime.now(timezone.utc)
+    rows = []
+    for m, d in by_mod.items():
+        sa = d["snapshot_at"]
+        age = None
+        if sa:
+            try:
+                t = datetime.fromisoformat(sa.replace("Z", "+00:00"))
+                age = (now - t).total_seconds()
+            except ValueError:
+                pass
+        rows.append({
+            "module": m,
+            "envs": sorted(d["envs"]),
+            "resources": d["resources"],
+            "snapshot_at": sa,
+            "age_seconds": age,
+        })
+    rows.sort(key=lambda r: (-(r["age_seconds"] or 0), r["module"]))
+    return rows
+
+
+def _compute_app_secret_iam(graph: "KuberlyPlatform",
+                            resource_nodes: list[dict]) -> dict:
+    """End-to-end "what AWS secrets can each app read" path.
+
+    Walks: k8s ServiceAccount → irsa_bound edge → IAM role → role's policy
+    attachments → policy resource ARNs that look like Secrets Manager arns.
+    Without schema-v3 IAM policy `policy` body essentials, we can only count
+    the role's policy attachments — actual secret ARNs need a follow-up
+    schema bump.
+
+    Output:
+      [{"app": "backend", "ns": "stage5-prod", "env": "prod",
+        "service_account": "backend", "iam_role": "...",
+        "policy_attachments": int, "inline_policies": int,
+        "irsa_arn": "arn:..."}, ...]
+    """
+    rows: list[dict] = []
+    nodes = graph.nodes
+    # Map role-name → counts of attachments / inline policies.
+    attach_per_role: dict[str, int] = {}
+    inline_per_role: dict[str, int] = {}
+    for n in resource_nodes:
+        rtype = n.get("resource_type") or ""
+        ess_list = n.get("essentials") or []
+        first = ess_list[0] if ess_list and isinstance(ess_list[0], dict) else {}
+        rname = first.get("role")
+        if not rname:
+            continue
+        if rtype == "aws_iam_role_policy_attachment":
+            attach_per_role[rname] = attach_per_role.get(rname, 0) + 1
+        elif rtype == "aws_iam_role_policy":
+            inline_per_role[rname] = inline_per_role.get(rname, 0) + 1
+
+    for e in graph.edges:
+        if e.get("relation") != "irsa_bound":
+            continue
+        sa = nodes.get(e["source"], {})
+        role = nodes.get(e["target"], {})
+        if sa.get("k8s_kind") != "ServiceAccount":
+            continue
+        # Map SA → workload via "uses_sa" edge (workload → SA).
+        sa_id = e["source"]
+        workloads = []
+        for e2 in graph.edges:
+            if e2.get("relation") != "uses_sa" or e2.get("target") != sa_id:
+                continue
+            wn = nodes.get(e2["source"], {})
+            if not wn:
+                continue
+            workloads.append({
+                "kind": wn.get("k8s_kind") or "?",
+                "name": wn.get("k8s_name") or wn.get("label") or "?",
+                "ns": wn.get("k8s_namespace") or "",
+            })
+        # Role essentials: figure out the role's name for policy lookup.
+        role_label = role.get("label") or ""
+        # Conventional address shape: "[module.x.]aws_iam_role.name"
+        role_name = role_label.rsplit(".", 1)[-1] if role_label else ""
+        rows.append({
+            "service_account": sa.get("k8s_name") or sa.get("label") or "?",
+            "ns": sa.get("k8s_namespace") or "",
+            "env": sa.get("environment") or "",
+            "iam_role": role_label,
+            "iam_role_name": role_name,
+            "policy_attachments": attach_per_role.get(role_name, 0),
+            "inline_policies": inline_per_role.get(role_name, 0),
+            "workloads": workloads,
+        })
+    rows.sort(key=lambda r: (r["env"], r["ns"], r["service_account"]))
+    return rows
+
+
+def _compute_network_reachability(resource_nodes: list[dict]) -> dict:
+    """Per-SG: who can reach what. SG rules (ingress/egress) with cidr_blocks
+    or source_security_group_id from schema-v3 essentials, grouped by SG.
+
+    Output:
+      [{"sg": "addr", "module": "...", "env": "...",
+        "name": "...", "description": "...",
+        "ingress": [{"from": "0.0.0.0/0", "ports": "443", "proto": "tcp"}, ...],
+        "egress":  [...]}]
+    """
+    sg_by_addr: dict[str, dict] = {}
+    rules_by_sg: dict[str, list] = {}
+    # First pass — collect SG metadata.
+    for n in resource_nodes:
+        if n.get("resource_type") != "aws_security_group":
+            continue
+        ess_list = n.get("essentials") or []
+        first = ess_list[0] if ess_list and isinstance(ess_list[0], dict) else {}
+        addr = n.get("label") or ""
+        sg_by_addr[addr] = {
+            "addr": addr,
+            "module": n.get("module") or "",
+            "env": n.get("environment") or "",
+            "name": first.get("name") or "",
+            "description": first.get("description") or "",
+        }
+        rules_by_sg[addr] = []
+    # Second pass — attach rules to SGs by depends_on (rule resource depends on its SG).
+    for n in resource_nodes:
+        if n.get("resource_type") != "aws_security_group_rule":
+            continue
+        ess_list = n.get("essentials") or []
+        first = ess_list[0] if ess_list and isinstance(ess_list[0], dict) else {}
+        cidrs = first.get("cidr_blocks") or []
+        src_sg = first.get("source_security_group_id") or ""
+        from_port = first.get("from_port")
+        to_port = first.get("to_port")
+        ports = f"{from_port}-{to_port}" if from_port != to_port else f"{from_port}"
+        rule_kind = first.get("type") or ""
+        # Heuristic: a rule depends on its parent SG. We can't easily resolve
+        # the parent SG without parsing depends_on addresses — for now, attach
+        # to all SGs in the same module (best-effort summary).
+        mod = n.get("module") or ""
+        sources = list(cidrs) if isinstance(cidrs, list) else []
+        if src_sg:
+            sources.append(f"sg:{src_sg}")
+        rule_row = {
+            "ports": ports,
+            "proto": first.get("protocol") or "?",
+            "sources": sources,
+            "open_to_world": "0.0.0.0/0" in (cidrs or []),
+        }
+        for sg in sg_by_addr.values():
+            if sg["module"] == mod:
+                rules_by_sg[sg["addr"]].append({**rule_row, "kind": rule_kind})
+    out = []
+    for addr, sg in sorted(sg_by_addr.items()):
+        rules = rules_by_sg.get(addr, [])
+        ingress = [r for r in rules if r["kind"] == "ingress"]
+        egress  = [r for r in rules if r["kind"] == "egress"]
+        out.append({
+            **sg,
+            "ingress": ingress,
+            "egress": egress,
+            "open_to_world": any(r["open_to_world"] for r in ingress),
+        })
+    out.sort(key=lambda x: (not x["open_to_world"], x["env"], x["module"], x["name"]))
+    return out
+
+
+def _compute_app_health(graph: "KuberlyPlatform") -> dict:
+    """Roll-up of app health from k8s overlay: declared replicas vs ready.
+
+    Returns:
+      {"by_app": [{"app": "backend", "ns": "...", "env": "...",
+                   "replicas": 2, "ready": 2, "healthy": True}, ...],
+       "summary": {"total": int, "healthy": int, "unhealthy": int}}
+    """
+    by_app = []
+    healthy = unhealthy = 0
+    for nid, n in graph.nodes.items():
+        if n.get("type") != "k8s_resource":
+            continue
+        kind = n.get("k8s_kind") or ""
+        if kind not in ("Deployment", "StatefulSet"):
+            continue
+        replicas = n.get("k8s_replicas")
+        ready = n.get("k8s_ready_replicas")
+        if not isinstance(replicas, int):
+            replicas = 0
+        if not isinstance(ready, int):
+            ready = 0
+        is_healthy = replicas > 0 and ready >= replicas
+        if is_healthy:
+            healthy += 1
+        else:
+            unhealthy += 1
+        by_app.append({
+            "app": n.get("k8s_name") or n.get("label") or nid,
+            "kind": kind,
+            "ns": n.get("k8s_namespace") or "",
+            "env": n.get("environment") or "",
+            "replicas": replicas,
+            "ready": ready,
+            "healthy": is_healthy,
+        })
+    by_app.sort(key=lambda r: (r["healthy"], r["env"], r["ns"], r["app"]))
+    return {"by_app": by_app[:200],
+            "summary": {"total": healthy + unhealthy,
+                        "healthy": healthy, "unhealthy": unhealthy}}
+
+
 def _compute_iam_view(resource_nodes: list[dict], edges: list[dict],
                       all_nodes: dict[str, dict]) -> dict:
     """Aggregate every IAM role into a per-module grouped payload for the
@@ -3301,33 +3895,64 @@ def _compute_dashboard_data(
         "top_resource_types": top_resource_types,
     }
 
+    # v0.35.0: customer-focused KPI rework.
+    sec_findings = _compute_security_findings(resource_nodes)
+    module_age   = _compute_module_age(graph.repo, snap_times, resource_nodes)
+    app_health   = _compute_app_health(graph)
+    # State-age headline: youngest snapshot wins; suffix tells how stale.
+    state_ages = [r for r in module_age if r.get("age_seconds") is not None]
+    if state_ages:
+        youngest_age = min(r["age_seconds"] for r in state_ages)
+        oldest_age   = max(r["age_seconds"] for r in state_ages)
+        def _fmt_age(s):
+            s = int(s)
+            if s < 90:        return f"{s}s"
+            if s < 5400:      return f"{s//60}m"
+            if s < 172800:    return f"{s//3600}h"
+            return f"{s//86400}d"
+        state_age_kpi = {
+            "value": _fmt_age(youngest_age),
+            "sub": f"oldest module: {_fmt_age(oldest_age)}",
+        }
+    else:
+        state_age_kpi = {"value": "—", "sub": "no state overlay loaded"}
+    # Findings headline: total + severity breakdown.
+    sf = sec_findings["summary"]
+    findings_sub = " · ".join(
+        f"{sf[s]} {s}" for s in ("high", "medium", "low") if sf.get(s)
+    ) or "all clear"
+    # App health: percentage healthy.
+    ah = app_health["summary"]
+    if ah["total"]:
+        pct = round(100.0 * ah["healthy"] / ah["total"])
+        app_health_kpi = {"value": f"{ah['healthy']}/{ah['total']}",
+                           "sub": f"{pct}% healthy{' · ' + str(ah['unhealthy']) + ' degraded' if ah['unhealthy'] else ''}"}
+    else:
+        app_health_kpi = {"value": "—", "sub": "no live cluster overlay"}
+    # Resources actually deployed.
+    resources_kpi = {
+        "value": resource_count,
+        "sub": f"{len(rt_counts)} types · {len(envs)} env{'s' if len(envs) != 1 else ''}",
+    }
+    # Cross-env diff (drift) — keep but reframe.
+    drift_kpi = {
+        "value": drift_comp_total + drift_app_total,
+        "sub": (f"{drift_comp_total} component{'s' if drift_comp_total != 1 else ''}, "
+                f"{drift_app_total} app{'s' if drift_app_total != 1 else ''}")
+               if (drift_comp_total + drift_app_total) else "envs aligned",
+    }
+    # Apps shipped — only useful when value > 0; keep but trim.
+    apps_kpi = {
+        "value": len(apps),
+        "sub": runtime_sub or ("no application sidecars" if not apps else "—"),
+    }
     kpis = {
-        "modules": {
-            "value": len(modules),
-            "sub": f"{len(providers)} provider{'s' if len(providers) != 1 else ''}",
-        },
-        "components": {
-            "value": len(components),
-            "sub": f"across {len(envs)} env{'s' if len(envs) != 1 else ''}",
-        },
-        "applications": {
-            "value": len(apps),
-            "sub": runtime_sub or "—",
-        },
-        "k8s_pods": {
-            "value": k8s_kinds.get("Pod", 0),
-            "sub": (f"{len(k8s_nodes)} k8s objects, {len(irsa_bindings)} IRSA"
-                    if has_k8s else "no k8s overlay"),
-        },
-        "drift": {
-            "value": drift_comp_total + drift_app_total,
-            "sub": f"{drift_comp_total} component{'s' if drift_comp_total != 1 else ''}, "
-                   f"{drift_app_total} app{'s' if drift_app_total != 1 else ''}",
-        },
-        "critical": {
-            "value": top_critical["label"] if top_critical else "—",
-            "sub": f"{top_critical['in_degree']} dependents" if top_critical else "",
-        },
+        "findings":  {"value": sf["total"], "sub": findings_sub},
+        "resources": resources_kpi,
+        "state_age": state_age_kpi,
+        "app_health": app_health_kpi,
+        "applications": apps_kpi,
+        "drift": drift_kpi,
     }
 
     return {
@@ -3376,6 +4001,19 @@ def _compute_dashboard_data(
         "categories": _compute_categories(resource_nodes),
         "architecture": _compute_architecture(resource_nodes),
         "iam": _compute_iam_view(resource_nodes, edges, nodes),
+        # v0.35.0: customer-facing signal blocks.
+        "findings":   sec_findings,
+        "module_age": module_age,
+        "app_health": app_health,
+        "app_secret_iam": _compute_app_secret_iam(graph, resource_nodes),
+        "network": _compute_network_reachability(resource_nodes),
+        "secret_refs":   _scan_secret_references(graph.repo, resource_nodes),
+        "cue_schemas":   _scan_cue_schemas(graph.repo),
+        "workflows":     _scan_workflow_origins(graph.repo),
+        # rendered_apps_<env>.json + app_drift_<env>.json from the manual
+        # render_apps.py / diff_apps.py scripts. Auto-loaded if present.
+        "rendered_apps": _load_rendered_apps(graph.repo),
+        "app_drift":     _load_app_drift(graph.repo),
         "longest_chains": [list(c) for c in stats.get("longest_chains", [])][:5],
     }
 

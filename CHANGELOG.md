@@ -1,5 +1,75 @@
 # Changelog
 
+## v0.35.0 — 2026-05-06
+
+Customer-focused dashboard rebuild + new graphs. The headline KPIs and
+sections move from "graph metadata" (modules / components / drift) to
+"infrastructure that operators care about" (security findings, state
+age, app health, IAM trust, secret references, network reachability,
+CUE schemas, CI/CD origin, rendered manifests).
+
+### Headline KPIs (replaces Modules / Components / Top Hub)
+
+- **Security findings** — count + severity (high · medium · low). Built
+  from schema-v3 essentials: 0.0.0.0/0 SG ingress, unencrypted EBS/EFS,
+  publicly_accessible RDS, IAM cross-account trust, federated trust,
+  CW log groups with no retention.
+- **AWS resources** — count of actually-deployed resources × types ×
+  envs.
+- **State age** — youngest snapshot age + oldest module's age, so
+  operators see at a glance "we applied 28m ago, oldest module is 4d".
+- **App health** — running k8s Deployments + StatefulSets with
+  replicas vs ready ratio.
+- **Applications** — deployed app sidecars (kept).
+- **Cross-env drift** — same as before, retitled.
+
+### New dashboard sections
+
+- **Security findings** — three tiers (high / medium / low) with
+  rule + detail + module/env, expandable. High auto-opens.
+- **Module age — last applied** — heatmap card per module, color-coded
+  by snapshot age (fresh < 1d / warm < 1w / cold < 1mo / frozen ≥ 1mo).
+- **Apps → IAM → Secrets** — one card per ServiceAccount with IRSA
+  binding, showing the workloads using it, the bound IAM role, and
+  attached/inline policy counts.
+- **Network reachability — security groups** — per-SG ingress and
+  egress sources. SGs with `0.0.0.0/0` get a red stripe.
+- **Secrets — references and Secrets Manager** — every
+  `aws_secretsmanager_secret` cross-referenced with which
+  `components/<env>/*.json` files mention its name; orphan refs that
+  don't map to a known SM resource flagged separately.
+- **Application manifests — rendered from CUE** — auto-loads
+  `.kuberly/rendered_apps_<env>.json` (from manual `render_apps.py`)
+  + `.kuberly/app_drift_<env>.json` (from manual `diff_apps.py`).
+  Empty state shows click-to-copy commands to populate.
+- **CUE schemas** — `cue/**/*.cue` files with their top-level field
+  declarations + types. Best-effort regex parser, no `cue` binary
+  required.
+- **CI/CD — workflows by module** — every `.github/workflows/*.yml`
+  with the `clouds/aws/modules/...` and `components/<env>/<m>.json`
+  references it carries, plus its triggers.
+
+### New standalone scripts (manual run only)
+
+- **`scripts/render_apps.py`** — for each `applications/<env>/<app>.json`,
+  invokes `cue cmd dump -t instance=<env> -t app=<n>` against the
+  consumer's `cue/` module, parses the YAML manifest stream, writes a
+  summary to `.kuberly/rendered_apps_<env>.json`. **Explicitly NOT
+  invoked by `kuberly_platform.py`, NOT in pre-commit.** Run with:
+      `python3 apm_modules/kuberly/kuberly-skills/scripts/render_apps.py`
+- **`scripts/diff_apps.py`** — diffs the rendered manifests against the
+  live cluster overlay (`k8s_overlay_<env>.json`), writes
+  `.kuberly/app_drift_<env>.json` with declared / running / matched /
+  missing / extra. Also manual-only.
+- The dashboard auto-picks up both files on the next graph regen.
+
+### Click-to-copy
+
+- Generic `.kbd-copy` button class — any `data-copy="..."` button on
+  the dashboard copies on click with a "copied ✓" tick.
+
+- **BUMP:** apm.yml 0.34.6 → 0.35.0.
+
 ## v0.34.6 — 2026-05-06
 
 - **REPLACE:** the abstract Mermaid "Networking → Compute → Data" flow
