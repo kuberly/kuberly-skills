@@ -40,7 +40,7 @@ Between phases, call `mcp__kuberly-platform__session_status({ name })` to render
 
 - **Never** do implementation, file editing, broad searching, or shell work yourself. The only things you do directly are: query the **kuberly-platform MCP**, read/write `.agents/prompts/<session>/`, and ask the user clarifying questions.
 - **Graph-first.** Before launching any persona, call `mcp__kuberly-platform__blast_radius`, `query_nodes`, `get_neighbors`, `drift`, `shortest_path`, or `stats` (whichever fits) and paste the relevant slice into `context.md`. Only fall back to `.claude/graph.json` / `.claude/GRAPH_REPORT.md` if the MCP is unavailable.
-- **Plan-only.** Every implementation and verification persona prompt MUST include: *"Never run `terragrunt apply`, `tofu apply`, `terragrunt destroy`, or `tofu destroy`. Only `terragrunt run plan`, `validate`, `fmt`, lint, and read-only tooling are allowed."*
+- **No plan/init/apply.** Every implementation and verification persona prompt MUST include: *"Never run `terragrunt apply`, `tofu apply`, `terragrunt destroy`, `tofu destroy`, `terragrunt run plan`, `terragrunt init`, `tofu init`, or `tofu plan`. Verification = `pre-commit`, `terragrunt hclfmt`, `tflint` only. CI runs plan against every PR; sub-agent verification is fmt + lint only."*
 - **OpenSpec gate.** For edits under `clouds/`, `components/`, `applications/`, `cue/`, or behavioral `*.hcl`: confirm a **complete** OpenSpec change folder exists at `openspec/changes/<name>/` (created via `/opsx:propose`) **before** delegating to `iac-developer` or `app-cicd-engineer` (CodeBuild mode). A complete folder MUST contain `.openspec.yaml` (`schema: spec-driven` + a `status:` or `created:` field), `proposal.md`, `tasks.md`, and `CHANGELOG.md`. A `specs/<capability>/spec.md` delta-spec is required when the change adds or modifies spec behavior. If any mandatory file is missing, either delegate creation or stop and ask.
 - **No recursive subagents.** Every persona prompt MUST include: *"You may not spawn subagents yourself."*
 - **No decisions by personas.** Personas surface facts and write their assigned file. The Orchestrator decides — assess findings, do not blindly fix.
@@ -98,7 +98,7 @@ Personas are defined at `.claude/agents/<name>.md` in the consumer repo (deploye
 | Persona | Use for | Writes |
 |---|---|---|
 | **`infra-scope-planner`** | Convert vague task → precise scope (affected nodes, blast radius, OpenSpec touchpoints, out-of-scope fence) | `scope.md` |
-| **`iac-developer`** | Implement HCL/JSON/CUE edits per `scope.md` + `decisions.md`. Runs `pre-commit` + `terragrunt run plan`. Plan-only. | repo files (no md write) |
+| **`iac-developer`** | Implement HCL/JSON/CUE edits per `scope.md` + `decisions.md`. Verifies with `pre-commit` + `terragrunt hclfmt` + `tflint`. **No plan/init** — CI owns that. | repo files (no md write) |
 | **`troubleshooter`** | Diagnose incidents from CloudWatch / CloudTrail / Loki / Prometheus / kuberly-platform. Read-only on infra. | `diagnosis.md` |
 | **`app-cicd-engineer`** | Customer app CI/CD: bootstrap GitHub Actions or CodeBuild, troubleshoot CI failures, modify existing workflows. Operates across infra repo + app repo. | repo files in either infra repo or app repo (no md write) |
 | **`pr-reviewer-in-context`** | Verify the diff with full session context: scope, decisions, OpenSpec, drift, blast radius alignment. | `findings/in-context.md` |
@@ -187,7 +187,7 @@ For each open question, prefer dispatching `infra-scope-planner` over asking the
 
 After every implementation pass:
 
-1. Verify (single subagent runs `pre-commit run --all-files` + `terragrunt run plan` per module).
+1. Verify (single subagent runs `pre-commit run --files <changed>` + `terragrunt hclfmt` + `tflint` per module). **No plan/init** — CI runs plan against the PR.
 2. **Parallel:** `pr-reviewer-in-context` + `pr-reviewer-cold` (single message, two `Agent` calls).
 3. `findings-reconciler` reads both, produces `findings/reconciled.md`.
 4. You read the reconciled list, decide which fixes to apply.
@@ -226,17 +226,15 @@ The directory is **gitignored**; sessions are ephemeral.
 Inject these into the Verify prompt verbatim:
 
 ```bash
-# from repo root
-pre-commit run --all-files
+# from repo root — fmt + lint only, no plan/init.
+pre-commit run --files <changed paths>
 
-# per affected module — set CLUSTER_NAME and KUBERLY_ROLE per shared-infra.json
-export CLUSTER_NAME=<cluster>
-export KUBERLY_ROLE=$(jq -r .kuberly_role components/$CLUSTER_NAME/shared-infra.json)
-aws sts get-caller-identity   # confirm SSO
-terragrunt run plan \
-  --working-dir './clouds/aws/modules/<module>/' \
-  --iam-assume-role "$KUBERLY_ROLE"
+# per affected module
+terragrunt hclfmt --working-dir './clouds/aws/modules/<module>/'
+( cd ./clouds/aws/modules/<module>/ && tflint --config="$PWD/../../../../.tflint.hcl" )
 ```
+
+`terragrunt run plan` / `tofu init` / `tofu plan` are **NOT run by sub-agents** — they download providers (~minutes per module), require AWS SSO, and CI runs them against every PR anyway. Sub-agent verification is fmt + lint only.
 
 For GCP / Azure, point at `clouds/gcp/modules/<module>/` or `clouds/azure/modules/<module>/`.
 

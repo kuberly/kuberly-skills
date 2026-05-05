@@ -1,21 +1,22 @@
 ---
 name: infra-self-review
 description: >-
-  Post-change review loop for kuberly-stack infra: runs pre-commit, tflint, tofu fmt, and
-  terragrunt run plan via a Verify subagent, then launches in-context and out-of-context Review
-  subagents in parallel, fixes valid findings, and repeats until clean. Sub-flow of
+  Post-change review loop for kuberly-stack infra: runs pre-commit + terragrunt
+  hclfmt + tflint via a Verify subagent (NO plan/init — CI runs those against
+  the PR), then launches in-context and out-of-context Review subagents in
+  parallel, fixes valid findings, and repeats until clean. Sub-flow of
   infra-orchestrator; can also be invoked directly after a manual edit.
 ---
 
 # Infra self-review loop
 
-Run this after every implementation pass — your own or a subagent's — so the change is verified and reviewed before push. This is the infra equivalent of an app `self-review`: the **build/test step is `terragrunt run plan`**, not unit tests.
+Run this after every implementation pass — your own or a subagent's — so the change is fmt+lint clean and reviewed before push. **CI runs `terragrunt plan` against every PR** — the self-review loop does NOT.
 
 This is a **sub-flow of `infra-orchestrator`**. Can also be invoked standalone after a manual edit.
 
 ## Hard rules
 
-- **Plan-only.** The Verify subagent runs `terragrunt run plan`, `validate`, `fmt`, lint, `pre-commit`. **Never** `apply` or `destroy`.
+- **No plan/init.** The Verify subagent runs `pre-commit`, `terragrunt hclfmt`, and `tflint`. **Never** `terragrunt run plan`, `terragrunt init`, `tofu init`, `tofu plan`, `tofu validate`, `apply`, or `destroy`. Plan/init download providers (~minutes per module) and require AWS SSO; CI runs them on the PR. Sub-agent verification is fmt + lint only.
 - **No recursive subagents.** Every subagent prompt MUST include: *"You may not spawn subagents yourself."*
 - **You** assess findings, not the reviewers. Review subagents return findings; the orchestrator decides validity.
 
@@ -23,21 +24,18 @@ This is a **sub-flow of `infra-orchestrator`**. Can also be invoked standalone a
 
 Delegate to a general subagent with this scope:
 
-1. From the repo root: `pre-commit run --all-files`. If hooks rewrite files, re-stage and re-commit per `pre-commit-infra-mandatory` (no `--no-verify`).
+1. From the repo root: `pre-commit run --files <changed paths>`. If hooks rewrite files, re-stage and re-commit per `pre-commit-infra-mandatory` (no `--no-verify`).
 2. For each affected module the orchestrator listed:
    ```bash
-   export CLUSTER_NAME=<cluster>
-   export KUBERLY_ROLE=$(jq -r .kuberly_role components/$CLUSTER_NAME/shared-infra.json)
-   aws sts get-caller-identity
-   terragrunt run plan \
-     --working-dir './clouds/<cloud>/modules/<module>/' \
-     --iam-assume-role "$KUBERLY_ROLE"
+   terragrunt hclfmt --working-dir './clouds/<cloud>/modules/<module>/'
+   ( cd ./clouds/<cloud>/modules/<module>/ \
+     && tflint --config="$REPO_ROOT/.tflint.hcl" )
    ```
-   For GCP / Azure, follow `clouds/<provider>/README.md`.
-3. Capture for each module: a 5–15 line summary, risks (resource replacements, identity / KMS / IAM changes, count of additions / changes / destroys), and a **fenced plan excerpt** for the PR comment.
-4. If `aws sts get-caller-identity` or the AssumeRole pre-check fails, **stop** and report the error — do not fake a plan output.
+   `hclfmt` rewrites the file in place; `git add` whatever it touched and re-run pre-commit.
+3. Capture per module: pre-commit / hclfmt / tflint pass-fail status. **No plan excerpt** — CI's PR comment carries that.
+4. If hclfmt or tflint fails on something the persona can't auto-fix, **stop** and surface the error to the orchestrator.
 
-The Verify subagent returns a single Markdown block per module. The orchestrator stitches these into `context.md` under a `## Verification` section.
+The Verify subagent returns one line per module: `module — pre-commit:<ok|fixed|fail> hclfmt:<ok|fixed> tflint:<ok|fail>`.
 
 ## Step 2 — Two reviews in parallel
 
@@ -55,9 +53,9 @@ Checks:
 - **OpenSpec deltas.** Do `proposal.md`, `tasks.md`, and any spec deltas under `openspec/changes/<name>/specs/` actually match the diff?
 - **Drift.** If multiple envs are in scope, does the change land consistently? Use `mcp__kuberly-platform__drift` to verify.
 - **Shared-infra blast.** If `components/<cluster>/shared-infra.json` was edited, does the change account for every dependent component (run `blast_radius`)?
-- **Plan correctness.** Do the plan summaries match intent? Any unexpected resource replacements, identity changes, or destroys?
-- **Plan-only adherence.** No `apply` / `destroy` was attempted.
-- **Pre-commit cleanliness.** All hooks pass; no autofixes left unstaged.
+- **Diff intent match.** Does the diff actually match what `proposal.md` / `decisions.md` claimed? Unexpected adds/removes are findings. (Plan correctness lives in CI's PR comment, not here.)
+- **No-plan adherence.** Sub-agent did not run `terragrunt run plan`, `terragrunt init`, `tofu init`, or `tofu plan`. No `apply` / `destroy` either.
+- **Pre-commit + lint cleanliness.** All hooks pass; `terragrunt hclfmt` left no diff; `tflint` reports no errors.
 
 Output: findings ordered by severity (Critical / Major / Minor / Nit), each with file:line, the issue, and a recommended fix. Findings only — no auto-fixing.
 
@@ -101,7 +99,7 @@ Once reviewers are clean, report:
 
 - **Key fixes made** — bulleted, link to file paths + lines.
 - **Key decisions made** — what was chosen and why; cite `context.md` lines.
-- **Verification commands run** — `pre-commit`, the exact `terragrunt run plan` invocations, and a fenced plan excerpt per module (for the PR body).
+- **Verification commands run** — `pre-commit run --files <changed>`, `terragrunt hclfmt --working-dir <module>`, `tflint` per module. Plan output comes from CI on the PR; not included in the local report.
 - **Final review verdict** — both reviewers clean, count of findings discarded with reasons.
 - **Residual risks / optional follow-ups** — anything noted but deferred (out-of-scope drift, optional refactors, OpenSpec items still `proposed` not `applied`).
 - **Branch + PR hand-off (mandatory).** Confirm the change lives on a feature branch, then hand off to `infra-change-git-pr-workflow` (Path A for integration-branch base; Path B if the session started from a long-lived dev branch) for the OpenSpec archive + push + PR steps. Reporting "done" without an open PR — or with commits on an integration branch — is not allowed.
