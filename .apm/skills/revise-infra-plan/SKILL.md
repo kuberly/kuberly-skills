@@ -45,7 +45,7 @@ Walk these branches in roughly this order. Skip a branch if it's already settled
 2. **Cloud provider.** AWS / GCP / Azure? Multi-cloud parity required?
 3. **Module vs component vs application.** Is this a change in `clouds/<cloud>/modules/<m>/` (Terraform/HCL), `components/<cluster>/<comp>.json` (cluster wiring), or `applications/<env>/<app>.json` (CUE-rendered K8s app)? Mixed scopes must be split.
 4. **Shared-infra blast.** Does the change touch `components/<cluster>/shared-infra.json`? If yes, the blast radius covers many components in that cluster — confirm the user understands.
-5. **OpenSpec change.** Name (kebab-case)? New `/opsx:propose` or extend an existing `openspec/changes/<name>/`? Confirm the path before any implementation prompt is written.
+5. **OpenSpec change.** Name (kebab-case)? New folder under `openspec/changes/<name>/` (CLI / IDE / hand) or extend an existing change? Confirm the path before any implementation prompt is written.
 6. **IAM / auth.** `KUBERLY_ROLE` from `components/<cluster>/shared-infra.json`. Confirm `aws sts get-caller-identity` will succeed before plan; flag if `assume-role` is needed and pre-checked.
 7. **Verification scope.** Which clusters need `terragrunt run plan`? Which modules? Capture them so the Verify subagent has an exact list.
 8. **Drift intent.** If the change is meant to **converge** envs, run `drift` first and record what is actually missing where; do not assume.

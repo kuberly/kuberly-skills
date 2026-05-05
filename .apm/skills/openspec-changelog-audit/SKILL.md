@@ -40,10 +40,10 @@ Update **`CHANGELOG.md` on every material edit** to the change (not only at the 
 
 ## Agent workflow (Cursor + Claude Code)
 
-1. **When creating a change** (`/opsx:propose`, `openspec new`, or hand-created `openspec/changes/<name>/`): add **`CHANGELOG.md`** immediately with **`## Summary`** stub (replace “TBD” before PR).
+1. **When creating a change** (`openspec new`, Cursor **opsx:** propose flow if your workspace has it, or hand-created `openspec/changes/<name>/`): add **`CHANGELOG.md`** immediately with **`## Summary`** stub (replace “TBD” before PR).
 2. **While implementing**: append or revise **Technical notes** / **Risk** as decisions land.
 3. **Before `git push` / PR**: **`## Summary`** must be **final-quality** (no TBD). Same bar as **`proposal.md`** abstract.
-4. **On `/opsx:archive`**: re-read **`CHANGELOG.md`**; add a final line under **Summary** or **Technical notes** if archive fixed spec paths or dates.
+4. **When archiving** (move to **`openspec/changes/archive/...`**): re-read **`CHANGELOG.md`**; add a final line under **Summary** or **Technical notes** if archive fixed spec paths or dates.
 5. **PR body**: paste a short **“Changelog (OpenSpec)”** block copied from **`CHANGELOG.md`** (in addition to **`OpenSpec:`** path — see **`infra-change-git-pr-workflow`**).
 
 ## Why this helps aggregation

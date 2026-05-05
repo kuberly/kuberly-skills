@@ -30,4 +30,18 @@ for f in "$SRC"/*.md; do
 done
 shopt -u nullglob
 
+# Prune markdown prompts removed from the package so forks do not keep stale copies.
+for dest in "$ROOT/.cursor/commands" "$ROOT/.claude/commands"; do
+  [[ -d "$dest" ]] || continue
+  shopt -s nullglob
+  for t in "$dest"/*.md; do
+    [[ -f "$t" ]] || continue
+    bn="$(basename "$t")"
+    if [[ ! -f "$SRC/$bn" ]]; then
+      rm -f "$t"
+    fi
+  done
+  shopt -u nullglob
+done
+
 echo "sync_agent_commands: synced $count command file(s) -> $ROOT/.cursor/commands + $ROOT/.claude/commands"

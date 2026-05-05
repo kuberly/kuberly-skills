@@ -43,6 +43,10 @@ Customer developers should get **skills** and **agent config** from the public *
 - Persona subagents (`agent-planner`, `agent-infra-ops`, `agent-sre`, `agent-k8s-ops`, `agent-cicd`, `pr-reviewer`, `findings-reconciler`, `terragrunt-plan-reviewer`) are invoked via the `Agent` tool with `subagent_type: "<name>"`. Orchestrator workflow lives in **`agent-orchestrator`** skill; protocol in **`docs/AGENT_SESSIONS.md`**.
 - Install the **Caveman** plugin for shorter replies.
 
+## Slash commands (Cursor + Claude Code)
+
+After **`apm install`** + **`post_apm_install`**, the repo gets **`/kub-*`** prompts under **`.cursor/commands/`** and **`.claude/commands/`** (synced from **kuberly-skills** — do not treat fork copies as source of truth). The default pack is **operator / customer** workflows (repo locate, plan review, PR draft, apply checklist, observability triage, graph refresh, stack context). **OpenSpec** work uses **`openspec`** / org tooling and skills such as **`openspec-changelog-audit`** — not removed **`/opsx-*`** IDE macros.
+
 ## Which skills to use for “normal” infra edits
 
 | Goal | Skill |

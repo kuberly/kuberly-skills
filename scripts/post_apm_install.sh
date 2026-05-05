@@ -15,7 +15,8 @@
 #      .mcp.json, .cursor/hooks.json, .cursor/mcp.json
 #   2b. Copy canonical Cursor rules from .apm/cursor/rules/ -> .cursor/rules/
 #   2c. Copy slash commands from .apm/cursor/commands/ -> .cursor/commands/ and
-#       .claude/commands/ (same files for Cursor + Claude Code)
+#       .claude/commands/ (same files for Cursor + Claude Code); prune *.md
+#       removed from the package so stale prompts do not linger.
 #   3. Ensure the pre-commit framework's git hook is installed (so the
 #      consumer's .pre-commit-config.yaml entries — including
 #      ensure-apm-skills — actually fire on commits)

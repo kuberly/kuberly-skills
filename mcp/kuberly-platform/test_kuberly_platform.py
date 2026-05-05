@@ -1764,9 +1764,10 @@ class GraphHtmlVizTests(unittest.TestCase):
                 html_file = out_path / "graph.html"
                 self.assertTrue(html_file.is_file())
                 html = html_file.read_text(encoding="utf-8")
-                # Cytoscape + fcose CDN refs are present.
+                # Cytoscape (concentric is built-in; fcose/dagre extensions removed).
                 self.assertIn("cytoscape", html)
-                self.assertIn("fcose", html)
+                self.assertIn("concentric", html)
+                self.assertIn("kuberlyNeuralFloat", html)
                 # No leftover vis.js references.
                 self.assertNotIn("vis-network", html)
                 self.assertNotIn("vis.Network", html)
@@ -1864,7 +1865,7 @@ class GraphHtmlVizTests(unittest.TestCase):
 
         v0.29 lazily builds the graph on the Graph tab; `runLayoutImpl(initialLayout)`
         runs immediately inside `buildCy()` so nodes are not stacked at
-        (0,0) when the canvas first appears. Large graphs use cose; small use fcose.
+        (0,0) when the canvas first appears. v0.33.0+: concentric-only + 3D float stage.
         """
         from kuberly_platform import write_graph_html
 

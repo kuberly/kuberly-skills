@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.33.0 — 2026-05-06
+
+- **CHANGE:** **`graph.html`** — graph tab uses **concentric** layout only (built-in
+  Cytoscape layout). Removed **fcose** / **dagre** CDN extensions. Overview vs full
+  still filters elements; both views use concentric with tuned **spacingFactor** /
+  **padding** for dense stacks.
+- **FEATURE:** **3D “neural float”** — the Cytoscape canvas sits in **`#cy-3d-stage`**
+  with CSS **perspective** and a slow **`kuberlyNeuralFloat`** keyframe (gentle
+  **rotateX** / **rotateY** / **translateZ** / **translateY**). Respects
+  **`prefers-reduced-motion`**. Layout badge shows **concentric · 3D**.
+- **CHANGE:** Removed OpenSpec-oriented slash commands **`opsx-apply`**, **`opsx-archive`**, **`opsx-explore`**, **`opsx-propose`** from the default **`.apm/cursor/commands/`** pack (they confused customer forks). OpenSpec workflow remains in **skills** (`openspec-changelog-audit`, orchestrator OpenSpec gate, etc.).
+- **NEW:** Customer day-to-day slash commands — **`/kub-repo-locate`**, **`/kub-pr-draft`**, **`/kub-apply-checklist`**, **`/kub-obs-triage`** (plus existing **`/kub-stack-context`**, **`/kub-plan-review`**, **`/kub-graph-refresh`**).
+- **DOCS:** **`agent-orchestrator`**, **`openspec-changelog-audit`**, **`revise-infra-plan`**, **`README`**, **`apm-skills-bootstrap`** — dropped **`/opsx:*`** references; point to CLI / org OpenSpec paths instead.
+- **FIX:** **`sync_agent_commands.sh`** — delete **`*.md`** in **`.cursor/commands/`** and **`.claude/commands/`** that are no longer shipped under **`.apm/cursor/commands/`** (so removed prompts do not linger after **`apm install`**).
+- **BUMP:** apm.yml 0.32.8 → 0.33.0.
+
 ## v0.32.8 — 2026-05-06
 
 - **FIX:** **`.apm/cursor/commands/kub-graph-refresh.md`** — drop Markdown hard-break

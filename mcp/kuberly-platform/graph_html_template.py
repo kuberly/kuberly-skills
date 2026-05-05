@@ -11,11 +11,6 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.1/dist/cytoscape.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/layout-base@2.0.1/layout-base.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cose-base@2.2.0/cose-base.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <style>
   :root {
@@ -149,7 +144,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .layer-toggle[data-layer=state]  .dot { background: var(--aws); }
   .layer-toggle[data-layer=k8s]    .dot { background: var(--amber); }
   .layer-toggle[data-layer=docs]   .dot { background: var(--ink-mute); }
-  #layout-select, #graph-view-mode {
+  #graph-view-mode {
     background: rgba(255,255,255,0.04);
     color: var(--ink);
     border: 1px solid var(--ink-line);
@@ -158,6 +153,21 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     font-size: 13px;
     cursor: pointer;
     max-width: min(280px, 42vw);
+  }
+  #layout-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--ink-line);
+    background: rgba(22,119,255,0.08);
+    color: var(--blue-soft);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    white-space: nowrap;
+    user-select: none;
   }
   #stats { color: var(--ink-mute); font-size: 12px; font-family: var(--font-mono); }
 
@@ -464,12 +474,50 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     background: var(--bg);
   }
   body.view-graph #graph-shell { display: block; }
+  /* 3D presentation: concentric graph stays 2D in Cytoscape; stage tilts in perspective. */
+  #cy-3d-stage {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    overflow: hidden;
+    perspective: 1680px;
+    perspective-origin: 50% 44%;
+  }
+  #cy-3d-float {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    transform-style: preserve-3d;
+    transform-origin: 50% 48%;
+    will-change: transform;
+    animation: kuberlyNeuralFloat 28s ease-in-out infinite;
+  }
+  @keyframes kuberlyNeuralFloat {
+    0%, 100% {
+      transform: rotateX(5deg) rotateY(-14deg) translateZ(0) translateY(0);
+    }
+    25% {
+      transform: rotateX(11deg) rotateY(6deg) translateZ(36px) translateY(-10px);
+    }
+    50% {
+      transform: rotateX(7deg) rotateY(18deg) translateZ(-14px) translateY(8px);
+    }
+    75% {
+      transform: rotateX(12deg) rotateY(-8deg) translateZ(22px) translateY(-4px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #cy-3d-float {
+      animation: none !important;
+      transform: none !important;
+    }
+  }
   #cy {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
     background-color: var(--bg);
     background-image: radial-gradient(circle, rgba(255,255,255,0.05) 1px, transparent 1.4px);
     background-size: 22px 22px;
+    transform: translateZ(0);
+    backface-visibility: hidden;
   }
   #sidebar {
     position: absolute;
@@ -595,12 +643,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
       <option value="overview">Overview (module deps)</option>
       <option value="full" selected>Full graph</option>
     </select>
-    <select id="layout-select" title="Layout algorithm">
-      <option value="fcose" selected>fcose (compound force)</option>
-      <option value="cose">cose (classic force)</option>
-      <option value="dagre">dagre (hierarchy)</option>
-      <option value="concentric">concentric</option>
-    </select>
+    <span id="layout-badge" title="Layout: concentric rings in a slow 3D float (CSS perspective)">concentric · 3D</span>
     <span class="stats" id="stats"></span>
   </div>
 </div>
@@ -608,7 +651,11 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
 <div id="dashboard-wrap"></div>
 
 <div id="graph-shell">
-  <div id="cy"></div>
+  <div id="cy-3d-stage">
+    <div id="cy-3d-float">
+      <div id="cy"></div>
+    </div>
+  </div>
   <aside id="sidebar">
     <button id="close-btn" title="Close (ESC)">&times;</button>
     <div id="sidebar-body"></div>
@@ -1007,7 +1054,7 @@ function buildCy() {
     static: BRAND.blue, state: BRAND.aws, k8s: BRAND.amber, docs: BRAND.inkMute,
   };
 
-  /* fcose + compound parents degrades badly past ~500 leaves (huge boxes, line collapse). */
+  /* Very large compound graphs: strip parent boxes so concentric stays responsive. */
   const leafNodes = NODES.filter(n => n.data && !n.data.compound);
   const leafCount = leafNodes.length;
   const STRIP_COMPOUND_THRESHOLD = 500;
@@ -1049,20 +1096,25 @@ function buildCy() {
   const elemsEdges = picked.edges;
   const isOverview = viewMode === "overview" && elemsNodes.length < graphNodes.length;
 
-  let initialLayout = stripCompound ? "cose" : "fcose";
-  let cyLayoutOpts = stripCompound
-    ? { name: "cose", animate: false, padding: 12 }
-    : { name: "fcose", quality: "default", animate: false, randomize: true,
-        nodeSeparation: 80, idealEdgeLength: 80, packComponents: true };
-  if (isOverview) {
-    initialLayout = "dagre";
-    cyLayoutOpts = { name: "dagre", animate: false, padding: 28, rankDir: "LR",
-                     nodeSep: 44, rankSep: 52, fit: true };
-  }
+  const dense = leafCount > 600;
+  const concentricLayoutOpts = {
+    name: "concentric",
+    animate: false,
+    fit: true,
+    padding: isOverview ? 40 : (dense ? 20 : 28),
+    spacingFactor: dense ? 1.42 : 1.18,
+    minNodeSpacing: dense ? 6 : 12,
+    startAngle: -Math.PI / 2,
+    sweep: 2 * Math.PI,
+    clockwise: true,
+    concentric: n => n.degree(),
+    levelWidth: () => 1,
+  };
+  const initialLayout = "concentric";
 
   const stParts = [];
   if (isOverview) stParts.push("overview");
-  if (stripCompound && !isOverview) stParts.push("layout: flat");
+  if (stripCompound && !isOverview) stParts.push("no compound parents");
   document.getElementById("stats").textContent =
     elemsNodes.filter(n => !n.data.compound).length + " nodes · " + elemsEdges.length + " edges"
     + (stParts.length ? " · " + stParts.join(" · ") : "");
@@ -1110,7 +1162,7 @@ function buildCy() {
       { selector: "node.downstream", style: { "border-width": 3, "border-color": BRAND.blue } },
       { selector: "edge.highlight", style: { "line-color": BRAND.blue, "target-arrow-color": BRAND.blue, "opacity": 1, "width": 2 } },
     ],
-    layout: cyLayoutOpts,
+    layout: concentricLayoutOpts,
   });
 
   function applyLayerVisibility(layer, on) {
@@ -1123,27 +1175,10 @@ function buildCy() {
   }
   applyLayerVisibility("k8s", false);
 
-  const runLayoutImpl = (name) => {
-    if (stripCompound && name === "fcose") {
-      layoutSelect.value = "cose";
-      name = "cose";
-    }
-    let opts = { name, animate: false, fit: true };
-    if (name === "fcose") {
-      opts = { ...opts, quality: leafCount > 800 ? "draft" : "default", randomize: true,
-               nodeSeparation: 80, idealEdgeLength: 80, packComponents: true };
-    } else if (name === "cose") {
-      opts = { ...opts, padding: 12 };
-    } else if (name === "dagre") {
-      opts = { ...opts, rankDir: isOverview ? "LR" : "TB",
-               nodeSep: isOverview ? 40 : 30, rankSep: isOverview ? 52 : 60 };
-    } else if (name === "concentric") {
-      opts = { ...opts, concentric: n => n.degree(), levelWidth: () => 1 };
-    }
-    cy.layout(opts).run();
+  const runLayoutImpl = (_name) => {
+    cy.layout({ ...concentricLayoutOpts, animate: false, fit: true }).run();
   };
   window.__kuberlyRunLayout = runLayoutImpl;
-  const layoutSelect = document.getElementById("layout-select");
   const searchEl = document.getElementById("search");
   const sidebar = document.getElementById("sidebar");
   const sidebarBody = document.getElementById("sidebar-body");
@@ -1159,10 +1194,6 @@ function buildCy() {
           pill.classList.toggle("inactive", !cb.checked);
         }
       });
-    });
-    layoutSelect.addEventListener("change", e => {
-      const fn = window.__kuberlyRunLayout;
-      if (typeof fn === "function") fn(e.target.value);
     });
     if (viewSel) {
       viewSel.addEventListener("change", () => {
@@ -1205,7 +1236,6 @@ function buildCy() {
       searchEl.value = "";
     });
   }
-  layoutSelect.value = initialLayout;
   runLayoutImpl(initialLayout);
 
   function renderSidebar(node) {
