@@ -20,7 +20,7 @@ Usage:
 
     # one cluster
     python3 state_graph.py generate --env prod \
-        --output .claude/state_overlay_prod.json
+        --output kuberly/state_overlay_prod.json
 
     # every cluster with a shared-infra.json under components/
     python3 state_graph.py generate-all --output-dir .claude
@@ -599,7 +599,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         progress=getattr(args, "resources", False) and not args.dry_run,
     )
     output = Path(args.output) if args.output else (
-        repo / ".claude" / f"state_overlay_{args.env}.json"
+        repo / "kuberly" / f"state_overlay_{args.env}.json"
     )
     if args.dry_run:
         print(json.dumps(overlay, indent=2))
@@ -623,7 +623,7 @@ def _cmd_generate_all(args: argparse.Namespace) -> int:
     si_files = _find_shared_infra_files(repo)
     if not si_files:
         raise SystemExit("no components/<env>/shared-infra.json files found")
-    output_dir = Path(args.output_dir) if args.output_dir else (repo / ".claude")
+    output_dir = Path(args.output_dir) if args.output_dir else (repo / "kuberly")
     module_filter = (
         [m.strip() for m in args.modules.split(",") if m.strip()]
         if getattr(args, "modules", None) else None
@@ -666,7 +666,7 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("generate", help="generate overlay for one env")
     g.add_argument("--env", required=True, help="env name (matches components/<env>/)")
     g.add_argument("--repo", help="repo root (default: cwd)")
-    g.add_argument("--output", help="output path (default: <repo>/.claude/state_overlay_<env>.json)")
+    g.add_argument("--output", help="output path (default: <repo>/kuberly/state_overlay_<env>.json)")
     g.add_argument("--profile", help="AWS CLI profile (default: AWS_PROFILE / default chain)")
     g.add_argument("--resources", action="store_true",
                    help="schema 2: download each state, extract resource graph "
@@ -680,7 +680,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ga = sub.add_parser("generate-all", help="generate overlay for every env in components/")
     ga.add_argument("--repo", help="repo root (default: cwd)")
-    ga.add_argument("--output-dir", help="output dir (default: <repo>/.claude)")
+    ga.add_argument("--output-dir", help="output dir (default: <repo>/kuberly)")
     ga.add_argument("--profile", help="AWS CLI profile (default: AWS_PROFILE / default chain)")
     ga.add_argument("--resources", action="store_true",
                     help="schema 2: include resource graph for every env (slower)")

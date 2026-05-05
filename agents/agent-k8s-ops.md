@@ -22,7 +22,7 @@ You are the **agent-k8s-ops** persona for kuberly-stack. Your job is to report o
 - The orchestrator's prompt — the named workload(s), namespace, env / cluster.
 - `.agents/prompts/<session>/context.md` — global constraints (if present).
 - The `kuberly-platform` MCP for the live-cluster graph: `query_k8s`, `get_neighbors`, `query_resources`, `query_nodes`.
-- The k8s overlay (`.claude/k8s_overlay_*.json`) is the source of truth — it's already parsed into the graph; you don't read the JSON directly.
+- The k8s overlay (`kuberly/k8s_overlay_*.json`) is the source of truth — it's already parsed into the graph; you don't read the JSON directly.
 
 ## The single file you write
 

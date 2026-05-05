@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.25.0 — 2026-05-05
+
+- **BREAKING:** graph artifacts relocated from `.claude/` to `kuberly/`. Tool-neutral location so Cursor / Codex / VS Code / future tools share one source of truth.
+  - Generator default output: `.claude` → `kuberly`
+  - MCP server overlay loader: reads `kuberly/state_overlay_*.json`, `kuberly/k8s_overlay_*.json`, `kuberly/docs_overlay.json`
+  - SessionStart hook regen target updated.
+  - Migration for existing consumers (one-shot, after `apm install --update`):
+    ```
+    git mv .claude/graph.html .claude/graph.json .claude/GRAPH_REPORT.md kuberly/ 2>/dev/null
+    git mv .claude/*.mmd kuberly/ 2>/dev/null
+    git mv .claude/state_overlay_*.json .claude/k8s_overlay_*.json .claude/docs_overlay.json kuberly/ 2>/dev/null
+    # then regenerate
+    python3 apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/kuberly_platform.py generate . -o kuberly
+    ```
+- **FIX:** empty-canvas bug in graph.html — initial `runLayout("fcose")` was never called; all nodes stacked at (0,0). Now invoked after construction.
+- **FIX:** compound parent nodes carry `classes: "compound"` so the `node.compound` style selector applies (rounded fill, ink-line border, label faint).
+- **BUMP:** apm.yml 0.24.0 → 0.25.0.
+
 ## v0.24.0 — 2026-05-05
 
 - **POLISH:** kuberly-graph viz now uses kuberly-web brand tokens.

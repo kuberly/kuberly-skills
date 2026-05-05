@@ -683,7 +683,7 @@ class StateOverlayTests(unittest.TestCase):
         # Place a state overlay declaring grafana + loki as deployed in prod.
         # loki ALSO has a JSON sidecar (created by _fake_repo) → should be
         # annotated `also_in_state=True`. grafana is overlay-only → synthetic.
-        overlay = Path(self.tmp.name) / ".claude" / "state_overlay_prod.json"
+        overlay = Path(self.tmp.name) / "kuberly" / "state_overlay_prod.json"
         overlay.parent.mkdir(parents=True, exist_ok=True)
         overlay.write_text(
             '{\n'
@@ -731,11 +731,11 @@ class StateOverlayTests(unittest.TestCase):
         self.assertEqual(res["unactionable"], [])
 
     def test_overlay_missing_dir_is_noop(self) -> None:
-        # Build against a repo that has no .claude dir at all — must not error.
+        # Build against a repo that has no kuberly dir at all — must not error.
         tmp2 = _fake_repo()
         try:
             shutil = __import__("shutil")
-            claude = Path(tmp2.name) / ".claude"
+            claude = Path(tmp2.name) / "kuberly"
             if claude.exists():
                 shutil.rmtree(claude)
             g = KuberlyPlatform(tmp2.name)
@@ -747,7 +747,7 @@ class StateOverlayTests(unittest.TestCase):
     def test_overlay_with_bad_schema_is_skipped(self) -> None:
         tmp2 = _fake_repo()
         try:
-            bad = Path(tmp2.name) / ".claude" / "state_overlay_prod.json"
+            bad = Path(tmp2.name) / "kuberly" / "state_overlay_prod.json"
             bad.parent.mkdir(parents=True, exist_ok=True)
             # schema_version != 1 → silently skipped
             bad.write_text('{"schema_version": 99, "deployed_modules": [{"name":"x"}]}\n')
@@ -783,7 +783,8 @@ class StateOnlyActionabilityTests(unittest.TestCase):
         # mismatched-name component synthesis so link_components_to_modules
         # cannot auto-bridge it. The patched actionability predicate must
         # still recognize source="state" as a valid invoker.
-        overlay = root / ".claude" / "state_overlay_prod.json"
+        overlay = root / "kuberly" / "state_overlay_prod.json"
+        overlay.parent.mkdir(parents=True, exist_ok=True)
         overlay.write_text(
             '{\n'
             '  "schema_version": 1,\n'
@@ -1065,7 +1066,7 @@ class StateOverlaySchema2Tests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tmp = _fake_repo()
-        overlay = Path(self.tmp.name) / ".claude" / "state_overlay_prod.json"
+        overlay = Path(self.tmp.name) / "kuberly" / "state_overlay_prod.json"
         overlay.parent.mkdir(parents=True, exist_ok=True)
         overlay.write_text(json.dumps({
             "schema_version": 2,
@@ -1250,9 +1251,9 @@ class K8sOverlayConsumerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = _fake_repo()
         # State overlay creates aws_iam_role.loki resource node — IRSA target
-        Path(self.tmp.name, ".claude", "state_overlay_prod.json").parent.mkdir(
+        Path(self.tmp.name, "kuberly", "state_overlay_prod.json").parent.mkdir(
             parents=True, exist_ok=True)
-        Path(self.tmp.name, ".claude", "state_overlay_prod.json").write_text(json.dumps({
+        Path(self.tmp.name, "kuberly", "state_overlay_prod.json").write_text(json.dumps({
             "schema_version": 2, "generated_at": "2026-05-05T00:00:00Z",
             "generator": "test",
             "cluster": {"env": "prod", "name": "prod", "region": "us-east-1",
@@ -1267,7 +1268,7 @@ class K8sOverlayConsumerTests(unittest.TestCase):
                                "depends_on": []}]}},
         }) + "\n")
         # K8s overlay
-        Path(self.tmp.name, ".claude", "k8s_overlay_prod.json").write_text(json.dumps({
+        Path(self.tmp.name, "kuberly", "k8s_overlay_prod.json").write_text(json.dumps({
             "schema_version": 1, "generated_at": "2026-05-05T00:00:00Z",
             "generator": "test",
             "cluster": {"env": "prod", "name": "prod", "context": ""},
@@ -1456,9 +1457,9 @@ class K8sCRDConsumerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = _fake_repo()
         # Service in monitoring ns so VirtualService route_to has a target
-        Path(self.tmp.name, ".claude", "k8s_overlay_prod.json").parent.mkdir(
+        Path(self.tmp.name, "kuberly", "k8s_overlay_prod.json").parent.mkdir(
             parents=True, exist_ok=True)
-        Path(self.tmp.name, ".claude", "k8s_overlay_prod.json").write_text(json.dumps({
+        Path(self.tmp.name, "kuberly", "k8s_overlay_prod.json").write_text(json.dumps({
             "schema_version": 1, "generated_at": "2026-05-05T00:00:00Z",
             "generator": "test",
             "cluster": {"env": "prod", "name": "prod", "context": ""},
@@ -1571,7 +1572,7 @@ class DocsOverlayTests(unittest.TestCase):
         Path(self.tmp.name, "docs/HELLO.md").write_text("# Hello\nA test doc.\n")
 
         # Build the docs overlay file directly (no need to run docs_graph.py)
-        overlay = Path(self.tmp.name) / ".claude" / "docs_overlay.json"
+        overlay = Path(self.tmp.name) / "kuberly" / "docs_overlay.json"
         overlay.parent.mkdir(parents=True, exist_ok=True)
         overlay.write_text(json.dumps({
             "schema_version": 1,
@@ -1851,7 +1852,61 @@ class GraphHtmlVizTests(unittest.TestCase):
                     "expected kuberly LogoMark SVG path data in graph.html")
                 # Brand wordmark + version eyebrow.
                 self.assertIn("kuberly-graph", html)
-                self.assertIn("v0.24.0", html)
+                self.assertIn("v0.25.0", html)
+        finally:
+            tmp.cleanup()
+
+    def test_graph_html_has_initial_layout_call(self):
+        """v0.25.0: rendered HTML must invoke runLayout("fcose") at construction
+        time, not only inside the function definition. Without this initial
+        call, cytoscape places every node at (0, 0) → empty canvas bug.
+        """
+        from kuberly_platform import write_graph_html
+
+        tmp, g = self._build_graph()
+        try:
+            with tempfile.TemporaryDirectory() as out:
+                out_path = Path(out)
+                write_graph_html(g, out_path)
+                html = (out_path / "graph.html").read_text(encoding="utf-8")
+                # Trim the function definition so the call-site count
+                # measures only invocations.
+                func_re = re.compile(
+                    r"function runLayout\(.*?\)\s*\{.*?\n\}", re.DOTALL)
+                without_def = func_re.sub("", html)
+                # Accept either quoting convention.
+                callsites = (without_def.count('runLayout("fcose")')
+                             + without_def.count("runLayout('fcose')"))
+                self.assertGreaterEqual(callsites, 1,
+                    "no initial runLayout(\"fcose\") call after the layout-select "
+                    "handler — empty-canvas bug not fixed")
+        finally:
+            tmp.cleanup()
+
+    def test_compound_parents_have_compound_class(self):
+        """v0.25.0: compound parent nodes must carry classes:"compound"
+        (with optional space-separated layer/k8s sub-class). Without this,
+        the `node.compound` style selector misses and parents fall through
+        to the default fill.
+        """
+        from kuberly_platform import _build_cytoscape_elements
+
+        tmp, g = self._build_graph()
+        try:
+            data = {
+                "nodes": [{"id": n["id"], **n} for n in g.nodes.values()],
+                "edges": list(g.edges),
+            }
+            cy_nodes, _ = _build_cytoscape_elements(data)
+            compound_nodes = [n for n in cy_nodes
+                              if n["data"].get("compound") is True]
+            self.assertGreater(len(compound_nodes), 0,
+                "no compound parent nodes built — bad fixture")
+            for n in compound_nodes:
+                classes = n.get("classes", "")
+                self.assertIn("compound", classes.split(),
+                    f"compound parent {n['data']['id']} missing 'compound' "
+                    f"class (got classes={classes!r})")
         finally:
             tmp.cleanup()
 

@@ -59,7 +59,7 @@ def _hooks_block() -> dict[str, list[dict[str, Any]]]:
     """The hooks kuberly-skills owns. Same shape for Claude and Cursor.
 
     Only UserPromptSubmit lives here. SessionStart was previously used to
-    regenerate `.claude/graph.json` on every Claude Code session start —
+    regenerate `kuberly/graph.json` on every Claude Code session start —
     v0.13.0 moved that to the pre-commit pipeline (post_apm_install.sh)
     so each commit captures a fresh graph state and the MCP server reads
     the cached file at startup. SessionStart-on-every-Claude-launch is no

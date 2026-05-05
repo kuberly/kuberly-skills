@@ -8,7 +8,7 @@ script builds the **application** layer (workloads + services + IRSA
 bridges) from the live cluster via `kubectl get -o json`.
 
 The output overlay is committed to the infra repo at
-`.claude/k8s_overlay_<env>.json` and consumed by KuberlyPlatform on
+`kuberly/k8s_overlay_<env>.json` and consumed by KuberlyPlatform on
 graph build to synthesize `k8s:<env>/<ns>/<kind>/<name>` nodes plus
 edges (Service→workload via label selector, workload→ServiceAccount,
 ServiceAccount→IAM role via IRSA annotation, ownerRefs, etc.).
@@ -26,7 +26,7 @@ Usage:
     # ...or whatever auth path your stack uses
 
     python3 k8s_graph.py generate --env prod \
-        --output .claude/k8s_overlay_prod.json
+        --output kuberly/k8s_overlay_prod.json
 
     # extra coverage (slower, default OFF):
     python3 k8s_graph.py generate --env prod --include-pods
@@ -958,7 +958,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         context=args.context,
     )
     output = Path(args.output) if args.output else (
-        repo / ".claude" / f"k8s_overlay_{args.env}.json"
+        repo / "kuberly" / f"k8s_overlay_{args.env}.json"
     )
     if args.dry_run:
         print(json.dumps(overlay, indent=2))
@@ -985,7 +985,7 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("generate", help="generate overlay for one env / cluster")
     g.add_argument("--env", required=True, help="env name (matches components/<env>/)")
     g.add_argument("--repo", help="repo root (default: cwd)")
-    g.add_argument("--output", help="output path (default: <repo>/.claude/k8s_overlay_<env>.json)")
+    g.add_argument("--output", help="output path (default: <repo>/kuberly/k8s_overlay_<env>.json)")
     g.add_argument("--namespaces",
                    help="comma-separated namespace allowlist (default: all)")
     g.add_argument("--context",

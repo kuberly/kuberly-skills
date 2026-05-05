@@ -157,7 +157,7 @@ read user's intent + existing app JSONs in repo
 ```
 
 The `kuberly-platform` MCP populates `runtime` on every application
-node in `.claude/graph.json`. Call
+node in `kuberly/graph.json`. Call
 `mcp__kuberly-platform__query_nodes(node_type="application", environment="<env>")`
 and inspect the `runtime` field to know what shape the existing apps
 use **before** authoring a new one — match what's there unless the user

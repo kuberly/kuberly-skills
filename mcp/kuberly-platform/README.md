@@ -10,6 +10,8 @@ Use `${workspaceFolder}` in Cursor for `--repo` when using absolute workspace ro
 
 Canonical source lives in **kuberly-skills**; do not fork the script inside customer repos — extend here and release a new tag.
 
+**Generated artifacts** (v0.25.0+) land under `kuberly/` at the repo root: `kuberly/graph.json`, `kuberly/graph.html`, `kuberly/GRAPH_REPORT.md`, `kuberly/module_dag.mmd`, `kuberly/env_*.mmd`, plus state/k8s/docs overlays. The pre-commit / SessionStart hook regenerates these on each commit / session start.
+
 ## State-overlay graph (v0.17.0+)
 
 The static graph (HCL + `components/<env>/*.json`) underreports: modules deployed by the platform without a JSON sidecar (e.g. `loki`, `grafana`, `alloy` once EKS exists) look like graph leaves and the actionability check returns `stop-no-instance`.
@@ -20,7 +22,7 @@ The static graph (HCL + `components/<env>/*.json`) underreports: modules deploye
 # schema 1 (default) — list-only, lists deployed modules + applications.
 # Needs s3:ListBucket. Fast (~1s).
 python3 scripts/mcp/kuberly-platform/state_graph.py generate \
-    --env prod --output .claude/state_overlay_prod.json
+    --env prod --output kuberly/state_overlay_prod.json
 
 # schema 2 (--resources) — adds per-module resource graph.
 # Needs s3:ListBucket + s3:GetObject. Slower (~30s–2min per env).
@@ -29,7 +31,7 @@ python3 scripts/mcp/kuberly-platform/state_graph.py generate \
 
 # all envs in components/ in one go (per-account login still required):
 python3 scripts/mcp/kuberly-platform/state_graph.py generate-all \
-    --output-dir .claude --resources
+    --output-dir kuberly --resources
 
 # pass --profile <name> to pick a specific AWS CLI profile.
 # pass --modules loki,grafana to subset (only with --resources).
@@ -51,14 +53,14 @@ The `query_resources` MCP tool filters them: `query_resources(resource_type="hel
 
 ## Live-cluster overlay (v0.19.0+)
 
-`k8s_graph.py` does for the **runtime layer** what `state_graph.py` does for the infra layer: shells out to `kubectl get -o json`, extracts whitelisted fields per kind, emits a sanitized `.claude/k8s_overlay_<env>.json` file the consumer commits.
+`k8s_graph.py` does for the **runtime layer** what `state_graph.py` does for the infra layer: shells out to `kubectl get -o json`, extracts whitelisted fields per kind, emits a sanitized `kuberly/k8s_overlay_<env>.json` file the consumer commits.
 
 ```bash
 # be connected to the cluster:
 aws eks update-kubeconfig --name prod --region eu-central-1
 
 python3 scripts/mcp/kuberly-platform/k8s_graph.py generate \
-    --env prod --output .claude/k8s_overlay_prod.json
+    --env prod --output kuberly/k8s_overlay_prod.json
 
 # subset / opt-ins:
 #   --namespaces monitoring,argocd       limit to listed ns
@@ -101,7 +103,7 @@ Filter `k8s_resource:` nodes by `environment` / `namespace` / `kind` / `name_con
 
 ## Docs / knowledge overlay (v0.20.0+)
 
-`docs_graph.py` indexes every doc/skill/agent/prompt/OpenSpec change in the repo into `.claude/docs_overlay.json`. Stdlib only, deterministic, runs offline by default.
+`docs_graph.py` indexes every doc/skill/agent/prompt/OpenSpec change in the repo into `kuberly/docs_overlay.json`. Stdlib only, deterministic, runs offline by default.
 
 ```bash
 # offline pass — file walk + frontmatter + headings + link/mention edges
@@ -126,7 +128,7 @@ Wire `scripts/regenerate_docs_overlay.sh` into the consumer's `.pre-commit-confi
 - repo: local
   hooks:
     - id: regenerate-docs-overlay
-      name: Refresh .claude/docs_overlay.json
+      name: Refresh kuberly/docs_overlay.json
       entry: bash apm_modules/kuberly/kuberly-skills/scripts/regenerate_docs_overlay.sh
       language: system
       pass_filenames: false

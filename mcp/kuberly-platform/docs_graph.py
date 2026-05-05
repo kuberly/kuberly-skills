@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """docs_graph — index every doc/skill/agent/prompt/openspec change in the
 repo, plus the cross-link / cross-mention edges, into a single
-`.claude/docs_overlay.json` consumed by KuberlyPlatform.
+`kuberly/docs_overlay.json` consumed by KuberlyPlatform.
 
 Where state_graph.py is the infra layer and k8s_graph.py is the runtime
 layer, docs_graph.py is the **knowledge layer**: which file explains
@@ -550,7 +550,7 @@ def _read_overlay(path: Path) -> dict | None:
 
 def _cmd_generate(args: argparse.Namespace) -> int:
     repo = Path(args.repo or os.getcwd()).resolve()
-    output = Path(args.output) if args.output else (repo / ".claude" / "docs_overlay.json")
+    output = Path(args.output) if args.output else (repo / "kuberly" / "docs_overlay.json")
     paths = (
         [p.strip().rstrip("/") + "/" for p in args.paths.split(",") if p.strip()]
         if args.paths else None
@@ -582,7 +582,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     g = sub.add_parser("generate", help="build / refresh the docs overlay")
     g.add_argument("--repo", help="repo root (default: cwd)")
-    g.add_argument("--output", help="output path (default: <repo>/.claude/docs_overlay.json)")
+    g.add_argument("--output", help="output path (default: <repo>/kuberly/docs_overlay.json)")
     g.add_argument("--paths", help="comma-separated path prefixes to limit the scan, e.g. 'agents/,docs/'")
     g.add_argument("--full", action="store_true", help="ignore prior overlay (full rescan, including embeddings)")
     g.add_argument("--embed", action="store_true",

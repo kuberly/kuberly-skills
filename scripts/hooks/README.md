@@ -9,7 +9,7 @@ no copy step needed. Versioning is automatic: an `apm install` of a new
 
 Pre-flight router for the `agent-orchestrator` flow. Reads the user prompt,
 classifies it as trivial vs. infra-relevant, and looks up named entities
-(`loki`, `eks`, `aurora`, ...) in `.claude/graph.json` *before* the
+(`loki`, `eks`, `aurora`, ...) in `kuberly/graph.json` *before* the
 orchestrator spawns any subagent. Two outputs:
 
 - **Graph slice** — for entities that *do* exist as nodes, the matching node
@@ -45,8 +45,8 @@ never block the prompt), and runs in well under 50 ms.
 ```
 
 `$CLAUDE_PROJECT_DIR` is set by Claude Code; the hook resolves
-`.claude/graph.json` relative to it. If your repo vendors `kuberly_platform.py`
-under a different path, the only requirement is that `.claude/graph.json`
+`kuberly/graph.json` relative to it. If your repo vendors `kuberly_platform.py`
+under a different path, the only requirement is that `kuberly/graph.json`
 exists — the SessionStart hook (also from this package) generates it.
 
 ### Updating the named-entity list
