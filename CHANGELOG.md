@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.41.0 — 2026-05-06
+
+Dashboard redesign — toned down, less cartoonish, stats up top.
+
+### Changes
+
+- **Stats bar at TOP** of the dashboard (was footer in v0.39.1).
+  Two slim mono-typography rows: `overlays` (OpenSpec / docs / state
+  snapshots / doc-linked) and `graph nodes` (per-layer counts as
+  colored pills). Uses a card surface + 1 px border, no gradient.
+- **Refined hero** — eyebrow + cluster name + KPI strip now sits on a
+  transparent background with a single bottom border-line separator.
+  KPI numbers shrink **28 px → 20 px** and switch to monospace for
+  consistency with the data-bar above. Removed the radial-gradient
+  burst ("cartoon" effect).
+- **Distributions section deleted** — user feedback: charts not
+  useful. ECharts CDN dropped (smaller payload, faster cold load).
+  The architecture diagram + per-tile drilldown + node spotlight are
+  now the page's primary information density.
+- **Footer removed** — its data lives at the top now; nothing
+  redundant at the bottom.
+
+Page order: Stats bar → Hero → Architecture (with click-to-list) →
+Node spotlight.
+
+- **BUMP:** apm.yml 0.40.0 → 0.41.0.
+
 ## v0.40.0 — 2026-05-06
 
 Make MCP + skills aware of the new graph types (CUE / CI/CD /

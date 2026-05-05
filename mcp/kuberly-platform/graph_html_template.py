@@ -13,7 +13,6 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.0/dist/3d-force-graph.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
 <script src="https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js"></script>
 <style>
   :root {
@@ -1315,64 +1314,100 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .ad-detail { color: var(--ink-mute); font-family: var(--font-mono); font-size: 11px; }
   .ad-detail strong { color: var(--ink); }
 
-  /* v0.37.0: SaaS-grade hero band — large numbers, gradient surface,
-     proper visual rhythm. Replaces the plain "1318 nodes" chip row. */
+  /* v0.41.0: refined hero — smaller numbers, no radial-gradient burst,
+     thin border separator. Reads as professional dashboard, not toy. */
   .hero-saas {
-    background:
-      radial-gradient(1100px 400px at 95% -50%, rgba(22,119,255,0.10), transparent 60%),
-      radial-gradient(700px 300px at 0% 80%, rgba(255,153,0,0.06), transparent 60%),
-      linear-gradient(180deg, var(--bg-card) 0%, var(--bg-raised) 100%);
-    border: 1px solid var(--ink-line);
-    border-radius: var(--radius-lg);
-    padding: 28px 32px 24px;
-    margin-bottom: 20px;
+    background: transparent;
+    border: none;
+    padding: 18px 0 22px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--ink-line);
   }
   .hero-saas .hero-eyebrow {
     font-family: var(--font-mono);
     font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.18em;
+    letter-spacing: 0.20em;
     color: var(--ink-faint);
     margin-bottom: 6px;
   }
   .hero-saas h1 {
-    font-size: 32px;
-    font-weight: 600;
-    letter-spacing: -0.02em;
+    font-size: 24px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
     color: var(--ink);
-    margin: 0 0 18px;
+    margin: 0 0 16px;
   }
   .hero-kpis {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 22px;
-    padding-top: 18px;
-    border-top: 1px solid var(--ink-line);
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 32px;
+    padding: 0;
+    border-top: none;
   }
   .hero-kpi {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 3px;
   }
   .hero-kpi .label {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 9px;
     text-transform: uppercase;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.16em;
     color: var(--ink-faint);
   }
   .hero-kpi .value {
-    font-size: 28px;
-    font-weight: 600;
-    line-height: 1.1;
-    letter-spacing: -0.02em;
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
     color: var(--ink);
+    font-family: var(--font-mono);
   }
   .hero-kpi .sub {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--ink-mute);
     font-family: var(--font-mono);
   }
+
+  /* v0.41.0: top stats bar — promoted from footer, restyled as a slim
+     two-row info strip with monospaced data and pill chips. */
+  .stats-bar {
+    margin: -4px 0 18px;
+    padding: 14px 18px;
+    background: var(--bg-card);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .stats-bar-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-mute);
+    line-height: 1.4;
+  }
+  .stats-bar-key {
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-size: 9px;
+    color: var(--ink-faint);
+    margin-right: 6px;
+    min-width: 88px;
+  }
+  .stats-bar-val {
+    background: rgba(255,255,255,0.025);
+    border: 1px solid var(--ink-line-soft);
+    border-radius: 999px;
+    padding: 3px 11px;
+  }
+  .stats-bar-val strong { color: var(--ink); margin-left: 4px; font-weight: 500; }
   .section-sub {
     color: var(--ink-mute);
     font-size: 12px;
@@ -2691,20 +2726,25 @@ function renderDashboard() {
     <div class="hero-kpi"><div class="label">Graph</div><div class="value">$${m.node_count}</div><div class="sub">$${m.edge_count} edges</div></div>
   `;
   root.innerHTML = `
+    <div class="stats-bar">
+      <div class="stats-bar-row">
+        <span class="stats-bar-key">overlays</span>
+        <span class="stats-bar-val">OpenSpec <strong>$${cov.openspec_present ? cov.openspec_changes + " changes" : "—"}</strong></span>
+        <span class="stats-bar-val">docs <strong>$${(cov.docs_overlay && cov.docs_overlay.generated_at) || "—"}</strong></span>
+        <span class="stats-bar-val">state snapshots <strong>$${(cov.state_overlay_envs || []).join(", ") || "—"}</strong></span>
+        <span class="stats-bar-val">doc-linked <strong>$${cov.modules_with_doc_mentions}/$${cov.modules_total}</strong></span>
+      </div>
+      <div class="stats-bar-row">
+        <span class="stats-bar-key">graph nodes</span>
+        $${layerLegend}
+      </div>
+    </div>
+
     <header class="hero-saas">
       <div class="hero-eyebrow">stack intelligence</div>
       <h1>$${esc((DASHBOARD.environments?.[0]?.cluster_name) || "kuberly")}</h1>
       <div class="hero-kpis">$${heroKpis}</div>
     </header>
-
-    <section class="section">
-      <h2>Distributions</h2>
-      <div class="chart-row">
-        <div class="chart-card"><h4>Category share</h4><div id="chart-cat-share" class="chart-mount"></div></div>
-        <div class="chart-card"><h4>IAM role trust — by principal kind</h4><div id="chart-iam-principals" class="chart-mount"></div></div>
-        <div class="chart-card"><h4>Top resource types</h4><div id="chart-top-rtypes" class="chart-mount"></div></div>
-      </div>
-    </section>
 
     <section class="section">
       <h2>Architecture — deployed AWS services</h2>
@@ -2738,23 +2778,10 @@ function renderDashboard() {
       </div>
     </section>
 
-    <footer class="dash-footer">
-      <div class="dash-footer-row">
-        <span class="dash-foot-key">overlays</span>
-        <span class="dash-foot-val">OpenSpec <strong>$${cov.openspec_present ? cov.openspec_changes + " changes" : "—"}</strong></span>
-        <span class="dash-foot-val">docs <strong>$${(cov.docs_overlay && cov.docs_overlay.generated_at) || "—"}</strong></span>
-        <span class="dash-foot-val">state snapshots <strong>$${(cov.state_overlay_envs || []).join(", ") || "—"}</strong></span>
-        <span class="dash-foot-val">doc-linked <strong>$${cov.modules_with_doc_mentions}/$${cov.modules_total}</strong></span>
-      </div>
-      <div class="dash-footer-row">
-        <span class="dash-foot-key">graph nodes by layer</span>
-        $${layerLegend}
-      </div>
-    </footer>
   `;
-  /* Wire charts after innerHTML is in DOM. */
-  try { renderDashboardCharts(DASHBOARD.categories || {}); }
-  catch (e) { console.warn("charts", e); }
+  /* v0.41.0: Distributions charts removed — user feedback "not useful".
+   * The architecture diagram + node spotlight + per-tile drilldown are
+   * the page's primary information density now. */
   /* Click-to-copy buttons (kept generic). */
   document.querySelectorAll(".kbd-copy").forEach(btn => {
     if (btn.__wired) return;
