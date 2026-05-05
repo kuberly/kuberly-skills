@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.24.0 — 2026-05-05
+
+- **POLISH:** kuberly-graph viz now uses kuberly-web brand tokens.
+  - Logo + wordmark in top bar (inline SVG mark from kuberly-web LogoMark).
+  - Color tokens map to kuberly-web globals.css: `--bg #090b0d`,
+    `--ink #ffffff`, `--blue #1677ff`, `--aws #ff9900`, etc.
+  - Layer encoding semantically aligned: static=brand-blue,
+    state=AWS-orange, k8s=amber, docs=ink-mute.
+  - Geist + JetBrains Mono via Google Fonts CDN with system fallback
+    (`font-display: swap`).
+  - Subtle dot-grid canvas background (matches kuberly-web
+    `.dot-grid-dim`).
+  - Sidebar uses card pattern: `bg-card`, `ink-line` border,
+    `radius-lg` 22px, modal lift shadow.
+- **BUMP:** apm.yml 0.23.0 → 0.24.0.
+
 ## v0.23.0 — 2026-05-05
 
 - **NEW:** cytoscape.js compound-node graph viz replaces vis.js force-graph

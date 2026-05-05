@@ -2498,6 +2498,9 @@ _GRAPH_HTML_TEMPLATE = string.Template(r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <title>kuberly-stack Knowledge Graph</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.1/dist/cytoscape.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/layout-base@2.0.1/layout-base.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cose-base@2.2.0/cose-base.min.js"></script>
@@ -2506,25 +2509,49 @@ _GRAPH_HTML_TEMPLATE = string.Template(r"""<!DOCTYPE html>
 <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
 <style>
   :root {
-    --bg: #0f1419;
-    --glass: rgba(15, 20, 25, 0.8);
-    --panel-border: rgba(255, 255, 255, 0.08);
-    --text: #e5e7eb;
-    --muted: #9ca3af;
-    --static: #60a5fa;
-    --state: #34d399;
-    --k8s: #fbbf24;
-    --docs: #c4b5fd;
-    --edge: #374151;
-    --edge-hover: #9ca3af;
-    --selected: #22d3ee;
+    /* Surfaces (kuberly-web globals.css) */
+    --bg:        #090b0d;
+    --bg-raised: #11151a;
+    --bg-card:   #161b22;
+    --bg-elev:   #1c222b;
+
+    /* Type */
+    --ink:        #ffffff;
+    --ink-soft:   rgba(255,255,255,0.85);
+    --ink-mute:   rgba(255,255,255,0.65);
+    --ink-faint:  rgba(255,255,255,0.45);
+    --ink-line:   rgba(255,255,255,0.10);
+    --ink-line-soft: rgba(255,255,255,0.06);
+
+    /* Brand accents */
+    --blue:       #1677ff;
+    --blue-soft:  #3c89e8;
+    --blue-deep:  #1554ad;
+    --blue-glow:  rgba(22,119,255,0.22);
+    --aws:        #ff9900;
+    --aws-soft:   #ffb84d;
+    --aws-deep:   #cc7a00;
+    --aws-glow:   rgba(255,153,0,0.22);
+    --amber:      #d89614;
+    --amber-warm: #f5b042;
+
+    --radius:     14px;
+    --radius-lg:  22px;
+
+    /* Lifts */
+    --lift-blue:   0 30px 80px -40px rgba(22,119,255,0.18);
+    --lift-modal:  0 30px 80px -30px rgba(0,0,0,0.6);
+
+    /* Fonts */
+    --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    font-family: var(--font-sans);
     background: var(--bg);
-    color: var(--text);
+    color: var(--ink);
     overflow: hidden;
   }
   #topbar {
@@ -2533,158 +2560,202 @@ _GRAPH_HTML_TEMPLATE = string.Template(r"""<!DOCTYPE html>
     height: 56px;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 16px;
     padding: 0 20px;
-    background: var(--glass);
+    background: rgba(15,20,25,0.72);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--panel-border);
+    border-bottom: 1px solid var(--ink-line);
     z-index: 10;
     font-size: 13px;
   }
-  #topbar .brand { font-weight: 600; letter-spacing: 0.2px; }
-  #topbar .stats { color: var(--muted); font-size: 12px; }
+  #topbar .brand { display: flex; align-items: center; gap: 12px; }
+  #topbar .brand .logo { display: inline-flex; color: var(--ink); }
+  #topbar .brand .wordmark {
+    font-family: var(--font-sans);
+    font-weight: 600; font-size: 15px;
+    letter-spacing: -0.02em; color: var(--ink);
+  }
+  #topbar .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--ink-faint);
+    padding: 2px 8px; border: 1px solid var(--ink-line); border-radius: 999px;
+  }
+  #topbar .controls { display: flex; align-items: center; gap: 12px; }
+  #topbar .stats { color: var(--ink-mute); font-size: 12px; font-family: var(--font-mono); }
   #search {
     background: rgba(255,255,255,0.04);
-    color: var(--text);
-    border: 1px solid var(--panel-border);
+    color: var(--ink);
+    border: 1px solid var(--ink-line);
     padding: 6px 10px;
-    border-radius: 6px;
+    border-radius: var(--radius);
+    font-family: var(--font-sans);
     font-size: 13px;
     width: 220px;
     outline: none;
   }
-  #search:focus { border-color: var(--selected); }
-  .layer-toggles { display: flex; gap: 10px; align-items: center; }
-  .layer-toggles label {
+  #search:focus { border-color: var(--blue); }
+  .layer-toggles { display: flex; gap: 6px; align-items: center; }
+  .layer-toggle {
     display: inline-flex; align-items: center; gap: 6px;
-    font-size: 12px; cursor: pointer;
-    padding: 4px 10px; border-radius: 14px;
-    background: rgba(255,255,255,0.03);
-    border: 1px solid var(--panel-border);
-    user-select: none;
+    padding: 5px 10px; border-radius: 999px;
+    font-family: var(--font-mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--ink-soft);
+    border: 1px solid var(--ink-line);
+    cursor: pointer; user-select: none;
+    transition: all 0.15s ease;
   }
-  .layer-toggles input { accent-color: var(--selected); }
-  .swatch {
-    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-  }
-  .swatch.static { background: var(--static); }
-  .swatch.state  { background: var(--state); }
-  .swatch.k8s    { background: var(--k8s); }
-  .swatch.docs   { background: var(--docs); }
+  .layer-toggle.active { background: rgba(255,255,255,0.04); }
+  .layer-toggle.inactive { opacity: 0.45; }
+  .layer-toggle input { display: none; }
+  .layer-toggle .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .layer-toggle[data-layer=static] .dot { background: var(--blue); }
+  .layer-toggle[data-layer=state]  .dot { background: var(--aws); }
+  .layer-toggle[data-layer=k8s]    .dot { background: var(--amber); }
+  .layer-toggle[data-layer=docs]   .dot { background: var(--ink-mute); }
   #layout-select {
     background: rgba(255,255,255,0.04);
-    color: var(--text);
-    border: 1px solid var(--panel-border);
+    color: var(--ink);
+    border: 1px solid var(--ink-line);
     padding: 6px 10px;
-    border-radius: 6px;
+    border-radius: var(--radius);
+    font-family: var(--font-sans);
     font-size: 13px;
     cursor: pointer;
   }
   #cy {
     position: fixed;
     top: 56px; left: 0; right: 0; bottom: 0;
-    background: var(--bg);
+    background-color: var(--bg);
+    background-image: radial-gradient(circle, rgba(255,255,255,0.05) 1px, transparent 1.4px);
+    background-size: 22px 22px;
   }
   #sidebar {
     position: fixed;
-    top: 56px; right: 0; bottom: 0;
+    top: 72px; right: 16px; bottom: 16px;
     width: 320px;
-    background: var(--glass);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border-left: 1px solid var(--panel-border);
-    transform: translateX(100%);
+    background: var(--bg-card);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius-lg);
+    transform: translateX(calc(100% + 32px));
     transition: transform 180ms ease-out;
     overflow-y: auto;
-    padding: 18px;
+    padding: 24px;
     font-size: 13px;
+    color: var(--ink);
+    box-shadow: var(--lift-modal);
     z-index: 9;
   }
   #sidebar.open { transform: translateX(0); }
   #sidebar h2 {
-    font-size: 14px; font-weight: 600; margin-bottom: 10px;
+    font-size: 13px; font-weight: 500; letter-spacing: -0.01em;
+    color: var(--ink); margin-bottom: 12px;
     word-break: break-all; line-height: 1.3;
+    font-family: var(--font-mono);
   }
   #sidebar .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
   #sidebar .chip {
-    font-size: 11px; padding: 3px 9px; border-radius: 10px;
-    background: rgba(255,255,255,0.05);
-    border: 1px solid var(--panel-border);
-    color: var(--muted);
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 8px; border-radius: 999px;
+    font-family: var(--font-mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--ink-mute);
+    border: 1px solid var(--ink-line);
+    background: rgba(255,255,255,0.04);
   }
-  #sidebar .chip.layer-static { color: var(--static); border-color: rgba(96,165,250,0.4); }
-  #sidebar .chip.layer-state  { color: var(--state);  border-color: rgba(52,211,153,0.4); }
-  #sidebar .chip.layer-k8s    { color: var(--k8s);    border-color: rgba(251,191,36,0.4); }
-  #sidebar .chip.layer-docs   { color: var(--docs);   border-color: rgba(196,181,253,0.4); }
+  #sidebar .chip.layer-static { color: var(--blue);       border-color: rgba(22,119,255,0.30); background: rgba(22,119,255,0.08); }
+  #sidebar .chip.layer-state  { color: var(--aws);        border-color: rgba(255,153,0,0.30); background: rgba(255,153,0,0.08); }
+  #sidebar .chip.layer-k8s    { color: var(--amber-warm); border-color: rgba(245,176,66,0.30); background: rgba(245,176,66,0.08); }
+  #sidebar .chip.layer-docs   { color: var(--ink-mute);   border-color: var(--ink-line);      background: rgba(255,255,255,0.04); }
   #sidebar h3 {
-    font-size: 11px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.5px;
-    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 10px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-faint);
     margin: 14px 0 6px;
   }
   #sidebar details {
     background: rgba(255,255,255,0.02);
-    border: 1px solid var(--panel-border);
-    border-radius: 6px;
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
     padding: 8px 10px;
   }
   #sidebar details summary {
-    cursor: pointer; font-size: 12px; color: var(--muted);
+    cursor: pointer; font-size: 12px; color: var(--ink-mute);
+    font-family: var(--font-mono);
   }
-  #sidebar .attrs { font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 11px; line-height: 1.5; word-break: break-all; }
-  #sidebar .attrs .k { color: var(--muted); }
-  #sidebar .attrs .v { color: var(--text); }
+  #sidebar .attrs { font-family: var(--font-mono); font-size: 11px; line-height: 1.5; word-break: break-all; }
+  #sidebar .attrs .k { color: var(--ink-faint); }
+  #sidebar .attrs .v { color: var(--ink); }
   #sidebar .edges a {
     display: block; padding: 4px 6px; border-radius: 4px;
-    color: var(--text); text-decoration: none; font-size: 12px;
+    color: var(--ink-soft); text-decoration: none; font-size: 12px;
+    font-family: var(--font-mono);
     word-break: break-all;
   }
-  #sidebar .edges a:hover { background: rgba(34,211,238,0.08); color: var(--selected); }
-  #sidebar .edges .rel { color: var(--muted); font-size: 10px; margin-left: 4px; }
+  #sidebar .edges a:hover { background: rgba(22,119,255,0.10); color: var(--blue); }
+  #sidebar .edges .rel { color: var(--ink-faint); font-size: 10px; margin-left: 4px; }
   #sidebar .actions { display: flex; gap: 8px; margin-top: 14px; }
-  #sidebar button {
+  #sidebar .btn {
     flex: 1;
-    background: rgba(34,211,238,0.08);
-    color: var(--selected);
-    border: 1px solid rgba(34,211,238,0.3);
-    padding: 8px 10px;
-    border-radius: 6px;
-    font-size: 12px;
-    cursor: pointer;
-    font-family: inherit;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 8px 14px; border-radius: var(--radius);
+    background: var(--blue); color: white; border: none;
+    font-family: var(--font-sans); font-weight: 500; font-size: 13px;
+    cursor: pointer; transition: background 0.15s ease;
   }
-  #sidebar button:hover { background: rgba(34,211,238,0.15); }
+  #sidebar .btn:hover { background: var(--blue-soft); }
+  #sidebar .btn:active { background: var(--blue-deep); }
+  #sidebar .btn.ghost {
+    background: transparent; color: var(--ink-soft);
+    border: 1px solid var(--ink-line);
+  }
+  #sidebar .btn.ghost:hover { background: rgba(255,255,255,0.04); border-color: var(--ink-line-soft); }
   #sidebar #close-btn {
     position: absolute; top: 12px; right: 12px;
-    background: transparent; border: none; color: var(--muted);
+    background: transparent; border: none; color: var(--ink-faint);
     cursor: pointer; font-size: 18px; padding: 4px 8px;
     flex: none;
   }
+  #sidebar #close-btn:hover { color: var(--ink); }
   .pulse { animation: pulse 0.9s ease-in-out 3; }
   @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(34,211,238,0.6); }
-    50%      { box-shadow: 0 0 0 6px rgba(34,211,238,0.0); }
+    0%, 100% { box-shadow: 0 0 0 0 rgba(22,119,255,0.6); }
+    50%      { box-shadow: 0 0 0 6px rgba(22,119,255,0.0); }
   }
 </style>
 </head>
 <body>
 
 <div id="topbar">
-  <div class="brand">kuberly-graph</div>
-  <input id="search" type="text" placeholder="Search nodes..." autocomplete="off" />
-  <div class="layer-toggles">
-    <label><input type="checkbox" data-layer="static" checked><span class="swatch static"></span>static</label>
-    <label><input type="checkbox" data-layer="state" checked><span class="swatch state"></span>state</label>
-    <label><input type="checkbox" data-layer="k8s"><span class="swatch k8s"></span>k8s</label>
-    <label><input type="checkbox" data-layer="docs" checked><span class="swatch docs"></span>docs</label>
+  <div class="brand">
+    <span class="logo">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M11.3647 2.92733C11.7021 2.73258 12.1173 2.73119 12.4559 2.92369L19.8781 7.14305C20.2213 7.33813 20.4333 7.70247 20.4333 8.09721V16.5758C20.4333 16.9679 20.224 17.3303 19.8844 17.5263L19.5582 17.7146V18.6654C19.5582 19.4476 19.3772 20.2041 19.0449 20.8836L21.1282 19.6809C22.2376 19.0404 22.9211 17.8568 22.9211 16.5758V8.09721C22.9211 6.80772 22.2286 5.61756 21.1076 4.98029L13.6854 0.760927C12.5793 0.132111 11.2228 0.136639 10.1208 0.772828L7.66167 2.19263C6.55236 2.83309 5.86899 4.01672 5.86899 5.29765V13.7891C5.86899 15.07 6.55236 16.2536 7.66167 16.8941L12.2536 19.5452L14.1436 18.4542V17.7638L8.90558 14.7396C8.56599 14.5435 8.3568 14.1812 8.3568 13.7891V5.29765C8.3568 4.90553 8.56599 4.54319 8.90558 4.34713L11.3647 2.92733Z" fill="currentColor"/>
+        <path d="M11.6634 4.44474L9.82021 5.5089V6.25864L15.0519 9.23272C15.395 9.42781 15.607 9.79214 15.607 10.1869V18.6655C15.607 19.0576 15.3978 19.4199 15.0582 19.616L12.5307 21.0751C12.1911 21.2711 11.7727 21.2711 11.4332 21.075L4.07931 16.8293C3.73972 16.6332 3.53053 16.2709 3.53053 15.8788V7.38732C3.53053 6.9952 3.73972 6.63287 4.07931 6.43681L4.40558 6.24844V5.29767C4.40558 4.51538 4.58658 3.75886 4.91902 3.07933L2.83541 4.2823C1.72609 4.92277 1.04272 6.10639 1.04272 7.38732V15.8788C1.04272 17.1597 1.72609 18.3433 2.83541 18.9838L10.1893 23.2295C11.2985 23.87 12.6652 23.87 13.7745 23.2296L16.302 21.7706C17.4114 21.1301 18.0948 19.9464 18.0948 18.6655V10.1869C18.0948 8.8974 17.4023 7.70723 16.2813 7.06996L11.6634 4.44474Z" fill="currentColor"/>
+      </svg>
+    </span>
+    <span class="wordmark">kuberly-graph</span>
+    <span class="eyebrow">v0.24.0</span>
   </div>
-  <select id="layout-select" title="Layout algorithm">
-    <option value="fcose" selected>fcose (compound force)</option>
-    <option value="dagre">dagre (hierarchy)</option>
-    <option value="concentric">concentric</option>
-  </select>
-  <span class="stats" id="stats"></span>
+  <div class="controls">
+    <input id="search" type="text" placeholder="Search nodes..." autocomplete="off" />
+    <div class="layer-toggles">
+      <label class="layer-toggle active" data-layer="static"><input type="checkbox" data-layer="static" checked><span class="dot"></span>static</label>
+      <label class="layer-toggle active" data-layer="state"><input type="checkbox" data-layer="state" checked><span class="dot"></span>state</label>
+      <label class="layer-toggle inactive" data-layer="k8s"><input type="checkbox" data-layer="k8s"><span class="dot"></span>k8s</label>
+      <label class="layer-toggle active" data-layer="docs"><input type="checkbox" data-layer="docs" checked><span class="dot"></span>docs</label>
+    </div>
+    <select id="layout-select" title="Layout algorithm">
+      <option value="fcose" selected>fcose (compound force)</option>
+      <option value="dagre">dagre (hierarchy)</option>
+      <option value="concentric">concentric</option>
+    </select>
+    <span class="stats" id="stats"></span>
+  </div>
 </div>
 
 <div id="cy"></div>
@@ -2698,11 +2769,31 @@ _GRAPH_HTML_TEMPLATE = string.Template(r"""<!DOCTYPE html>
 const NODES = $NODES_JSON;
 const EDGES = $EDGES_JSON;
 
+// Single source of truth: read brand tokens from CSS custom properties at
+// runtime. Cytoscape inline styles can't use var(), so we read once and
+// inject as constants into the cytoscape style array.
+const _root = getComputedStyle(document.documentElement);
+function _v(name) { return _root.getPropertyValue(name).trim(); }
+
+const BRAND = {
+  bg:         _v("--bg"),
+  ink:        _v("--ink"),
+  inkMute:    "rgba(255,255,255,0.65)",  // --ink-mute (computed value)
+  inkFaint:   "rgba(255,255,255,0.45)",
+  inkLine:    "rgba(255,255,255,0.10)",
+  inkLineHi:  "rgba(255,255,255,0.18)",
+  blue:       _v("--blue"),
+  blueSoft:   _v("--blue-soft"),
+  aws:        _v("--aws"),
+  amber:      _v("--amber"),
+  amberWarm:  _v("--amber-warm"),
+};
+
 const LAYER_COLORS = {
-  static: "#60a5fa",
-  state:  "#34d399",
-  k8s:    "#fbbf24",
-  docs:   "#c4b5fd",
+  static: BRAND.blue,       // declared HCL/JSON — brand primary
+  state:  BRAND.aws,        // terraform-managed AWS resources
+  k8s:    BRAND.amber,      // live cluster workloads
+  docs:   BRAND.inkMute,    // metadata — opacity hierarchy
 };
 
 document.getElementById("stats").textContent =
@@ -2718,10 +2809,11 @@ const cy = cytoscape({
       style: {
         "label": "data(label)",
         "font-size": 9,
-        "color": "#e5e7eb",
+        "font-family": "Geist, -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
+        "color": BRAND.ink,
         "text-valign": "center",
         "text-halign": "center",
-        "text-outline-color": "#0f1419",
+        "text-outline-color": BRAND.bg,
         "text-outline-width": 2,
         "background-color": "#999",
         "width": 18,
@@ -2738,14 +2830,15 @@ const cy = cytoscape({
       style: {
         "background-color": "rgba(255,255,255,0.04)",
         "background-opacity": 1,
-        "border-color": "rgba(255,255,255,0.10)",
+        "border-color": BRAND.inkLine,
         "border-width": 1,
         "shape": "round-rectangle",
         "label": "data(label)",
         "text-valign": "top",
         "text-halign": "center",
         "font-size": 10,
-        "color": "#9ca3af",
+        "font-family": "Geist, -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
+        "color": BRAND.inkFaint,
         "padding": 14,
         "min-zoomed-font-size": 8,
       },
@@ -2753,10 +2846,10 @@ const cy = cytoscape({
     {
       selector: "node.compound.env",
       style: {
-        "border-color": "rgba(255,255,255,0.18)",
+        "border-color": BRAND.inkLineHi,
         "background-color": "rgba(255,255,255,0.02)",
         "font-size": 12,
-        "color": "#e5e7eb",
+        "color": BRAND.ink,
       },
     },
     // k8s OFF by default — hide both leaf nodes and their compound parents.
@@ -2768,8 +2861,8 @@ const cy = cytoscape({
       selector: "edge",
       style: {
         "width": 1.2,
-        "line-color": "#374151",
-        "target-arrow-color": "#374151",
+        "line-color": BRAND.inkLine,
+        "target-arrow-color": BRAND.inkLine,
         "target-arrow-shape": "triangle",
         "curve-style": "bezier",
         "arrow-scale": 0.7,
@@ -2782,22 +2875,22 @@ const cy = cytoscape({
       selector: "node:selected",
       style: {
         "border-width": 3,
-        "border-color": "#22d3ee",
+        "border-color": BRAND.blue,
         "background-color": "data(color)",
       },
     },
-    { selector: "node.match", style: { "border-width": 2, "border-color": "#22d3ee" } },
+    { selector: "node.match", style: { "border-width": 2, "border-color": BRAND.blue } },
     {
       selector: "node.upstream",
-      style: { "border-width": 3, "border-color": "#f87171", "background-color": "#f87171" },
+      style: { "border-width": 3, "border-color": BRAND.aws, "background-color": BRAND.aws },
     },
     {
       selector: "node.downstream",
-      style: { "border-width": 3, "border-color": "#22d3ee" },
+      style: { "border-width": 3, "border-color": BRAND.blue },
     },
     {
       selector: "edge.highlight",
-      style: { "line-color": "#22d3ee", "target-arrow-color": "#22d3ee", "opacity": 1, "width": 2 },
+      style: { "line-color": BRAND.blue, "target-arrow-color": BRAND.blue, "opacity": 1, "width": 2 },
     },
   ],
   layout: { name: "fcose", quality: "default", animate: false, randomize: true,
@@ -2818,6 +2911,11 @@ applyLayerVisibility("k8s", false);
 document.querySelectorAll(".layer-toggles input").forEach(cb => {
   cb.addEventListener("change", () => {
     applyLayerVisibility(cb.dataset.layer, cb.checked);
+    const pill = cb.closest(".layer-toggle");
+    if (pill) {
+      pill.classList.toggle("active", cb.checked);
+      pill.classList.toggle("inactive", !cb.checked);
+    }
   });
 });
 
@@ -2904,8 +3002,8 @@ function renderSidebar(node) {
     <h3>Outgoing ($${outgoing.length})</h3>
     <div class="edges">$${outHtml}</div>
     <div class="actions">
-      <button id="blast-btn">Show blast radius</button>
-      <button id="center-btn">Center</button>
+      <button id="blast-btn" class="btn">Show blast radius</button>
+      <button id="center-btn" class="btn ghost">Center</button>
     </div>
   `;
   sidebar.classList.add("open");

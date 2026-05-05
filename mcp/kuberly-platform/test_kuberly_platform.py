@@ -1836,6 +1836,25 @@ class GraphHtmlVizTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_graph_html_contains_brand_logo(self):
+        """v0.24.0: rendered HTML embeds the kuberly LogoMark inline SVG."""
+        from kuberly_platform import write_graph_html
+
+        tmp, g = self._build_graph()
+        try:
+            with tempfile.TemporaryDirectory() as out:
+                out_path = Path(out)
+                write_graph_html(g, out_path)
+                html = (out_path / "graph.html").read_text(encoding="utf-8")
+                # First path of the LogoMark SVG (kuberly-web).
+                self.assertIn("M11.3647 2.92733", html,
+                    "expected kuberly LogoMark SVG path data in graph.html")
+                # Brand wordmark + version eyebrow.
+                self.assertIn("kuberly-graph", html)
+                self.assertIn("v0.24.0", html)
+        finally:
+            tmp.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
