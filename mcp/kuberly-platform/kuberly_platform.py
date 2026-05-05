@@ -1902,6 +1902,19 @@ def main():
     mc = sub.add_parser("mcp", help="Run as MCP server (stdio)")
     mc.add_argument("--repo", default=".", help="Path to kuberly-stack repo root")
 
+    # --- script (v0.14.2: Code Mode for kuberly-platform) ---
+    # Hydrates the cached graph from .claude/graph.json into a `g` variable, then
+    # exec()s a user-supplied Python snippet against it. Lets sub-agents chain
+    # 5+ graph queries inside a SINGLE Bash tool call instead of N MCP round-trips.
+    # Inspired by Anthropic's Programmatic Tool Calling and Cloudflare Code Mode —
+    # the same pattern, scoped to our platform module since MCP-connector tools
+    # are not yet eligible for API-level PTC (per Anthropic's PTC spec).
+    sc = sub.add_parser("script", help="Run a Python snippet against the cached graph (Code Mode)")
+    sc.add_argument("--repo", default=".", help="Path to kuberly-stack repo root")
+    sc.add_argument("-c", "--code", help="Python snippet (overrides stdin)")
+    sc.add_argument("--json", action="store_true",
+                    help="Wrap the snippet's last expression in json.dumps; helpful for terse output")
+
     args = parser.parse_args()
 
     # Default to generate if no subcommand
@@ -1966,6 +1979,32 @@ def main():
         # (post_apm_install.sh in kuberly-skills) regenerates the cache on
         # every commit. Bootstrap path: run `generate` once after `apm install`.
         run_mcp_server(load_graph_cached(args.repo))
+
+    elif args.command == "script":
+        # Code Mode: hydrate the cached graph and exec a Python snippet against it.
+        # Replaces N MCP round-trips with one Bash call. The snippet has these
+        # names in scope:
+        #   g    — KuberlyPlatform instance, loaded from .claude/graph.json
+        #   json — module
+        # Anything you `print()` is the result. Snippet may use any of g's
+        # methods: query_nodes, get_neighbors, blast_radius, shortest_path,
+        # cross_env_drift, compute_stats, _resolve_modules, scope_for_change.
+        import json as _json_mod
+        g = load_graph_cached(args.repo)
+        code = args.code if args.code else sys.stdin.read()
+        if not code or not code.strip():
+            print("script: no code (pass via -c or stdin)", file=sys.stderr)
+            sys.exit(2)
+        # Sandbox is intentionally minimal — exec runs in this process. Sub-
+        # agents calling this from Bash are already trusted by the harness.
+        env = {"g": g, "json": _json_mod, "__name__": "__kuberly_script__"}
+        try:
+            exec(compile(code, "<kuberly-script>", "exec"), env)
+        except SystemExit:
+            raise
+        except Exception as exc:
+            print(f"script-error: {type(exc).__name__}: {exc}", file=sys.stderr)
+            sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
