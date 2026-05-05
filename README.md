@@ -30,6 +30,7 @@ The remaining skills assume the kuberly-stack layout (Terragrunt monorepo, OpenS
 |------|---------|
 | `.apm/skills/<name>/` | Each skill is a directory with **`SKILL.md`** at the leaf (flat layout for APM deploy). |
 | `.apm/cursor/rules/*.mdc` | Canonical **Cursor** rules; copied to the consumer's **`.cursor/rules/`** by **`scripts/sync_cursor_rules.sh`** after **`apm install`**. |
+| `.apm/cursor/commands/*.md` | Slash-command prompts (**`/opsx-*`**, **`/kub-*`**, …); copied to **`.cursor/commands/`** and **`.claude/commands/`** by **`scripts/sync_agent_commands.sh`** after **`apm install`** (same files for Cursor and Claude Code). |
 | `agents/<name>.md` | Persona subagent definitions (orchestrator's roster). Synced into the consumer's `.claude/agents/` via `scripts/sync_agents.sh` after `apm install`. |
 | `scripts/init_agent_session.py` | Manage `.agents/prompts/<session>/` directories (filesystem-based shared memory for the orchestrator and personas). |
 | `scripts/sync_agents.sh` | Copy `agents/*.md` from the apm cache to the consumer's `.claude/agents/`. |
@@ -49,6 +50,7 @@ Skills follow the [Agent Skills](https://agentskills.io) layout: each skill is a
 | **`kuberly-stack-context`** | First orientation in the monorepo |
 | **`infra-bootstrap-mandatory`** | **MANDATORY** at session start — `apm install`, feature branch, PR back to merge base. Run this before any file edit. |
 | **`components-vs-applications`** | `components/` vs `applications/` and RAG / retrieval hints |
+| **`application-types-and-deploy-paths`** | App JSON shapes (`argo-app`, `ecs`, `lambda`, …) → correct module and render pipeline |
 | **`kuberly-gitops-execution-model`** | Kuberly-side plan/apply from git; branch ↔ many clusters & app envs |
 | **`short-session-memory`** | Ephemeral debug loop vs durable git / OpenSpec / PR notes |
 | **`detect-runtime-from-shared-infra`** | Decide ECS vs EKS vs Lambda from JSON |

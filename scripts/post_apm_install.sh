@@ -14,6 +14,8 @@
 #   2. Merge canonical hook + MCP entries into .claude/settings.json,
 #      .mcp.json, .cursor/hooks.json, .cursor/mcp.json
 #   2b. Copy canonical Cursor rules from .apm/cursor/rules/ -> .cursor/rules/
+#   2c. Copy slash commands from .apm/cursor/commands/ -> .cursor/commands/ and
+#       .claude/commands/ (same files for Cursor + Claude Code)
 #   3. Ensure the pre-commit framework's git hook is installed (so the
 #      consumer's .pre-commit-config.yaml entries — including
 #      ensure-apm-skills — actually fire on commits)
@@ -59,6 +61,9 @@ SYNC_CLAUDE="$PKG/scripts/sync_claude_config.py"
 
 RULES_SYNC="$PKG/scripts/sync_cursor_rules.sh"
 [[ -f "$RULES_SYNC" ]] && bash "$RULES_SYNC"
+
+CMD_SYNC="$PKG/scripts/sync_agent_commands.sh"
+[[ -f "$CMD_SYNC" ]] && bash "$CMD_SYNC"
 
 # 3. Pre-commit framework: ensure git hook is installed.
 # The consumer's .pre-commit-config.yaml lists ensure-apm-skills (which calls

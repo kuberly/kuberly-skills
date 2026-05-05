@@ -29,14 +29,41 @@ for f in "${files[@]}"; do
   fi
 done
 
+# Slash commands (Cursor + Claude): .apm/cursor/commands/*.md
+cmd_dir=".apm/cursor/commands"
+if [[ -d "$cmd_dir" ]]; then
+  shopt -s nullglob
+  for f in "$cmd_dir"/*.md; do
+    [[ -f "$f" ]] || continue
+    if ! head -n 1 "$f" | grep -q '^---$'; then
+      echo "ERROR: $f — missing opening --- frontmatter"
+      failed=1
+      continue
+    fi
+    if ! grep -q '^name:' "$f" || ! grep -q '^description:' "$f"; then
+      echo "ERROR: $f — frontmatter must include name: and description:"
+      failed=1
+    fi
+  done
+  shopt -u nullglob
+fi
+
 # All markdown under .apm/skills must end with \n so infra forks' pre-commit (end-of-file-fixer)
 # does not fight APM after `apm install` (Caveman + skills deploy).
 if ! python3 <<'PY'
 from pathlib import Path
-root = Path(".apm/skills")
-if not root.is_dir():
-    raise SystemExit(0)
-bad = [str(p) for p in root.rglob("*.md") if p.is_file() and not p.read_bytes().endswith(b"\n")]
+roots = [Path(".apm/skills"), Path(".apm/cursor/commands")]
+bad = []
+for root in roots:
+    if not root.is_dir():
+        continue
+    if root.name == "commands":
+        paths = list(root.glob("*.md"))
+    else:
+        paths = list(root.rglob("*.md"))
+    for p in paths:
+        if p.is_file() and not p.read_bytes().endswith(b"\n"):
+            bad.append(str(p))
 if bad:
     print("ERROR: these files must end with a newline (POSIX text file):")
     for x in bad:

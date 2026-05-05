@@ -263,6 +263,7 @@ Persona definitions live in **`kuberly-skills`** (this package) at `agents/<name
 
 - **Persona subagents** — `scripts/sync_agents.sh` copies `agents/*.md` into both `.claude/agents/` and `.cursor/agents/` so Claude Code and Cursor pick them up.
 - **Hooks + MCP** — `scripts/sync_claude_config.py` merges canonical entries (pointing at the apm cache path) into all four runtime config files: `.claude/settings.json`, `.mcp.json`, `.cursor/hooks.json`, `.cursor/mcp.json`. Idempotent. Preserves user-authored entries that don't reference the apm cache.
+- **Slash commands** — `scripts/sync_agent_commands.sh` copies `.apm/cursor/commands/*.md` into `.cursor/commands/` and `.claude/commands/` after `apm install` (single source in **kuberly-skills**; do not fork-edit those paths long-term).
 
 apm-cli 0.9.x ships its own MCP/hook integrators for Cursor / Codex / VS Code, but on Claude Code's project-scope config and on `.cursor/hooks.json` it reports integration without actually writing. The sync scripts bridge that gap deterministically.
 

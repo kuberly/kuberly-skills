@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.32.7 — 2026-05-06
+
+- **CHANGE:** Slash **commands** (OpenSpec **`/opsx-*`** and operator **`/kub-*`**) now
+  live only under **`.apm/cursor/commands/`** in this package. **`post_apm_install.sh`**
+  runs **`scripts/sync_agent_commands.sh`**, which copies them into the consumer’s
+  **`.cursor/commands/`** and **`.claude/commands/`** (same markdown for Cursor and
+  Claude Code). Forks should not maintain duplicate command sources outside APM.
+- **BUMP:** apm.yml 0.32.6 → 0.32.7.
+
 ## v0.32.6 — 2026-05-06
 
 - **FIX:** Cursor **`.cursor/hooks.json`** — **`beforeSubmitPrompt`** entries must be
