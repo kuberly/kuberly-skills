@@ -2754,6 +2754,7 @@ def run_mcp_server(graph: KuberlyPlatform):
         },
         {
             "name": "shortest_path",
+            "defer_loading": True,
             "description": "Find the shortest path between two nodes in the graph.",
             "inputSchema": {
                 "type": "object",
@@ -2767,6 +2768,7 @@ def run_mcp_server(graph: KuberlyPlatform):
         },
         {
             "name": "drift",
+            "defer_loading": True,
             "description": "Show cross-environment drift: components and applications that exist in some environments but not others.",
             "inputSchema": {
                 "type": "object",
@@ -2775,6 +2777,7 @@ def run_mcp_server(graph: KuberlyPlatform):
         },
         {
             "name": "stats",
+            "defer_loading": True,
             "description": "Get graph statistics: node/edge counts, critical nodes (most depended upon), and longest dependency chains.",
             "inputSchema": {
                 "type": "object",
@@ -2867,6 +2870,7 @@ def run_mcp_server(graph: KuberlyPlatform):
         },
         {
             "name": "session_set_status",
+            "defer_loading": True,
             "description": "Mutate status.json: mark a persona or phase as queued/running/done/blocked/skipped. Auto-detects whether `target` is a persona or phase id; phase status auto-rolls-up from its personas. Call this immediately before launching an Agent() (status='running') and immediately after it returns (status='done' or 'blocked').",
             "inputSchema": {
                 "type": "object",
