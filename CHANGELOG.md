@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.32.8 — 2026-05-06
+
+- **FIX:** **`.apm/cursor/commands/kub-graph-refresh.md`** — drop Markdown hard-break
+  trailing spaces so consumer **pre-commit** `trailing-whitespace` does not rewrite
+  synced **`.cursor/commands/`** / **`.claude/commands/`** on every commit.
+- **BUMP:** apm.yml 0.32.7 → 0.32.8.
+
 ## v0.32.7 — 2026-05-06
 
 - **CHANGE:** Slash **commands** (OpenSpec **`/opsx-*`** and operator **`/kub-*`**) now
