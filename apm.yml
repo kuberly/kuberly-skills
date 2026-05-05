@@ -3,7 +3,7 @@
 #   - git@github.com:kuberly/kuberly-skills.git#vX.Y.Z   (SSH)
 #   - github.com/kuberly/kuberly-skills#vX.Y.Z           (HTTPS)
 name: kuberly-skills
-version: 0.32.0
+version: 0.32.1
 description: >-
   Kuberly org agent skills for kuberly-stack and customer forks (Cursor, Claude Code, Codex).
 type: hybrid
@@ -20,7 +20,9 @@ dependencies:
       transport: stdio
       command: python3
       args:
-        - "${CLAUDE_PLUGIN_ROOT}/mcp/kuberly-platform/kuberly_platform.py"
+        # Repo-relative path so Cursor/VS Code MCP (cwd = workspace) resolve it.
+        # Claude Code project `.mcp.json` is merged by sync_claude_config.py with the same layout.
+        - apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/kuberly_platform.py
         - mcp
         - --repo
         - "."

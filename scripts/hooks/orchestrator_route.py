@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook: nudge the main agent toward `agent-orchestrator`.
+"""Pre-submit hook: nudge the main agent toward `agent-orchestrator`.
+
+Runs on Claude Code ``UserPromptSubmit`` and Cursor ``beforeSubmitPrompt``.
 
 Reads the hook payload from stdin, classifies the prompt as trivial vs.
 non-trivial infra work, performs a pre-flight graph existence check, and
@@ -23,6 +25,7 @@ import json
 import os
 import re
 import sys
+from typing import Any
 
 # --- classification tables -------------------------------------------------
 
@@ -101,10 +104,10 @@ def _emit_silent_exit(code: int = 0) -> None:
     sys.exit(code)
 
 
-def _emit_context(text: str) -> None:
+def _emit_context(text: str, hook_event_name: str) -> None:
     payload = {
         "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
+            "hookEventName": hook_event_name,
             "additionalContext": text,
         }
     }
@@ -134,13 +137,21 @@ def _looks_trivial(prompt: str, lower: str) -> bool:
     return False
 
 
-def _graph_path() -> str:
-    """Locate `.kuberly/graph.json` relative to CLAUDE_PROJECT_DIR or cwd."""
-    root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+def _repo_root_from_payload(payload: dict[str, Any]) -> str:
+    """Workspace root: Cursor sends ``workspace_roots``; Claude sets ``CLAUDE_PROJECT_DIR``."""
+    roots = payload.get("workspace_roots")
+    if isinstance(roots, list) and roots and isinstance(roots[0], str):
+        return roots[0]
+    return os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+
+
+def _graph_path_for_payload(payload: dict[str, Any]) -> str:
+    """Locate ``.kuberly/graph.json`` under the resolved repo root."""
+    root = _repo_root_from_payload(payload)
     return os.path.join(root, ".kuberly", "graph.json")
 
 
-def _preflight_graph_check(lower: str):
+def _preflight_graph_check(lower: str, graph_path: str):
     """Return (present_block, absent_block) strings, or ('', '').
 
     `present_block` lists entities that DO have matching nodes (as a graph
@@ -159,7 +170,7 @@ def _preflight_graph_check(lower: str):
         return "", ""
 
     try:
-        with open(_graph_path(), "r", encoding="utf-8") as fh:
+        with open(graph_path, "r", encoding="utf-8") as fh:
             graph = json.load(fh)
     except Exception:
         return "", ""
@@ -234,10 +245,15 @@ def main() -> None:
     if not any(k in lower for k in INFRA_KEYWORDS):
         _emit_silent_exit(0)
 
-    present_block, absent_block = _preflight_graph_check(lower)
+    hook_event = payload.get("hook_event_name")
+    if not isinstance(hook_event, str) or not hook_event.strip():
+        hook_event = "UserPromptSubmit"
+
+    graph_path = _graph_path_for_payload(payload)
+    present_block, absent_block = _preflight_graph_check(lower, graph_path)
     nudge = NUDGE_BASE + present_block + absent_block
 
-    _emit_context(nudge)
+    _emit_context(nudge, hook_event)
 
 
 if __name__ == "__main__":

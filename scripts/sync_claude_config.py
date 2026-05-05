@@ -9,7 +9,7 @@ it merges canonical entries — pointing at that apm cache path — into:
 
   - `.claude/settings.json`  (Claude Code hooks)
   - `.mcp.json`              (Claude Code project-scope MCP servers)
-  - `.cursor/hooks.json`     (Cursor hooks: UserPromptSubmit + sessionStart graph refresh)
+  - `.cursor/hooks.json`     (Cursor hooks: beforeSubmitPrompt + sessionStart graph refresh)
   - `.cursor/mcp.json`       (Cursor project-scope MCP servers, stdio transport)
 
 Canonical Cursor rules ship under **kuberly-skills** `.apm/cursor/rules/` and are copied into
@@ -55,15 +55,11 @@ KUBERLY_OWNED_MARKERS = (
 
 # --- canonical entries ------------------------------------------------------
 
-def _hooks_block() -> dict[str, list[dict[str, Any]]]:
-    """The hooks kuberly-skills owns. Same shape for Claude and Cursor.
+def _hooks_block_claude() -> dict[str, list[dict[str, Any]]]:
+    """Hooks owned for Claude Code (`.claude/settings.json`).
 
-    Only UserPromptSubmit lives here. SessionStart was previously used to
-    regenerate `.kuberly/graph.json` on every Claude Code session start —
-    v0.13.0 moved that to the pre-commit pipeline (post_apm_install.sh)
-    so each commit captures a fresh graph state and the MCP server reads
-    the cached file at startup. SessionStart-on-every-Claude-launch is no
-    longer needed and was removed to cut cold-start time.
+    Claude uses the ``UserPromptSubmit`` event. SessionStart-on-every-launch
+    graph regen was dropped in v0.13.0 (graph is refreshed in post_apm_install).
     """
     return {
         "UserPromptSubmit": [
@@ -74,6 +70,29 @@ def _hooks_block() -> dict[str, list[dict[str, Any]]]:
                         "command": (
                             f'python3 "$CLAUDE_PROJECT_DIR/{APM_CACHE_PATH}'
                             f'/scripts/hooks/orchestrator_route.py"'
+                        ),
+                        "timeout": 5,
+                    }
+                ]
+            }
+        ],
+    }
+
+
+def _hooks_block_cursor() -> dict[str, list[dict[str, Any]]]:
+    """Hooks owned for Cursor (`.cursor/hooks.json`).
+
+    Cursor 0.4x+ expects ``beforeSubmitPrompt`` (``UserPromptSubmit`` is rejected).
+    Command uses a repo-relative script path; hooks run with cwd = workspace root.
+    """
+    return {
+        "beforeSubmitPrompt": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": (
+                            f"python3 {APM_CACHE_PATH}/scripts/hooks/orchestrator_route.py"
                         ),
                         "timeout": 5,
                     }
@@ -187,12 +206,7 @@ def _matcher_is_kuberly_owned(matcher: Any) -> bool:
 
 
 def _merge_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
-    """Merge kuberly hooks into a settings/hooks dict (idempotent).
-
-    Same logic for Claude (`.claude/settings.json`) and Cursor
-    (`.cursor/hooks.json`) — both runtimes use the same hooks shape.
-    Per-runtime extras (e.g. Cursor's required top-level `version: 1`)
-    are layered by the target's wrapper merger; see `_merge_cursor_hooks_file`.
+    """Merge kuberly hooks into Claude Code ``.claude/settings.json`` (idempotent).
 
     Events ever owned by kuberly-skills are cleaned even if we no longer
     add hooks to them (so the v0.13.0 drop of SessionStart actually
@@ -203,7 +217,7 @@ def _merge_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
     out.setdefault("hooks", {})
     if not isinstance(out["hooks"], dict):
         return existing  # something weird — refuse to clobber
-    new_block = _hooks_block()
+    new_block = _hooks_block_claude()
     for event in HISTORICAL_EVENTS:
         current = out["hooks"].get(event, [])
         if not isinstance(current, list):
@@ -222,31 +236,43 @@ def _merge_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
 
 
 def _merge_cursor_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
-    """Cursor-flavored variant of `_merge_hooks_file`.
+    """Merge hooks for Cursor ``.cursor/hooks.json``.
 
-    Cursor 3.x rejects `.cursor/hooks.json` without a top-level
-    `version: 1` field — the file is reported as invalid and ALL hooks
-    silently fail to load (incl. our orchestrator-route + graph-refresh).
-    Caught by Cursor's bugbot in the v0.12 PR review.
+    Cursor 3.x requires top-level ``version: 1``. Cursor's supported
+    pre-submit hook name is ``beforeSubmitPrompt`` (not Claude's
+    ``UserPromptSubmit``); we migrate by stripping kuberly-owned matchers
+    from both keys and installing the canonical block on
+    ``beforeSubmitPrompt`` only.
 
-    `_merge_hooks_file` produces only `{"hooks": {...}}`; this wrapper
-    layers `version: 1` on top. Idempotent — if the user already has a
-    different version they wrote themselves, we don't override it.
+    ``sessionStart`` is merged separately (graph refresh shell hook).
     """
-    inner = _merge_hooks_file(existing)
-    # Build a new ordered dict so `version` lands at the top — easier
-    # to read, matches Cursor's example schema. Preserve user's value
-    # if they already set one.
+    out = json.loads(json.dumps(existing))
+    out.setdefault("hooks", {})
+    if not isinstance(out["hooks"], dict):
+        return existing
+    cursor_block = _hooks_block_cursor()
+    # Clean legacy Cursor key + install canonical beforeSubmitPrompt.
+    for event in ("UserPromptSubmit", "beforeSubmitPrompt"):
+        current = out["hooks"].get(event, [])
+        if not isinstance(current, list):
+            current = []
+        filtered = [m for m in current if not _matcher_is_kuberly_owned(m)]
+        kuberly_matchers = cursor_block.get(event, [])
+        merged = filtered + kuberly_matchers
+        if merged:
+            out["hooks"][event] = merged
+        else:
+            out["hooks"].pop(event, None)
     version = existing.get("version") if isinstance(existing, dict) else None
     if not isinstance(version, (int, str)):
         version = 1
-    out: dict[str, Any] = {"version": version}
-    for k, v in inner.items():
+    ordered: dict[str, Any] = {"version": version}
+    for k, v in out.items():
         if k == "version":
             continue
-        out[k] = v
-    _merge_cursor_session_start_hooks(out)
-    return out
+        ordered[k] = v
+    _merge_cursor_session_start_hooks(ordered)
+    return ordered
 
 
 def _merge_mcp_file(existing: dict[str, Any], server_entry: dict[str, Any]) -> dict[str, Any]:

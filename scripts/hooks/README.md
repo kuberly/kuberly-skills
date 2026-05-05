@@ -5,7 +5,7 @@ repo's `.claude/settings.json` references them in-place under the APM cache —
 no copy step needed. Versioning is automatic: an `apm install` of a new
 `kuberly-skills` tag refreshes the script.
 
-## `orchestrator_route.py` — UserPromptSubmit hook
+## `orchestrator_route.py` — pre-submit orchestrator hook
 
 Pre-flight router for the `agent-orchestrator` flow. Reads the user prompt,
 classifies it as trivial vs. infra-relevant, and looks up named entities
@@ -48,6 +48,15 @@ never block the prompt), and runs in well under 50 ms.
 `.kuberly/graph.json` relative to it. If your repo vendors `kuberly_platform.py`
 under a different path, the only requirement is that `.kuberly/graph.json`
 exists — the SessionStart hook (also from this package) generates it.
+
+### Cursor (`.cursor/hooks.json`)
+
+Use the **`beforeSubmitPrompt`** event (not `UserPromptSubmit`, which Cursor
+rejects). After `apm install`, run **`sync_claude_config.py`** from this
+package — it merges the canonical entry. The hook command uses a path
+relative to the workspace root; stdin includes **`workspace_roots`** and
+**`hook_event_name`**, which the script uses to locate `.kuberly/graph.json` and
+to echo the correct **`hookSpecificOutput.hookEventName`**.
 
 ### Updating the named-entity list
 

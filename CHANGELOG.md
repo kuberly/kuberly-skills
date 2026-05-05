@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.32.1 — 2026-05-06
+
+- **FIX:** Cursor **hooks** — use supported event name **`beforeSubmitPrompt`**
+  (replaces invalid **`UserPromptSubmit`** in `.cursor/hooks.json`).
+- **FIX:** Cursor **MCP** / APM — `apm.yml` MCP args no longer use
+  **`${CLAUDE_PLUGIN_ROOT}`** (Claude-only; Cursor left it literal and the
+  server failed to start). Use repo-relative **`apm_modules/kuberly/kuberly-skills/...`**.
+- **FIX:** **`orchestrator_route.py`** — echo **`hook_event_name`** from stdin
+  (Cursor sends **`beforeSubmitPrompt`**); resolve **`.kuberly/graph.json`**
+  via **`workspace_roots`** when present.
+- **BUMP:** apm.yml 0.32.0 → 0.32.1.
+
 ## v0.32.0 — 2026-05-06
 
 - **CHORE:** Version bump for APM consumer pins (no MCP behavior change vs v0.31.0).
