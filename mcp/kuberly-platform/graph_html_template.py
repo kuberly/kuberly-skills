@@ -569,6 +569,26 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     padding: 1px 6px;
     color: var(--blue-soft);
   }
+  .chart-card .chart-empty .kbd-copy {
+    margin-top: 8px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    border-radius: 6px;
+    padding: 4px 10px;
+    transition: border-color 120ms, background 120ms;
+  }
+  .chart-card .chart-empty .kbd-copy:hover {
+    border-color: var(--blue-soft);
+    background: rgba(22,119,255,0.10);
+  }
+  .chart-card .chart-empty .kbd-tick {
+    margin-left: 6px;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 9px;
+  }
 
   /* IAM section */
   .iam-banner {
@@ -1438,14 +1458,43 @@ function renderDashboardCharts(cats) {
     const pk = (cats && cats.identity && cats.identity.totals && cats.identity.totals.principal_kinds) || {};
     const labels = Object.keys(pk);
     if (!labels.length) {
-      /* Replace canvas with helpful placeholder rather than blank box. */
+      /* Replace canvas with helpful placeholder rather than blank box.
+       * Click-to-copy: clicking the command copies it to clipboard with
+       * a visible "copied" tick — saves the user from typing the long
+       * apm_modules path. */
       const card = el.parentElement;
       if (card && !card.querySelector(".chart-empty")) {
+        const cmd = "python3 apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/state_graph.py generate --env prod --output .kuberly/state_overlay_prod.json";
         const ph = document.createElement("div");
         ph.className = "chart-empty";
-        ph.innerHTML = "no trust principals in current state overlay<br><span>regenerate with <span class=\"kbd\">state_graph.py generate</span> for trust details</span>";
+        ph.innerHTML =
+          'no trust principals in current state overlay<br>' +
+          '<span style="margin-top:6px;display:inline-block">click the command to copy &amp; run with AWS SSO active:</span><br>' +
+          '<button type="button" class="kbd kbd-copy" data-copy="' + cmd.replace(/"/g, "&quot;") + '" title="Copy to clipboard">' +
+            'state_graph.py generate <span class="kbd-tick">copy</span>' +
+          '</button>' +
+          '<br><span style="margin-top:4px;display:inline-block;color:var(--ink-faint)">requires AWS SSO authenticated for this account</span>';
         el.style.display = "none";
         card.appendChild(ph);
+        const btn = ph.querySelector(".kbd-copy");
+        if (btn) {
+          btn.addEventListener("click", async () => {
+            const text = btn.getAttribute("data-copy") || "";
+            try {
+              await navigator.clipboard.writeText(text);
+              const tick = btn.querySelector(".kbd-tick");
+              if (tick) {
+                tick.textContent = "copied ✓";
+                setTimeout(() => { tick.textContent = "copy"; }, 1600);
+              }
+            } catch (e) {
+              /* Clipboard API may be blocked on file:// — fall back to
+               * select-all so the user can ⌘C manually. */
+              const r = document.createRange(); r.selectNodeContents(btn);
+              const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+            }
+          });
+        }
       }
       return;
     }
@@ -1594,7 +1643,7 @@ function renderDashboard() {
       <h2>Infrastructure essentials</h2>
       <div class="chart-row">
         <div class="chart-card"><h4>Category share</h4><canvas id="chart-cat-share"></canvas></div>
-        <div class="chart-card"><h4>IAM trust principals</h4><canvas id="chart-iam-principals"></canvas></div>
+        <div class="chart-card"><h4>IAM role trust — by principal kind</h4><canvas id="chart-iam-principals"></canvas></div>
         <div class="chart-card"><h4>Top resource types</h4><canvas id="chart-top-rtypes"></canvas></div>
       </div>
       <div class="stack-flow">

@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.34.4 — 2026-05-06
+
+- **RENAME:** dashboard chart "IAM trust principals" → **"IAM role
+  trust — by principal kind"** for clearer intent.
+- **NEW:** when the IAM trust chart is empty (state overlay still on
+  schema v2, no `principals` extracted), the placeholder now shows a
+  **click-to-copy** button with the full `state_graph.py generate`
+  command. Click → command goes to clipboard with a "copied ✓"
+  acknowledgement; on `file://` (where the Clipboard API may be
+  blocked), the button text is select-all'd so the operator can ⌘C
+  manually.
+- **BUMP:** apm.yml 0.34.3 → 0.34.4.
+
 ## v0.34.3 — 2026-05-06
 
 Layer-pill rename + recolor, filter-panel UX fixes.
