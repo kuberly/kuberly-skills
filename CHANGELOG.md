@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.34.2 — 2026-05-06
+
+Filtering / grouping / IAM detail. The Graph view gets explorer-style
+controls; the Dashboard gets a dedicated IAM section.
+
+### Graph view — filters + group-by
+
+- **NEW:** **Group by** selector — `source_layer` (default), `environment`,
+  `node type`, `resource type`, `module`, `provider`. Drives both node
+  color (palette mapped from a stable hash) and the cluster-force
+  attractor positions, so swapping axes reflows the layout.
+- **NEW:** **Filters panel** (toggle button in the Graph topbar) with
+  multi-select chip lists for **Environment**, **Module**, **Resource
+  type**, **Node type**. Empty filter set = pass-through; populated set
+  = whitelist. Counts shown next to each chip so big buckets are
+  obvious.
+- **NEW:** **Reset** button clears all filters + search + blast and
+  recenters the camera.
+- **REFACTOR:** Cluster offsets are now recomputed every time data or
+  group-by changes — `recomputeClusterOffsets()` distributes group
+  centroids on a circle (`R = 280..360` based on N), with z-jitter so
+  groups don't collapse into a flat plane. Skipped when `N > 12`
+  (would just produce a uniform spread).
+- `applyDataAndRefresh()` now reheats the d3 simulation so nodes
+  migrate to their new cluster positions on filter / group-by change.
+
+### Dashboard — IAM identity & access section
+
+- **NEW:** Top-level **"IAM identity & access"** section between
+  *Infrastructure essentials* and *Coverage*. Roles grouped by source
+  module, each module a collapsible card listing every role with name,
+  env, attached + inline policy counts, and trust-principal pills
+  (color-coded by kind: service / aws / federated). OIDC providers and
+  IRSA bindings (k8s ServiceAccount → AWS role) shown below.
+- **NEW:** `_compute_iam_view` aggregates roles + attachments + OIDC +
+  IRSA into one payload — works whether or not schema-v3 essentials
+  are loaded. Without essentials, every role still appears with its
+  address / module / env; principals/policies show "regen state for
+  trust principals" hint instead of being silently empty.
+- **NEW:** "IAM trust principals" chart shows a helpful placeholder
+  when the principal_kinds totals are empty (state overlay still on
+  schema v2) — directs the operator to **`state_graph.py generate`**.
+
+- **BUMP:** apm.yml 0.34.1 → 0.34.2.
+
 ## v0.34.1 — 2026-05-06
 
 Visual polish on the v0.34.0 3D graph — the dim, scattered cluster

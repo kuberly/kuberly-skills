@@ -2695,6 +2695,142 @@ def _compute_categories(resource_nodes: list[dict]) -> dict:
     return by_cat
 
 
+def _compute_iam_view(resource_nodes: list[dict], edges: list[dict],
+                      all_nodes: dict[str, dict]) -> dict:
+    """Aggregate every IAM role into a per-module grouped payload for the
+    dedicated IAM dashboard section.
+
+    Output:
+      {
+        "has_essentials": bool — true if any role carries schema-v3 principals
+        "total_roles": int,
+        "principals_total": int,
+        "principal_kinds": {service: 8, aws: 2, federated: 5, ...},
+        "groups": [
+          {
+            "module": "alb_controller",
+            "envs": ["prod"],
+            "roles": [
+              {"address": "...", "name": "...", "env": "...",
+               "principals": [...], "attached_policies": int, "policies_inline": int}
+            ],
+          },
+          ...
+        ],
+        "oidc_providers": [{"address": "...", "url": "...", "module": "..."}],
+        "irsa_bindings": copied from k8s view for cross-link convenience,
+      }
+
+    Even WITHOUT schema-v3 essentials, every role still shows up — just
+    without principals. The dashboard surfaces a "regen state for trust
+    principals" hint when has_essentials is False.
+    """
+    by_module: dict[str, dict] = defaultdict(lambda: {"roles": [], "envs": set()})
+    has_essentials = False
+    principal_kinds: dict[str, int] = defaultdict(int)
+    principals_total = 0
+    oidc_providers: list[dict] = []
+
+    # Count how many `aws_iam_role_policy_attachment` rows reference each
+    # role (by source-edge target) so we can surface "X attached policies"
+    # per role even without schema v3.
+    attach_per_role: dict[str, int] = defaultdict(int)
+    inline_per_role: dict[str, int] = defaultdict(int)
+    for n in resource_nodes:
+        rtype = n.get("resource_type") or ""
+        if rtype == "aws_iam_role_policy_attachment":
+            ess_list = n.get("essentials") or []
+            role_name = ""
+            if ess_list and isinstance(ess_list[0], dict):
+                role_name = (ess_list[0].get("role") or "")
+            # Without essentials we can only count, not link.
+            attach_per_role[role_name] += 1 if role_name else 0
+        elif rtype == "aws_iam_role_policy":
+            ess_list = n.get("essentials") or []
+            role_name = ""
+            if ess_list and isinstance(ess_list[0], dict):
+                role_name = (ess_list[0].get("role") or "")
+            inline_per_role[role_name] += 1 if role_name else 0
+
+    for n in resource_nodes:
+        rtype = n.get("resource_type") or ""
+        if rtype == "aws_iam_openid_connect_provider":
+            ess_list = n.get("essentials") or []
+            first = ess_list[0] if ess_list and isinstance(ess_list[0], dict) else {}
+            oidc_providers.append({
+                "address": n.get("label") or "",
+                "url": first.get("url") or "",
+                "client_id_list": first.get("client_id_list") or [],
+                "module": n.get("module") or "",
+                "env": n.get("environment") or "",
+            })
+            continue
+        if rtype != "aws_iam_role":
+            continue
+        ess_list = n.get("essentials") or []
+        first = ess_list[0] if ess_list and isinstance(ess_list[0], dict) else {}
+        role_name = first.get("name") or n.get("resource_name") or ""
+        principals = first.get("principals") or []
+        if isinstance(principals, list):
+            for p in principals:
+                if not isinstance(p, str) or ":" not in p:
+                    continue
+                principal_kinds[p.split(":", 1)[0]] += 1
+                principals_total += 1
+        if principals:
+            has_essentials = True
+        module = n.get("module") or ""
+        env = n.get("environment") or ""
+        bucket = by_module[module]
+        bucket["envs"].add(env)
+        bucket["roles"].append({
+            "address": n.get("label") or "",
+            "name": role_name,
+            "env": env,
+            "principals": principals if isinstance(principals, list) else [],
+            "max_session_duration": first.get("max_session_duration"),
+            "attached_policies": attach_per_role.get(role_name, 0),
+            "policies_inline": inline_per_role.get(role_name, 0),
+        })
+
+    groups = []
+    for mod in sorted(by_module):
+        b = by_module[mod]
+        b["roles"].sort(key=lambda r: (r["env"], r["name"]))
+        groups.append({
+            "module": mod,
+            "envs": sorted(b["envs"]),
+            "role_count": len(b["roles"]),
+            "principal_count": sum(len(r["principals"]) for r in b["roles"]),
+            "roles": b["roles"],
+        })
+    groups.sort(key=lambda g: -g["role_count"])
+
+    irsa_subset = []
+    for e in edges:
+        if e.get("relation") != "irsa_bound":
+            continue
+        sa = all_nodes.get(e["source"], {})
+        role = all_nodes.get(e["target"], {})
+        irsa_subset.append({
+            "sa": sa.get("k8s_name") or sa.get("label") or e["source"],
+            "ns": sa.get("k8s_namespace") or "",
+            "env": sa.get("environment") or "",
+            "role": role.get("label") or e["target"],
+        })
+    irsa_subset.sort(key=lambda x: (x["env"], x["ns"], x["sa"]))
+
+    return {
+        "has_essentials": has_essentials,
+        "total_roles": sum(g["role_count"] for g in groups),
+        "principals_total": principals_total,
+        "principal_kinds": dict(principal_kinds),
+        "groups": groups,
+        "oidc_providers": oidc_providers,
+        "irsa_bindings": irsa_subset[:200],
+    }
+
+
 def _compute_dashboard_data(
     graph: KuberlyPlatform, out_dir: Path | None = None
 ) -> dict:
@@ -3090,6 +3226,7 @@ def _compute_dashboard_data(
         },
         "state": state_summary,
         "categories": _compute_categories(resource_nodes),
+        "iam": _compute_iam_view(resource_nodes, edges, nodes),
         "longest_chains": [list(c) for c in stats.get("longest_chains", [])][:5],
     }
 

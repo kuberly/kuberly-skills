@@ -146,7 +146,8 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .layer-toggle[data-layer=state]  .dot { background: var(--aws); }
   .layer-toggle[data-layer=k8s]    .dot { background: var(--amber); }
   .layer-toggle[data-layer=docs]   .dot { background: var(--ink-mute); }
-  #graph-view-mode {
+  #graph-view-mode,
+  #graph-group-by {
     background: rgba(255,255,255,0.04);
     color: var(--ink);
     border: 1px solid var(--ink-line);
@@ -155,6 +156,87 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     font-size: 13px;
     cursor: pointer;
     max-width: min(280px, 42vw);
+  }
+  .filters-toggle, .filters-reset {
+    background: rgba(255,255,255,0.04);
+    color: var(--ink);
+    border: 1px solid var(--ink-line);
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .filters-toggle:hover, .filters-reset:hover { border-color: var(--blue-soft); }
+  .filters-toggle[aria-expanded=true] {
+    background: rgba(22,119,255,0.16);
+    border-color: var(--blue);
+    color: #fff;
+  }
+  /* Filter panel: drops down below the topbar when toggled. */
+  #graph-filter-panel {
+    position: fixed;
+    top: 56px; left: 0; right: 0;
+    z-index: 11;
+    background: rgba(11,14,18,0.96);
+    border-bottom: 1px solid var(--ink-line);
+    padding: 14px 20px 16px;
+    display: none;
+    grid-template-columns: 0.6fr 1fr 1fr 0.6fr;
+    gap: 18px;
+    backdrop-filter: blur(6px);
+  }
+  #graph-filter-panel:not([hidden]) { display: grid; }
+  body:not(.view-graph) #graph-filter-panel { display: none !important; }
+  .fp-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-faint);
+    margin-bottom: 6px;
+  }
+  .fp-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .fp-multi {
+    max-height: 96px;
+    overflow-y: auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
+    background: rgba(255,255,255,0.02);
+  }
+  .fp-chip {
+    user-select: none;
+    cursor: pointer;
+    background: rgba(255,255,255,0.04);
+    color: var(--ink-mute);
+    border: 1px solid var(--ink-line);
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+  }
+  .fp-chip:hover { color: var(--ink); }
+  .fp-chip.on {
+    background: rgba(22,119,255,0.16);
+    border-color: var(--blue);
+    color: #fff;
+  }
+  .fp-chip .ct {
+    color: var(--ink-faint);
+    margin-left: 5px;
+    font-size: 10px;
+  }
+  .fp-chip.on .ct { color: #cfe2ff; }
+  @media (max-width: 1100px) {
+    #graph-filter-panel { grid-template-columns: 1fr 1fr; }
   }
   #layout-badge {
     display: inline-flex;
@@ -442,6 +524,155 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     font-weight: 500;
   }
   .chart-card canvas { max-height: 200px !important; }
+  .chart-card .chart-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 180px;
+    color: var(--ink-faint);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-align: center;
+    line-height: 1.6;
+  }
+  .chart-card .chart-empty .kbd {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--ink-line);
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: var(--blue-soft);
+  }
+
+  /* IAM section */
+  .iam-banner {
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--ink-line);
+    background: var(--bg-card);
+    font-size: 12px;
+    margin-bottom: 14px;
+    line-height: 1.6;
+  }
+  .iam-banner.ok   { border-color: rgba(57,196,122,0.35); color: #b6e8c8; }
+  .iam-banner.warn { border-color: rgba(216,150,20,0.35); color: #f5d9a0; }
+  .iam-banner .kbd {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--ink-line);
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: var(--ink);
+  }
+  .iam-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 12px;
+  }
+  .iam-group {
+    background: var(--bg-card);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
+    padding: 10px 14px 14px;
+  }
+  .iam-group summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--ink-line-soft);
+    margin-bottom: 8px;
+    user-select: none;
+  }
+  .iam-group summary::-webkit-details-marker { display: none; }
+  .iam-mod {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    flex: 1;
+  }
+  .iam-counts {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--blue-soft);
+  }
+  .iam-envs {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--ink-faint);
+  }
+  .iam-roles {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .iam-role {
+    border-left: 2px solid rgba(255,153,0,0.35);
+    padding: 6px 0 6px 12px;
+  }
+  .iam-role-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .iam-role-name {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink);
+    word-break: break-all;
+  }
+  .iam-role-env {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--ink-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .iam-role-meta {
+    margin-top: 3px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .iam-meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--ink-mute);
+  }
+  .iam-oidc {
+    margin-top: 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
+    padding: 10px 14px 12px;
+  }
+  .iam-oidc-title {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-faint);
+    margin-bottom: 8px;
+  }
+  .iam-oidc-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .iam-oidc-row {
+    display: grid;
+    grid-template-columns: 1fr 1.5fr 1fr;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--ink-mute);
+    padding: 3px 0;
+    border-bottom: 1px solid var(--ink-line-soft);
+  }
+  .iam-oidc-row:last-child { border-bottom: none; }
+  .iam-oidc-row .iam-oidc-mod { color: var(--ink); }
 
   /* Compute → Data → Identity flow strip */
   .stack-flow {
@@ -837,8 +1068,36 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
       <option value="overview">Overview (module deps)</option>
       <option value="full" selected>Full graph</option>
     </select>
+    <select id="graph-group-by" title="Group nodes by — drives both color and cluster placement">
+      <option value="source_layer" selected>Group by layer</option>
+      <option value="environment">Group by env</option>
+      <option value="type">Group by node type</option>
+      <option value="resource_type">Group by resource type</option>
+      <option value="module">Group by module</option>
+      <option value="provider">Group by provider</option>
+    </select>
+    <button type="button" id="graph-filters-toggle" class="filters-toggle" aria-expanded="false">Filters ▾</button>
+    <button type="button" id="graph-reset" class="filters-reset" title="Clear filters and recenter">Reset</button>
     <span id="layout-badge" title="3D force-directed (d3-force-3d + three.js)">force · 3D</span>
     <span class="stats" id="stats"></span>
+  </div>
+  <div id="graph-filter-panel" hidden>
+    <div class="fp-section">
+      <div class="fp-label">Environment</div>
+      <div class="fp-row" id="fp-envs"></div>
+    </div>
+    <div class="fp-section">
+      <div class="fp-label">Module</div>
+      <div class="fp-multi" id="fp-modules"></div>
+    </div>
+    <div class="fp-section">
+      <div class="fp-label">Resource type</div>
+      <div class="fp-multi" id="fp-rtypes"></div>
+    </div>
+    <div class="fp-section">
+      <div class="fp-label">Node type</div>
+      <div class="fp-row" id="fp-ntypes"></div>
+    </div>
   </div>
 </div>
 
@@ -910,6 +1169,79 @@ function renderSortableTable(containerId, columns, rows, initialSort) {
     });
   }
   draw();
+}
+
+/* v0.34.2: Dedicated IAM section — every role grouped by module with
+ * its trust principals, attached/inline policy counts, and OIDC provider
+ * panel. When schema-v3 essentials aren't present yet, principals show a
+ * "regen state" hint instead of an empty pane. */
+function renderIamView(iam) {
+  if (!iam || !iam.groups || !iam.groups.length) {
+    return `<p style="color:var(--ink-faint)">No <span class="mono">aws_iam_role</span> resources in the state overlay.</p>`;
+  }
+  const banner = iam.has_essentials
+    ? `<div class="iam-banner ok">$${iam.total_roles} roles · $${iam.principals_total} trust principals across $${iam.groups.length} module$${iam.groups.length === 1 ? "" : "s"}</div>`
+    : `<div class="iam-banner warn">$${iam.total_roles} roles across $${iam.groups.length} module$${iam.groups.length === 1 ? "" : "s"} · trust principals not in current state overlay.<br><span class="mono">Run <span class="kbd">state_graph.py generate</span> to populate schema-v3 essentials.</span></div>`;
+  const principalChip = (p) => {
+    const m = /^([^:]+):(.*)$$/.exec(p);
+    const kind = m ? m[1] : "";
+    const val  = m ? m[2] : p;
+    return `<span class="principal-pill kind-$${esc(kind)}">$${esc(kind)} · $${esc(val)}</span>`;
+  };
+  const groupBlocks = iam.groups.map(g => {
+    const rolesRows = g.roles.map(r => {
+      const pillsHtml = (r.principals || []).slice(0, 16).map(principalChip).join("");
+      const principalsRow = pillsHtml
+        ? `<div class="row-pills">$${pillsHtml}</div>`
+        : (iam.has_essentials
+            ? `<div class="row-meta" style="color:var(--ink-faint)">no trust principals declared</div>`
+            : "");
+      const policyMeta = (r.attached_policies || r.policies_inline)
+        ? `<span class="iam-meta">$${r.attached_policies} attached · $${r.policies_inline} inline</span>`
+        : `<span class="iam-meta" style="color:var(--ink-faint)">policy count requires essentials</span>`;
+      const session = (typeof r.max_session_duration === "number")
+        ? `<span class="iam-meta">$${r.max_session_duration}s session</span>` : "";
+      return `<div class="iam-role">
+        <div class="iam-role-head">
+          <div class="iam-role-name">$${esc(r.name || r.address)}</div>
+          <div class="iam-role-env">$${esc(r.env || "—")}</div>
+        </div>
+        <div class="iam-role-meta">$${policyMeta}$${session}</div>
+        $${principalsRow}
+      </div>`;
+    }).join("");
+    return `<details class="iam-group" open>
+      <summary>
+        <span class="iam-mod">$${esc(g.module || "(no module)")}</span>
+        <span class="iam-counts">$${g.role_count} role$${g.role_count === 1 ? "" : "s"}$${g.principal_count ? ` · $${g.principal_count} principal$${g.principal_count === 1 ? "" : "s"}` : ""}</span>
+        <span class="iam-envs">$${(g.envs || []).map(esc).join(", ")}</span>
+      </summary>
+      <div class="iam-roles">$${rolesRows}</div>
+    </details>`;
+  }).join("");
+  /* Optional OIDC provider strip — small, useful for debugging IRSA. */
+  const oidcHtml = (iam.oidc_providers || []).length
+    ? `<div class="iam-oidc"><div class="iam-oidc-title">OIDC providers ($${iam.oidc_providers.length})</div><div class="iam-oidc-list">`
+      + iam.oidc_providers.map(o =>
+          `<div class="iam-oidc-row">
+             <span class="iam-oidc-mod">$${esc(o.module || "(no module)")} · $${esc(o.env || "—")}</span>
+             <span class="iam-oidc-url mono">$${esc(o.url || "—")}</span>
+             <span class="iam-oidc-clients mono">$${esc((o.client_id_list || []).slice(0, 4).join(", "))}</span>
+           </div>`).join("")
+      + "</div></div>"
+    : "";
+  /* IRSA bindings (k8s SA → role) belong here visually. */
+  const irsaHtml = (iam.irsa_bindings || []).length
+    ? `<div class="iam-oidc"><div class="iam-oidc-title">IRSA bindings ($${iam.irsa_bindings.length}) — k8s ServiceAccount → AWS role</div><div class="iam-oidc-list">`
+      + iam.irsa_bindings.slice(0, 50).map(b =>
+          `<div class="iam-oidc-row">
+             <span class="iam-oidc-mod">$${esc(b.env || "—")} · ns:$${esc(b.ns || "—")}</span>
+             <span class="iam-oidc-url mono">$${esc(b.sa)}</span>
+             <span class="iam-oidc-clients mono">→ $${esc(b.role)}</span>
+           </div>`).join("")
+      + "</div></div>"
+    : "";
+  return `$${banner}<div class="iam-groups">$${groupBlocks}</div>$${oidcHtml}$${irsaHtml}`;
 }
 
 /* v0.34.0: Build the small Mermaid flowchart that sits above the category
@@ -1050,7 +1382,18 @@ function renderDashboardCharts(cats) {
     if (!el) return;
     const pk = (cats && cats.identity && cats.identity.totals && cats.identity.totals.principal_kinds) || {};
     const labels = Object.keys(pk);
-    if (!labels.length) return;
+    if (!labels.length) {
+      /* Replace canvas with helpful placeholder rather than blank box. */
+      const card = el.parentElement;
+      if (card && !card.querySelector(".chart-empty")) {
+        const ph = document.createElement("div");
+        ph.className = "chart-empty";
+        ph.innerHTML = "no trust principals in current state overlay<br><span>regenerate with <span class=\"kbd\">state_graph.py generate</span> for trust details</span>";
+        el.style.display = "none";
+        card.appendChild(ph);
+      }
+      return;
+    }
     el.__chart = new Chart(el, {
       type: "bar",
       data: {
@@ -1190,6 +1533,11 @@ function renderDashboard() {
         <div class="mermaid" id="stack-flow-mmd">$${buildStackFlowDiagram(DASHBOARD.categories || {})}</div>
       </div>
       $${renderCategoryCards(DASHBOARD.categories || {})}
+    </section>
+
+    <section class="section">
+      <h2>IAM identity & access</h2>
+      $${renderIamView(DASHBOARD.iam || {})}
     </section>
 
     <section class="section">
@@ -1533,13 +1881,44 @@ function buildGraph3D() {
     viewMode = viewSel.value || "full";
   }
 
+  /* v0.34.2: filter sets — empty = no filter, populated = whitelist of values
+   * the node attribute must match. groupBy drives both color and cluster. */
   GRAPH_STATE = {
     layers: { static: true, state: true, k8s: false, docs: true },
     viewMode,
     search: "",
     selectedId: null,
     blast: null, /* {upstream:Set, downstream:Set, edges:Set, focus:id} */
+    groupBy: "source_layer",
+    filters: {
+      envs:    new Set(),
+      modules: new Set(),
+      rtypes:  new Set(),  /* resource_type from attrs */
+      ntypes:  new Set(),  /* node type — module / component / app / resource / k8s_resource / doc */
+    },
   };
+
+  /* Resolve a node's value for the current group-by axis. Used by both
+   * `nodeColorFn` (color picking) and the cluster force (centroid placement). */
+  function groupKey(node) {
+    const k = GRAPH_STATE.groupBy;
+    if (k === "source_layer") return node.source_layer || "?";
+    if (k === "type")         return node.type || "?";
+    if (k === "environment")  return (node.attrs && node.attrs.environment) || node.environment || "—";
+    if (k === "resource_type")return (node.attrs && node.attrs.resource_type) || node.resource_type || "—";
+    if (k === "module")       return (node.attrs && node.attrs.module) || node.module || "—";
+    if (k === "provider")     return (node.attrs && node.attrs.provider) || node.provider || "—";
+    return "?";
+  }
+  /* Fast read of common per-node fields irrespective of where attrs live —
+   * applies to both 3d-force-graph node objects (flat) and the original
+   * cytoscape-shaped data (nested under .attrs). */
+  function nodeAttr(node, key) {
+    if (!node) return "";
+    if (node[key]) return node[key];
+    if (node.attrs && node.attrs[key]) return node.attrs[key];
+    return "";
+  }
 
   function pickNodesForView(mode) {
     if (mode !== "overview") return ALL_NODES;
@@ -1547,11 +1926,20 @@ function buildGraph3D() {
     return mods.length >= 2 ? mods : ALL_NODES;
   }
 
+  function passesFilters(n) {
+    const f = GRAPH_STATE.filters;
+    if (f.envs.size    && !f.envs.has(nodeAttr(n, "environment") || "—")) return false;
+    if (f.modules.size && !f.modules.has(nodeAttr(n, "module") || "—"))   return false;
+    if (f.rtypes.size  && !f.rtypes.has(nodeAttr(n, "resource_type") || "—")) return false;
+    if (f.ntypes.size  && !f.ntypes.has(n.type || "—"))                    return false;
+    return true;
+  }
+
   function currentGraphData() {
     const baseNodes = pickNodesForView(GRAPH_STATE.viewMode);
-    const baseSet = new Set(baseNodes.map(n => n.id));
     const layers = GRAPH_STATE.layers;
-    const visibleNodes = baseNodes.filter(n => layers[n.source_layer] !== false);
+    const visibleNodes = baseNodes.filter(n =>
+      layers[n.source_layer] !== false && passesFilters(n));
     const visIds = new Set(visibleNodes.map(n => n.id));
     const links = ALL_LINKS_RAW.filter(l => {
       const s = typeof l.source === "object" ? l.source.id : l.source;
@@ -1577,8 +1965,28 @@ function buildGraph3D() {
   }
   refreshStats();
 
-  /* --- Color resolution: layer color, dim if blast active and not in path,
-       highlight if matches search or is the selected/focused node. ------- */
+  /* v0.34.2: when grouped by an axis other than source_layer, derive a
+   * stable color per group key from the SPIKE_PALETTE. source_layer keeps
+   * the original 4-layer brand colors. */
+  const GROUP_PALETTE = ["#1677ff", "#ff9900", "#a266ff", "#39c47a", "#3c89e8",
+                         "#f5b042", "#5fd098", "#7c5cff", "#22a1c4", "#ff5e9c",
+                         "#9aff5e", "#ffd700"];
+  const _groupColorMemo = new Map();
+  function groupColor(key) {
+    if (GRAPH_STATE.groupBy === "source_layer") {
+      return LAYER_COLORS[key] || "#999";
+    }
+    if (_groupColorMemo.has(key)) return _groupColorMemo.get(key);
+    /* Stable hash → palette index so colors don't shuffle across renders. */
+    let h = 0; const s = String(key || "");
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    const c = GROUP_PALETTE[Math.abs(h) % GROUP_PALETTE.length];
+    _groupColorMemo.set(key, c);
+    return c;
+  }
+
+  /* --- Color resolution: group color, dim if blast/search active and not
+       in the highlighted set, bright if matched. ------- */
   function nodeColorFn(node) {
     const id = node.id;
     if (GRAPH_STATE.search) {
@@ -1594,7 +2002,7 @@ function buildGraph3D() {
       if (b.downstream.has(id)) return LAYER_COLORS.static;
       return DIM_COLOR;
     }
-    return LAYER_COLORS[node.source_layer] || "#999";
+    return groupColor(groupKey(node));
   }
   function linkColorFn(link) {
     if (GRAPH_STATE.blast) {
@@ -1627,15 +2035,31 @@ function buildGraph3D() {
     const tid = typeof link.target === "object" ? link.target.id : link.target;
     return SPIKE_PALETTE[_hashStr((sid || "") + "|" + (tid || "")) % SPIKE_PALETTE.length];
   }
-  /* Build a per-source_layer cluster offset so each layer has its own
-     attractor in 3D space. Layers we don't show by default still get a
-     slot — when toggled on they'll pull in toward their position. */
-  const CLUSTER_OFFSETS = {
-    static: { x: -260, y:    0, z:    0 },
-    state:  { x:  260, y:    0, z:    0 },
-    k8s:    { x:    0, y:  220, z:  -60 },
-    docs:   { x:    0, y: -220, z:   60 },
-  };
+  /* v0.34.2: cluster offsets are recomputed whenever GRAPH_STATE.groupBy
+   * changes, so swapping "Group by" reflows the layout. Returns
+   * { offsets: {key→{x,y,z}}, cluster: bool }. cluster=false skips the
+   * d3 cluster force entirely (large-N groups would just produce a wide
+   * spread anyway). Limit: only cluster if 2 ≤ N ≤ 12. */
+  let CLUSTER_OFFSETS = {};
+  let CLUSTER_ACTIVE = true;
+  function recomputeClusterOffsets() {
+    const data = (Graph3D && Graph3D.graphData()) || { nodes: [] };
+    const keys = Array.from(new Set((data.nodes || []).map(groupKey)));
+    keys.sort();  /* stable ordering across reflows */
+    const N = keys.length;
+    CLUSTER_OFFSETS = {};
+    CLUSTER_ACTIVE = N >= 2 && N <= 12;
+    if (!CLUSTER_ACTIVE) return;
+    const R = N <= 4 ? 280 : N <= 8 ? 320 : 360;
+    keys.forEach((k, i) => {
+      const a = (i / N) * 2 * Math.PI;
+      CLUSTER_OFFSETS[k] = {
+        x: R * Math.cos(a),
+        y: R * Math.sin(a) * 0.7,
+        z: ((i % 2) ? -50 : 50),
+      };
+    });
+  }
 
   /* --- Mount ForceGraph3D --------------------------------------------- */
   const host = document.getElementById("graph-3d");
@@ -1682,10 +2106,11 @@ function buildGraph3D() {
     const link = Graph3D.d3Force("link");
     if (link && link.distance) link.distance(38);
     const clusterForce = (alpha) => {
+      if (!CLUSTER_ACTIVE) return;
       const data = Graph3D.graphData();
       if (!data || !data.nodes) return;
       data.nodes.forEach(n => {
-        const t = CLUSTER_OFFSETS[n.source_layer];
+        const t = CLUSTER_OFFSETS[groupKey(n)];
         if (!t) return;
         const k = alpha * 0.18;
         if (typeof n.x === "number") n.vx = (n.vx || 0) + (t.x - n.x) * k;
@@ -1697,6 +2122,7 @@ function buildGraph3D() {
   }
 
   Graph3D.graphData(currentGraphData());
+  recomputeClusterOffsets();
 
   /* Global neural-firing pulse: every ~1.6s nudge particle width up and
      back so the whole network looks like it's firing in waves. We also
@@ -1739,6 +2165,70 @@ function buildGraph3D() {
     Graph3D.graphData(currentGraphData());
     /* Force color refresh for the (possibly) new data set. */
     Graph3D.nodeColor(nodeColorFn).linkColor(linkColorFn);
+    recomputeClusterOffsets();
+    /* Reheat sim so nodes migrate to new cluster centroids. */
+    if (Graph3D.d3ReheatSimulation) Graph3D.d3ReheatSimulation();
+  }
+
+  /* v0.34.2: build the filter-panel chip lists from ALL_NODES values.
+   * Each section: a flex-wrap of chip elements; click toggles membership
+   * in the GRAPH_STATE.filters set for that axis. Counts shown after the
+   * label tell the user how big each bucket is. */
+  function buildFilterPanel() {
+    function tally(getter) {
+      const m = new Map();
+      ALL_NODES.forEach(n => {
+        const v = getter(n);
+        if (!v) return;
+        m.set(v, (m.get(v) || 0) + 1);
+      });
+      return Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
+    }
+    const sections = [
+      { id: "fp-envs",    set: "envs",
+        rows: tally(n => nodeAttr(n, "environment") || "") },
+      { id: "fp-modules", set: "modules",
+        rows: tally(n => nodeAttr(n, "module") || "") },
+      { id: "fp-rtypes",  set: "rtypes",
+        rows: tally(n => nodeAttr(n, "resource_type") || "") },
+      { id: "fp-ntypes",  set: "ntypes",
+        rows: tally(n => n.type || "") },
+    ];
+    sections.forEach(sec => {
+      const host = document.getElementById(sec.id);
+      if (!host) return;
+      host.innerHTML = "";
+      sec.rows.slice(0, 200).forEach(([val, count]) => {
+        const chip = document.createElement("span");
+        chip.className = "fp-chip";
+        chip.dataset.set = sec.set;
+        chip.dataset.value = val;
+        chip.innerHTML = `$${escapeHtml(val)}<span class="ct">$${count}</span>`;
+        chip.addEventListener("click", () => {
+          const s = GRAPH_STATE.filters[sec.set];
+          if (s.has(val)) s.delete(val); else s.add(val);
+          chip.classList.toggle("on", s.has(val));
+          applyDataAndRefresh();
+        });
+        host.appendChild(chip);
+      });
+    });
+  }
+  buildFilterPanel();
+
+  function resetFilters() {
+    Object.values(GRAPH_STATE.filters).forEach(s => s.clear());
+    GRAPH_STATE.search = "";
+    GRAPH_STATE.blast = null;
+    GRAPH_STATE.selectedId = null;
+    const sEl = document.getElementById("search");
+    if (sEl) sEl.value = "";
+    document.querySelectorAll("#graph-filter-panel .fp-chip.on")
+      .forEach(c => c.classList.remove("on"));
+    sidebar.classList.remove("open");
+    applyDataAndRefresh();
+    /* Recenter camera on the recomputed cluster. */
+    if (Graph3D) Graph3D.cameraPosition({ x: 0, y: 0, z: 520 }, { x: 0, y: 0, z: 0 }, 800);
   }
 
   function computeBlast(focusId) {
@@ -1851,6 +2341,32 @@ function buildGraph3D() {
         applyDataAndRefresh();
       });
     }
+    /* v0.34.2: Group-by selector — color + cluster axis. */
+    const groupSel = document.getElementById("graph-group-by");
+    if (groupSel) {
+      groupSel.addEventListener("change", () => {
+        if (!GRAPH_STATE) return;
+        GRAPH_STATE.groupBy = groupSel.value || "source_layer";
+        applyDataAndRefresh();
+      });
+    }
+    /* v0.34.2: Filters toggle button + reset. */
+    const filterToggle = document.getElementById("graph-filters-toggle");
+    const filterPanel  = document.getElementById("graph-filter-panel");
+    if (filterToggle && filterPanel) {
+      filterToggle.addEventListener("click", () => {
+        const open = filterPanel.hasAttribute("hidden") ? false : true;
+        if (open) {
+          filterPanel.setAttribute("hidden", "");
+          filterToggle.setAttribute("aria-expanded", "false");
+        } else {
+          filterPanel.removeAttribute("hidden");
+          filterToggle.setAttribute("aria-expanded", "true");
+        }
+      });
+    }
+    const resetBtn = document.getElementById("graph-reset");
+    if (resetBtn) resetBtn.addEventListener("click", resetFilters);
     searchEl.addEventListener("input", () => {
       if (!GRAPH_STATE) return;
       GRAPH_STATE.search = searchEl.value.trim().toLowerCase();
