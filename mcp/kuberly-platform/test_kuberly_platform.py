@@ -1265,6 +1265,202 @@ class K8sOverlayConsumerTests(unittest.TestCase):
         self.assertNotIn("ConfigMap", kinds)
 
 
+class K8sCRDExtractTests(unittest.TestCase):
+    """Per-CRD extractor coverage — Karpenter, ArgoCD, Istio."""
+
+    def setUp(self) -> None:
+        sg_path = _pkg if (_pkg / "k8s_graph.py").is_file() else _script_dir
+        if str(sg_path) not in sys.path:
+            sys.path.insert(0, str(sg_path))
+        import k8s_graph
+        self.kg = k8s_graph
+
+    def test_karpenter_nodepool_keeps_keys_drops_values(self) -> None:
+        np = {
+            "apiVersion": "karpenter.sh/v1", "kind": "NodePool",
+            "metadata": {"name": "default"},
+            "spec": {
+                "limits": {"cpu": "1000", "memory": "2000Gi"},
+                "disruption": {"consolidationPolicy": "WhenUnderutilized"},
+                "template": {"spec": {
+                    "nodeClassRef": {"kind": "EC2NodeClass", "name": "default"},
+                    "requirements": [
+                        {"key": "karpenter.k8s.aws/instance-family",
+                         "operator": "In", "values": ["m5", "SECRET-BOX"]},
+                    ],
+                }},
+            },
+            "status": {"resources": {}},
+        }
+        out = self.kg._extract_resource(np)
+        # Requirement VALUES never kept — just keys.
+        self.assertNotIn("SECRET-BOX", json.dumps(out))
+        self.assertEqual(out["node_class_name"], "default")
+        self.assertEqual(out["limits_cpu"], "1000")
+        self.assertEqual(out["consolidation_policy"], "WhenUnderutilized")
+        self.assertIn("karpenter.k8s.aws/instance-family", out["requirement_keys"])
+
+    def test_argocd_application_strips_credentials_in_repo_url(self) -> None:
+        app = {
+            "apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+            "metadata": {"name": "loki", "namespace": "argocd"},
+            "spec": {
+                "project": "default",
+                "source": {
+                    "repoURL": "https://user:LEAK_PWD@github.com/foo/bar",
+                    "path": "charts/loki",
+                    "targetRevision": "main",
+                },
+                "destination": {"server": "https://kubernetes.default.svc",
+                                "namespace": "monitoring"},
+            },
+            "status": {"sync": {"status": "Synced"}},
+        }
+        out = self.kg._extract_resource(app)
+        blob = json.dumps(out)
+        self.assertNotIn("LEAK_PWD", blob)
+        self.assertNotIn("user:", blob)
+        self.assertNotIn("Synced", blob)
+        self.assertEqual(out["source_repo"], "https://github.com/foo/bar")
+        self.assertEqual(out["dest_namespace"], "monitoring")
+
+    def test_istio_virtualservice_routes_extracted(self) -> None:
+        vs = {
+            "apiVersion": "networking.istio.io/v1", "kind": "VirtualService",
+            "metadata": {"name": "loki-vs", "namespace": "monitoring"},
+            "spec": {
+                "hosts": ["loki.example.com"],
+                "gateways": ["istio-system/main-gw"],
+                "http": [{"route": [{"destination": {
+                    "host": "loki-distributor.monitoring.svc.cluster.local",
+                    "port": {"number": 3100}}}]}],
+            },
+        }
+        out = self.kg._extract_resource(vs)
+        self.assertEqual(out["hosts"], ["loki.example.com"])
+        self.assertEqual(out["gateways"], ["istio-system/main-gw"])
+        self.assertEqual(out["routes"][0]["host"],
+                         "loki-distributor.monitoring.svc.cluster.local")
+        self.assertEqual(out["routes"][0]["port"], 3100)
+
+    def test_istio_gateway_drops_tls_secret_ref(self) -> None:
+        gw = {
+            "apiVersion": "networking.istio.io/v1", "kind": "Gateway",
+            "metadata": {"name": "main", "namespace": "istio-system"},
+            "spec": {
+                "selector": {"istio": "ingressgateway"},
+                "servers": [{
+                    "port": {"number": 443, "protocol": "HTTPS"},
+                    "hosts": ["*.example.com"],
+                    "tls": {"mode": "SIMPLE", "credentialName": "MUST-NOT-LEAK"},
+                }],
+            },
+        }
+        out = self.kg._extract_resource(gw)
+        self.assertNotIn("MUST-NOT-LEAK", json.dumps(out))
+        self.assertEqual(out["selector"], {"istio": "ingressgateway"})
+        self.assertEqual(out["servers"][0]["port"], 443)
+        self.assertEqual(out["servers"][0]["protocol"], "HTTPS")
+
+
+class K8sCRDConsumerTests(unittest.TestCase):
+    """End-to-end: CRD nodes + edges in the consumer graph."""
+
+    def setUp(self) -> None:
+        self.tmp = _fake_repo()
+        # Service in monitoring ns so VirtualService route_to has a target
+        Path(self.tmp.name, ".claude", "k8s_overlay_prod.json").parent.mkdir(
+            parents=True, exist_ok=True)
+        Path(self.tmp.name, ".claude", "k8s_overlay_prod.json").write_text(json.dumps({
+            "schema_version": 1, "generated_at": "2026-05-05T00:00:00Z",
+            "generator": "test",
+            "cluster": {"env": "prod", "name": "prod", "context": ""},
+            "namespaces": ["monitoring", "argocd", "istio-system"],
+            "resources": [
+                {"kind": "Service", "apiVersion": "v1",
+                 "namespace": "monitoring", "name": "loki-distributor",
+                 "labels": {}, "owner_refs": [],
+                 "selector": {"app": "loki"},
+                 "ports": [{"port": 3100, "protocol": "TCP"}],
+                 "service_type": "ClusterIP"},
+                # Karpenter — cluster-scoped (ns="")
+                {"kind": "NodePool", "apiVersion": "karpenter.sh/v1",
+                 "namespace": "", "name": "default",
+                 "labels": {}, "owner_refs": [],
+                 "node_class_kind": "EC2NodeClass", "node_class_name": "default",
+                 "limits_cpu": "1000", "limits_memory": "2000Gi",
+                 "consolidation_policy": "WhenUnderutilized",
+                 "requirement_keys": ["kubernetes.io/arch"]},
+                {"kind": "EC2NodeClass", "apiVersion": "karpenter.k8s.aws/v1",
+                 "namespace": "", "name": "default",
+                 "labels": {}, "owner_refs": [],
+                 "ami_family": "Bottlerocket", "iam_role": "KarpenterNodeRole"},
+                # ArgoCD
+                {"kind": "Application", "apiVersion": "argoproj.io/v1alpha1",
+                 "namespace": "argocd", "name": "loki",
+                 "labels": {}, "owner_refs": [],
+                 "argocd_project": "default",
+                 "source_repo": "https://github.com/foo/bar",
+                 "source_path": "charts/loki", "source_revision": "main",
+                 "dest_server": "https://kubernetes.default.svc",
+                 "dest_namespace": "monitoring"},
+                # Istio
+                {"kind": "VirtualService", "apiVersion": "networking.istio.io/v1",
+                 "namespace": "monitoring", "name": "loki-vs",
+                 "labels": {}, "owner_refs": [],
+                 "hosts": ["loki.example.com"],
+                 "gateways": ["istio-system/main-gw"],
+                 "routes": [{"host": "loki-distributor.monitoring.svc.cluster.local",
+                             "port": 3100}]},
+                {"kind": "Gateway", "apiVersion": "networking.istio.io/v1",
+                 "namespace": "istio-system", "name": "main-gw",
+                 "labels": {}, "owner_refs": [],
+                 "selector": {"istio": "ingressgateway"},
+                 "servers": [{"port": 443, "protocol": "HTTPS",
+                              "hosts": ["*.example.com"]}]},
+            ],
+        }) + "\n")
+        self.g = KuberlyPlatform(self.tmp.name)
+        self.g.build()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_crd_nodes_synthesized(self) -> None:
+        kinds = sorted({n.get("k8s_kind") for n in self.g.nodes.values()
+                        if n.get("type") == "k8s_resource"})
+        self.assertIn("NodePool", kinds)
+        self.assertIn("EC2NodeClass", kinds)
+        self.assertIn("Application", kinds)
+        self.assertIn("VirtualService", kinds)
+        self.assertIn("Gateway", kinds)
+
+    def test_nodepool_to_ec2nodeclass_edge(self) -> None:
+        edges = [(e["source"], e["target"]) for e in self.g.edges
+                 if e.get("relation") == "uses_node_class"]
+        self.assertIn(("k8s:prod//NodePool/default",
+                       "k8s:prod//EC2NodeClass/default"), edges)
+
+    def test_argocd_app_targets_namespace(self) -> None:
+        edges = [(e["source"], e["target"]) for e in self.g.edges
+                 if e.get("relation") == "targets_namespace"]
+        self.assertIn(("k8s:prod/argocd/Application/loki",
+                       "k8s_namespace:prod/monitoring"), edges)
+
+    def test_virtualservice_bound_to_gateway(self) -> None:
+        edges = [(e["source"], e["target"]) for e in self.g.edges
+                 if e.get("relation") == "bound_to_gateway"]
+        self.assertIn(("k8s:prod/monitoring/VirtualService/loki-vs",
+                       "k8s:prod/istio-system/Gateway/main-gw"), edges)
+
+    def test_virtualservice_routes_to_service(self) -> None:
+        edges = [(e["source"], e["target"]) for e in self.g.edges
+                 if e.get("relation") == "routes_to"]
+        # FQDN -> short svc name + ns extracted
+        self.assertIn(("k8s:prod/monitoring/VirtualService/loki-vs",
+                       "k8s:prod/monitoring/Service/loki-distributor"), edges)
+
+
 class DocsOverlayTests(unittest.TestCase):
     """Docs overlay (knowledge layer) — extraction + cross-link edges +
     find_docs + graph_index meta tool."""

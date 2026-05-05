@@ -398,6 +398,208 @@ def _extract_networkpolicy(obj: dict) -> dict:
     return {"pod_selector": pod_selector, "policy_types": policy_types}
 
 
+# ----- CRD extractors -------------------------------------------------
+# v0.21.0+: Karpenter, ArgoCD, Istio. Same security model — explicit
+# whitelist of structural fields, no values, no inlined secrets.
+
+_RE_HOSTNAME = re.compile(r"^[a-zA-Z0-9.*\-]{1,253}$")
+_RE_URL = re.compile(r"^[a-zA-Z][a-zA-Z0-9+\-.]{0,30}://[a-zA-Z0-9._\-/+@:]{1,512}$")
+_RE_RES_QTY = re.compile(r"^[0-9]+(?:\.[0-9]+)?[a-zA-Z]{0,5}$")
+_RE_REVISION = re.compile(r"^[a-zA-Z0-9._/+\-]{0,128}$")
+_RE_MTLS_MODE = re.compile(r"^(DISABLE|SIMPLE|MUTUAL|ISTIO_MUTUAL|UNSET|STRICT|PERMISSIVE)$")
+_RE_ARGOCD_ACTION = re.compile(r"^(ALLOW|DENY|AUDIT|CUSTOM)$")
+
+
+def _safe_url(value: object) -> str:
+    """Sanitize a URL to a safe substring. If it's a git URL like
+    `git@github.com:foo/bar.git`, also accept that. Returns "" if it
+    fails the regex."""
+    if not isinstance(value, str) or len(value) > 512:
+        return ""
+    # Strip user:pass from URLs in case operators inlined credentials
+    # (rare but possible). https://user:pass@host -> https://host
+    cleaned = re.sub(r"://[^/@]+@", "://", value)
+    if _RE_URL.match(cleaned):
+        return cleaned
+    # Accept git ssh form: git@host:owner/repo[.git]
+    if re.match(r"^[a-zA-Z0-9_-]+@[a-zA-Z0-9.\-]+:[a-zA-Z0-9._\-/]+$", cleaned):
+        return cleaned
+    return ""
+
+
+def _extract_karpenter_nodepool(obj: dict) -> dict:
+    spec = obj.get("spec", {}) or {}
+    template_spec = ((spec.get("template") or {}).get("spec") or {})
+    node_class = (template_spec.get("nodeClassRef") or {})
+    limits = spec.get("limits") or {}
+    disruption = spec.get("disruption") or {}
+    # Requirements are list of {key, operator, values}; we keep keys only
+    # to convey what dimensions the pool selects on, not the value lists
+    # (which can be long e.g. all m5 instance types).
+    req_keys: list[str] = []
+    for r in (template_spec.get("requirements") or [])[:32]:
+        if isinstance(r, dict):
+            k = _safe_str(r.get("key", ""), _RE_LABEL_KEY)
+            if k:
+                req_keys.append(k)
+    return {
+        "node_class_kind": _safe_str(node_class.get("kind", ""), _RE_KIND),
+        "node_class_name": _safe_str(node_class.get("name", ""), _RE_K8S_NAME),
+        "limits_cpu": _safe_str(str(limits.get("cpu", "")), _RE_RES_QTY),
+        "limits_memory": _safe_str(str(limits.get("memory", "")), _RE_RES_QTY),
+        "consolidation_policy": _safe_str(disruption.get("consolidationPolicy", ""),
+                                          re.compile(r"^[A-Za-z]{1,32}$")),
+        "requirement_keys": sorted(set(req_keys)),
+    }
+
+
+def _extract_karpenter_nodeclaim(obj: dict) -> dict:
+    spec = obj.get("spec", {}) or {}
+    node_class = (spec.get("nodeClassRef") or {})
+    return {
+        "node_class_kind": _safe_str(node_class.get("kind", ""), _RE_KIND),
+        "node_class_name": _safe_str(node_class.get("name", ""), _RE_K8S_NAME),
+    }
+
+
+def _extract_karpenter_ec2nodeclass(obj: dict) -> dict:
+    spec = obj.get("spec", {}) or {}
+    return {
+        "ami_family": _safe_str(spec.get("amiFamily", ""),
+                                 re.compile(r"^[A-Za-z0-9]{1,32}$")),
+        "iam_role": _safe_str(spec.get("role", ""), _RE_K8S_NAME),
+    }
+
+
+def _extract_argocd_application(obj: dict) -> dict:
+    spec = obj.get("spec", {}) or {}
+    source = spec.get("source") or {}
+    dest = spec.get("destination") or {}
+    return {
+        "argocd_project": _safe_str(spec.get("project", ""), _RE_K8S_NAME),
+        "source_repo": _safe_url(source.get("repoURL", "")),
+        "source_path": _safe_str(source.get("path", ""),
+                                  re.compile(r"^[a-zA-Z0-9._/\-+]{0,256}$")),
+        "source_revision": _safe_str(source.get("targetRevision", ""), _RE_REVISION),
+        "dest_server": _safe_url(dest.get("server", "")),
+        "dest_namespace": _safe_str(dest.get("namespace", ""), _RE_NS),
+    }
+
+
+def _extract_argocd_appproject(obj: dict) -> dict:
+    spec = obj.get("spec", {}) or {}
+    repos = []
+    for r in (spec.get("sourceRepos") or [])[:32]:
+        u = _safe_url(r) if isinstance(r, str) else ""
+        if u:
+            repos.append(u)
+    dests = []
+    for d in (spec.get("destinations") or [])[:32]:
+        if isinstance(d, dict):
+            ns = _safe_str(d.get("namespace", ""), _RE_NS)
+            srv = _safe_url(d.get("server", ""))
+            if ns or srv:
+                dests.append({"namespace": ns, "server": srv})
+    return {"source_repos": repos, "destinations": dests}
+
+
+def _extract_istio_virtualservice(obj: dict) -> dict:
+    spec = obj.get("spec", {}) or {}
+    hosts = []
+    for h in (spec.get("hosts") or [])[:32]:
+        v = _safe_str(h, _RE_HOSTNAME) if isinstance(h, str) else ""
+        if v:
+            hosts.append(v)
+    gateways = []
+    for g in (spec.get("gateways") or [])[:32]:
+        # Gateway refs can be `<name>` or `<ns>/<name>`.
+        if isinstance(g, str) and re.match(r"^[a-zA-Z0-9._/-]{1,256}$", g):
+            gateways.append(g)
+    routes: list[dict] = []
+    for http in (spec.get("http") or [])[:32]:
+        if not isinstance(http, dict):
+            continue
+        for route in (http.get("route") or [])[:8]:
+            if not isinstance(route, dict):
+                continue
+            dest = (route.get("destination") or {})
+            host = _safe_str(dest.get("host", ""), _RE_HOSTNAME)
+            port = (dest.get("port") or {}).get("number")
+            if host:
+                routes.append({
+                    "host": host,
+                    "port": port if isinstance(port, int) and 0 < port < 65536 else None,
+                })
+    return {"hosts": hosts, "gateways": gateways, "routes": routes}
+
+
+def _extract_istio_gateway(obj: dict) -> dict:
+    spec = obj.get("spec", {}) or {}
+    selector = _safe_dict_strings(spec.get("selector"), _RE_LABEL_KEY, _RE_LABEL_VAL)
+    servers: list[dict] = []
+    for s in (spec.get("servers") or [])[:16]:
+        if not isinstance(s, dict):
+            continue
+        port = s.get("port") or {}
+        port_num = port.get("number")
+        protocol = port.get("protocol", "")
+        proto_clean = _safe_str(protocol, re.compile(r"^[A-Za-z0-9]{1,16}$"))
+        host_list = []
+        for h in (s.get("hosts") or [])[:16]:
+            v = _safe_str(h, _RE_HOSTNAME) if isinstance(h, str) else ""
+            if v:
+                host_list.append(v)
+        servers.append({
+            "port": port_num if isinstance(port_num, int) and 0 < port_num < 65536 else None,
+            "protocol": proto_clean,
+            "hosts": host_list,
+        })
+    return {"selector": selector, "servers": servers}
+
+
+def _extract_istio_destinationrule(obj: dict) -> dict:
+    spec = obj.get("spec", {}) or {}
+    return {
+        "host": _safe_str(spec.get("host", ""), _RE_HOSTNAME),
+        "tls_mode": _safe_str(((spec.get("trafficPolicy") or {}).get("tls") or {})
+                              .get("mode", ""), _RE_MTLS_MODE),
+    }
+
+
+def _extract_istio_serviceentry(obj: dict) -> dict:
+    spec = obj.get("spec", {}) or {}
+    hosts = []
+    for h in (spec.get("hosts") or [])[:32]:
+        v = _safe_str(h, _RE_HOSTNAME) if isinstance(h, str) else ""
+        if v:
+            hosts.append(v)
+    return {
+        "hosts": hosts,
+        "location": _safe_str(spec.get("location", ""),
+                              re.compile(r"^MESH_(EXTERNAL|INTERNAL)$")),
+    }
+
+
+def _extract_istio_peerauthentication(obj: dict) -> dict:
+    spec = obj.get("spec", {}) or {}
+    selector = _safe_dict_strings((spec.get("selector") or {}).get("matchLabels"),
+                                   _RE_LABEL_KEY, _RE_LABEL_VAL)
+    return {
+        "selector": selector,
+        "mtls_mode": _safe_str((spec.get("mtls") or {}).get("mode", ""), _RE_MTLS_MODE),
+    }
+
+
+def _extract_istio_authorizationpolicy(obj: dict) -> dict:
+    spec = obj.get("spec", {}) or {}
+    selector = _safe_dict_strings((spec.get("selector") or {}).get("matchLabels"),
+                                   _RE_LABEL_KEY, _RE_LABEL_VAL)
+    return {
+        "selector": selector,
+        "action": _safe_str(spec.get("action", ""), _RE_ARGOCD_ACTION),
+    }
+
+
 # Per-kind dispatch table.
 _KIND_EXTRACTORS = {
     "Deployment": _extract_workload,
@@ -414,6 +616,21 @@ _KIND_EXTRACTORS = {
     "ServiceAccount": _extract_serviceaccount,
     "HorizontalPodAutoscaler": _extract_hpa,
     "NetworkPolicy": _extract_networkpolicy,
+    # Karpenter CRDs
+    "NodePool": _extract_karpenter_nodepool,
+    "NodeClaim": _extract_karpenter_nodeclaim,
+    "EC2NodeClass": _extract_karpenter_ec2nodeclass,
+    # ArgoCD CRDs
+    "Application": _extract_argocd_application,
+    "ApplicationSet": _extract_argocd_application,  # spec.template.spec ~= spec
+    "AppProject": _extract_argocd_appproject,
+    # Istio CRDs
+    "VirtualService": _extract_istio_virtualservice,
+    "Gateway": _extract_istio_gateway,
+    "DestinationRule": _extract_istio_destinationrule,
+    "ServiceEntry": _extract_istio_serviceentry,
+    "PeerAuthentication": _extract_istio_peerauthentication,
+    "AuthorizationPolicy": _extract_istio_authorizationpolicy,
 }
 
 
@@ -479,6 +696,24 @@ _ALLOWED_KIND_FIELDS = {
                                  "target_kind", "target_name"},
     # Network policy
     "NetworkPolicy": {"pod_selector", "policy_types"},
+    # Karpenter
+    "NodePool":     {"node_class_kind", "node_class_name", "limits_cpu",
+                     "limits_memory", "consolidation_policy", "requirement_keys"},
+    "NodeClaim":    {"node_class_kind", "node_class_name"},
+    "EC2NodeClass": {"ami_family", "iam_role"},
+    # ArgoCD
+    "Application":    {"argocd_project", "source_repo", "source_path",
+                       "source_revision", "dest_server", "dest_namespace"},
+    "ApplicationSet": {"argocd_project", "source_repo", "source_path",
+                       "source_revision", "dest_server", "dest_namespace"},
+    "AppProject":     {"source_repos", "destinations"},
+    # Istio
+    "VirtualService":      {"hosts", "gateways", "routes"},
+    "Gateway":             {"selector", "servers"},
+    "DestinationRule":     {"host", "tls_mode"},
+    "ServiceEntry":        {"hosts", "location"},
+    "PeerAuthentication":  {"selector", "mtls_mode"},
+    "AuthorizationPolicy": {"selector", "action"},
 }
 
 
@@ -563,7 +798,10 @@ def _read_cluster_meta(shared_infra_path: Path, env_name: str) -> dict:
 
 # Default kinds — covers ~95% of what's useful for the graph.
 # Pods are off by default (transient + noisy); use --include-pods.
+# CRDs are included by default; absent ones are skipped via
+# `kubectl --ignore-not-found`.
 _DEFAULT_KINDS = [
+    # Built-in workloads + networking + identity
     "deployments.apps",
     "statefulsets.apps",
     "daemonsets.apps",
@@ -576,6 +814,21 @@ _DEFAULT_KINDS = [
     "serviceaccounts",
     "horizontalpodautoscalers.autoscaling",
     "networkpolicies.networking.k8s.io",
+    # Karpenter
+    "nodepools.karpenter.sh",
+    "nodeclaims.karpenter.sh",
+    "ec2nodeclasses.karpenter.k8s.aws",
+    # ArgoCD
+    "applications.argoproj.io",
+    "applicationsets.argoproj.io",
+    "appprojects.argoproj.io",
+    # Istio (networking + security CRDs)
+    "virtualservices.networking.istio.io",
+    "gateways.networking.istio.io",
+    "destinationrules.networking.istio.io",
+    "serviceentries.networking.istio.io",
+    "peerauthentications.security.istio.io",
+    "authorizationpolicies.security.istio.io",
 ]
 
 

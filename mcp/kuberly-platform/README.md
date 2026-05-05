@@ -75,6 +75,22 @@ Service: selector, ports (number+protocol). Ingress: hosts, backend service refs
 
 **Always dropped**: env values, `command`, `args`, `status`, all `data` / `stringData`, all unlisted annotations.
 
+### CRDs (v0.21.0+)
+
+Pulled in by default; missing CRDs are skipped via `kubectl --ignore-not-found`.
+
+| Stack | CRDs | Fields kept |
+|---|---|---|
+| **Karpenter** | `NodePool`, `NodeClaim`, `EC2NodeClass` | nodeClassRef, limits cpu/memory, consolidationPolicy, requirement *keys* (values dropped — they're long instance lists, not info-bearing), amiFamily, IRSA role name |
+| **ArgoCD** | `Application`, `ApplicationSet`, `AppProject` | project, source repoURL (with creds stripped), path, targetRevision, destination server + namespace, sourceRepos, destinations |
+| **Istio** | `VirtualService`, `Gateway`, `DestinationRule`, `ServiceEntry`, `PeerAuthentication`, `AuthorizationPolicy` | hosts, gateways, route destinations, server hosts/ports, mTLS mode, action, label selectors |
+
+**New edges**:
+- `NodePool / NodeClaim` → `EC2NodeClass` (`uses_node_class`)
+- `Application` → namespace ref (`targets_namespace`)
+- `VirtualService` → `Gateway` (`bound_to_gateway`)
+- `VirtualService` / `DestinationRule` → `Service` (`routes_to` / `configures_service`) — FQDN parsing extracts the short service name + namespace
+
 ### IRSA bridge
 
 ServiceAccounts with `eks.amazonaws.com/role-arn` annotation get an `irsa_bound` edge to the matching `resource:<env>/<m>/.../aws_iam_role.<n>` node from the state overlay. This means once both overlays are committed, the graph spans **EKS IAM role (Terraform) → ServiceAccount (k8s) → workload (k8s)** — useful for "what cluster workload uses this IAM role" queries.

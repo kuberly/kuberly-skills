@@ -654,6 +654,18 @@ class KuberlyPlatform:
                 "min_replicas", "max_replicas", "target_kind", "target_name",
                 "pod_selector", "policy_types",
                 "owner_refs",
+                # Karpenter
+                "node_class_kind", "node_class_name", "limits_cpu",
+                "limits_memory", "consolidation_policy", "requirement_keys",
+                "ami_family", "iam_role",
+                # ArgoCD
+                "argocd_project", "source_repo", "source_path",
+                "source_revision", "dest_server", "dest_namespace",
+                "source_repos", "destinations",
+                # Istio
+                "gateways", "routes", "servers",
+                "host", "tls_mode", "location",
+                "mtls_mode", "action",
             ):
                 if k in r:
                     attrs[k] = r[k]
@@ -727,6 +739,59 @@ class KuberlyPlatform:
                 if tk and tn:
                     self.add_edge(src, f"k8s:{env}/{ns}/{tk}/{tn}",
                                   relation="scales")
+
+            # Karpenter NodePool / NodeClaim -> EC2NodeClass (cluster-scoped, ns="")
+            if kind in ("NodePool", "NodeClaim"):
+                ck, cn = r.get("node_class_kind"), r.get("node_class_name")
+                if ck and cn:
+                    self.add_edge(src, f"k8s:{env}//{ck}/{cn}",
+                                  relation="uses_node_class")
+
+            # ArgoCD Application -> destination namespace ref (informational
+            # edge — the namespace node is not a k8s_resource here, but
+            # we still record the relation for downstream queries).
+            if kind in ("Application", "ApplicationSet"):
+                dest_ns = r.get("dest_namespace")
+                if dest_ns:
+                    self.add_edge(src, f"k8s_namespace:{env}/{dest_ns}",
+                                  relation="targets_namespace")
+
+            # Istio VirtualService -> Gateway + Service routes
+            if kind == "VirtualService":
+                # gateways[] entries: "<name>" or "<ns>/<name>"
+                for gw in (r.get("gateways") or []):
+                    if "/" in gw:
+                        gw_ns, gw_name = gw.split("/", 1)
+                    else:
+                        gw_ns, gw_name = ns, gw
+                    self.add_edge(src, f"k8s:{env}/{gw_ns}/Gateway/{gw_name}",
+                                  relation="bound_to_gateway")
+                # routes[].host: short name or FQDN; pull short name when
+                # it ends with .svc.cluster.local or is a single token.
+                for route in (r.get("routes") or []):
+                    host = (route.get("host") or "")
+                    if not host:
+                        continue
+                    parts = host.split(".")
+                    svc_ns = ns
+                    svc_name = parts[0] if parts else host
+                    # FQDN form: <svc>.<ns>.svc.cluster.local
+                    if len(parts) >= 2 and (".svc." in host or len(parts) >= 4):
+                        svc_name, svc_ns = parts[0], parts[1]
+                    self.add_edge(src, f"k8s:{env}/{svc_ns}/Service/{svc_name}",
+                                  relation="routes_to")
+
+            # Istio DestinationRule -> Service (host)
+            if kind == "DestinationRule":
+                host = r.get("host") or ""
+                if host:
+                    parts = host.split(".")
+                    svc_ns = ns
+                    svc_name = parts[0]
+                    if len(parts) >= 2 and (".svc." in host or len(parts) >= 4):
+                        svc_name, svc_ns = parts[0], parts[1]
+                    self.add_edge(src, f"k8s:{env}/{svc_ns}/Service/{svc_name}",
+                                  relation="configures_service")
 
         # Pass 3: IRSA bridge — link ServiceAccount with role ARN to
         # matching aws_iam_role resource node from the state overlay.
