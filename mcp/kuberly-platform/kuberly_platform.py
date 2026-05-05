@@ -2767,6 +2767,50 @@ def _compute_dashboard_data(
     has_k8s = layer_counts.get("k8s", 0) > 0
     has_docs = layer_counts.get("docs", 0) > 0
 
+    # Terraform state overlay (from state_overlay_*.json + schema-2 resources).
+    state_confirmed = sum(1 for c in components if c.get("also_in_state"))
+    state_only_comp = sum(
+        1 for c in components
+        if c.get("source") == "state" and not c.get("also_in_state")
+    )
+    resource_nodes = [n for n in nodes.values() if n.get("type") == "resource"]
+    resource_count = len(resource_nodes)
+    rt_counts: dict[str, int] = defaultdict(int)
+    for n in resource_nodes:
+        rt = n.get("resource_type") or "?"
+        rt_counts[rt] += 1
+    top_resource_types = [
+        {"type": t, "count": c}
+        for t, c in sorted(rt_counts.items(), key=lambda x: (-x[1], x[0]))[:15]
+    ]
+    state_by_env: list[dict] = []
+    for env_row in env_data:
+        en = env_row["name"]
+        comps_e = [c for c in components if c.get("environment") == en]
+        state_by_env.append({
+            "env": en,
+            "snapshot_at": snap_times.get(en, ""),
+            "components": len(comps_e),
+            "static_confirmed_by_state": sum(1 for c in comps_e if c.get("also_in_state")),
+            "state_only_components": sum(
+                1 for c in comps_e
+                if c.get("source") == "state" and not c.get("also_in_state")
+            ),
+            "resources": sum(
+                1 for n in resource_nodes if n.get("environment") == en
+            ),
+        })
+    state_summary = {
+        "loaded": has_state,
+        "layer_nodes": layer_counts.get("state", 0),
+        "resource_nodes": resource_count,
+        "components_state_confirmed": state_confirmed,
+        "components_state_only": state_only_comp,
+        "snapshot_envs": sorted(snap_times.keys()),
+        "by_env": state_by_env,
+        "top_resource_types": top_resource_types,
+    }
+
     kpis = {
         "modules": {
             "value": len(modules),
@@ -2838,6 +2882,7 @@ def _compute_dashboard_data(
             "kinds": dict(doc_kinds),
             "total": len(docs_nodes),
         },
+        "state": state_summary,
         "longest_chains": [list(c) for c in stats.get("longest_chains", [])][:5],
     }
 
@@ -4330,7 +4375,7 @@ def run_mcp_server(graph: KuberlyPlatform):
             "Install with: pip install 'mcp>=1.10'\n"
         )
         raise SystemExit(2) from exc
-    ver = _read_kuberly_skills_version(graph.repo) or "0.32.3"
+    ver = _read_kuberly_skills_version(graph.repo) or "0.32.4"
     if ver.startswith("v"):
         ver = ver[1:]
     run_stdio_server_blocking(

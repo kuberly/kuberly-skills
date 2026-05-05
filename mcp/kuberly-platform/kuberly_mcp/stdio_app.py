@@ -94,7 +94,7 @@ def run_stdio_server_blocking(
     *,
     render_tool_result: RenderFn,
     emit_telemetry: EmitFn,
-    server_version: str = "0.32.3",
+    server_version: str = "0.32.4",
     instructions: str | None = None,
 ) -> None:
     sys.stderr.write(

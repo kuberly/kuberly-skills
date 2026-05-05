@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.32.4 — 2026-05-06
+
+- **FIX:** **`post_apm_install.sh`** — lockfile drift check ignores **`generated_at`**
+  so `apm install` does not force a second commit when only that timestamp
+  changes. Graph **`generate`** is skipped when **`PRE_COMMIT=1`** (unless
+  **`KUBERLY_GRAPH_ON_HOOK=1`**) so hooks do not rewrite **`.kuberly/*.mmd`**
+  on every commit; set **`KUBERLY_SKIP_GRAPH_ON_HOOK=1`** to skip generation
+  outside pre-commit too.
+- **FEATURE:** **`graph.html`** dashboard — **Terraform state overlay** section:
+  per-env snapshot time, component counts, static∩state vs state-only, resource
+  node counts, and top Terraform resource types from the merged graph.
+- **BUMP:** apm.yml 0.32.3 → 0.32.4.
+
 ## v0.32.3 — 2026-05-06
 
 - **FIX:** `.kuberly/graph.html` **Graph** tab — for large stacks (≥500 leaf

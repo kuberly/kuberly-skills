@@ -9,6 +9,7 @@
 # What this stub does:
 #   1. Run `apm install` if apm.yml is present and `apm` CLI is available
 #   2. Delegate to the post-install script shipped by kuberly-skills
+#      (lock drift ignores generated_at; graph generate skips under PRE_COMMIT)
 #
 # Skip with KUBERLY_SKIP_APM_SYNC=1.
 

@@ -1854,6 +1854,8 @@ class GraphHtmlVizTests(unittest.TestCase):
                 self.assertIn("kuberly", html)
                 self.assertIn("Dashboard", html)
                 self.assertIn("kuberly-dashboard-json", html)
+                self.assertIn("Terraform state overlay", html)
+                self.assertIn("tbl-state-env", html)
         finally:
             tmp.cleanup()
 

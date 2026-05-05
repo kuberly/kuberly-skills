@@ -18,11 +18,16 @@
 #      consumer's .pre-commit-config.yaml entries — including
 #      ensure-apm-skills — actually fire on commits)
 #   4. Refresh `.kuberly/graph.json` (and sibling artifacts) by running the
-#      kuberly-platform graph generator. This script runs from the
-#      ensure-apm-skills pre-commit hook, so every commit captures a
-#      fresh graph state. The MCP server reads the cached file rather
-#      than rebuilding from the repo on each cold start.
-#   5. Report apm.lock.yaml drift (exit 1 if changed since last run)
+#      kuberly-platform graph generator when **not** inside pre-commit.
+#      (Pre-commit sets PRE_COMMIT=1.) That avoids rewriting tracked
+#      `.kuberly/*.mmd` on unrelated commits and speeds hooks. Run
+#      `python3 …/kuberly_platform.py generate …` from MCP or CI when
+#      you need a fresh graph. Override: KUBERLY_GRAPH_ON_HOOK=1 forces
+#      generation during hooks; KUBERLY_SKIP_GRAPH_ON_HOOK=1 skips even
+#      outside pre-commit.
+#   5. Report apm.lock.yaml drift (exit 1 if changed since last run).
+#      Comparison ignores `generated_at` because `apm install` may bump
+#      that timestamp without any dependency resolution change.
 #
 # Env: KUBERLY_LOCK_BEFORE — set by the consumer bootstrap to the apm.lock.yaml
 # contents before `apm install` ran. Used for the drift check.
@@ -102,15 +107,27 @@ fi
 # success — emits the one-line stats banner from kuberly_platform.py.
 GRAPH_GEN="$PKG/mcp/kuberly-platform/kuberly_platform.py"
 if [[ -f "$GRAPH_GEN" && -f "$ROOT/root.hcl" ]]; then
-  mkdir -p "$ROOT/.kuberly"
-  python3 "$GRAPH_GEN" generate "$ROOT" -o "$ROOT/.kuberly" 2>&1 \
-    | sed 's/^/graph: /' || true
+  if [[ "${KUBERLY_SKIP_GRAPH_ON_HOOK:-}" == "1" ]]; then
+    :
+  elif [[ "${PRE_COMMIT:-}" == "1" && "${KUBERLY_GRAPH_ON_HOOK:-}" != "1" ]]; then
+    :
+  else
+    mkdir -p "$ROOT/.kuberly"
+    python3 "$GRAPH_GEN" generate "$ROOT" -o "$ROOT/.kuberly" 2>&1 \
+      | sed 's/^/graph: /' || true
+  fi
 fi
 
-# 5. Lockfile drift report — only if caller passed KUBERLY_LOCK_BEFORE
+# 5. Lockfile drift report — only if caller passed KUBERLY_LOCK_BEFORE.
+# Ignore generated_at: apm often rewrites only that field on install.
+_lock_ignore_generated_at() {
+  printf '%s' "$1" | grep -v '^generated_at:'
+}
 LOCK="$ROOT/apm.lock.yaml"
 if [[ -n "${KUBERLY_LOCK_BEFORE:-}" && -f "$LOCK" ]]; then
-  if [[ "$KUBERLY_LOCK_BEFORE" != "$(cat "$LOCK")" ]]; then
+  before="$(_lock_ignore_generated_at "$KUBERLY_LOCK_BEFORE")"
+  after="$(_lock_ignore_generated_at "$(cat "$LOCK")")"
+  if [[ "$before" != "$after" ]]; then
     echo "post_apm_install: apm.lock.yaml changed — git add apm.lock.yaml && commit" >&2
     exit 1
   fi

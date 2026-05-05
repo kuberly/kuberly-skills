@@ -714,6 +714,16 @@ function renderDashboard() {
     `<div class="chain-block">$${esc(ch.map(x => x.replace(/^module:/, "")).join(" → "))}</div>`
   ).join("") || `<p style="color:var(--ink-faint)">No multi-hop module chains detected.</p>`;
 
+  const st = DASHBOARD.state || {};
+  const stateChips = (st.top_resource_types || []).slice(0, 12).map(t =>
+    `<span class="chip">$${esc(String(t.type))} <strong>$${t.count}</strong></span>`
+  ).join("");
+  const stateIntro = (!st.loaded)
+    ? `<p style="color:var(--ink-faint)">No Terraform state in the graph yet. Produce <span class="mono">.kuberly/state_overlay_*.json</span> and re-run graph generate.</p>`
+    : `<p class="layer-legend">$${st.layer_nodes} state-layer nodes · $${st.resource_nodes} resource vertices · `
+      + `$${st.components_state_confirmed} components confirmed in state · $${st.components_state_only} state-only (no static sidecar)</p>`
+      + `<div class="coverage-bar">$${stateChips}</div>`;
+
   const blasts = (DASHBOARD.blast_diagrams || []);
   const blastHtml = blasts.length
     ? `<div class="blast-acc" id="blast-acc-root"></div>`
@@ -751,6 +761,12 @@ function renderDashboard() {
         <span class="chip">Doc-linked modules: <strong>$${cov.modules_with_doc_mentions}/$${cov.modules_total}</strong></span>
       </div>
       <div class="layer-legend">$${layerLegend}</div>
+    </section>
+
+    <section class="section">
+      <h2>Terraform state overlay</h2>
+      $${stateIntro}
+      <div id="tbl-state-env"></div>
     </section>
 
     <section class="section">
@@ -854,6 +870,23 @@ function renderDashboard() {
     { key: "image", label: "Image", mono: true },
     { key: "modules_used", label: "Modules", mono: true },
   ], (DASHBOARD.applications || []).map(a => ({ ...a, modules_used: (a.modules_used || []).join(", ") })), { key: "env", dir: "asc" });
+
+  const stRows = (st.by_env || []).map(r => ({
+    env: r.env,
+    snapshot_at: r.snapshot_at || "—",
+    components: r.components,
+    confirmed: r.static_confirmed_by_state,
+    state_only: r.state_only_components,
+    resources: r.resources,
+  }));
+  renderSortableTable("tbl-state-env", [
+    { key: "env", label: "Env" },
+    { key: "snapshot_at", label: "State snapshot", mono: true },
+    { key: "components", label: "Components" },
+    { key: "confirmed", label: "Static ∩ state" },
+    { key: "state_only", label: "State-only" },
+    { key: "resources", label: "Resource nodes" },
+  ], stRows, { key: "env", dir: "asc" });
 
   renderSortableTable("tbl-irsa", [
     { key: "env", label: "Env" },
