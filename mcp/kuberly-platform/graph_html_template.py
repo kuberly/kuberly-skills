@@ -474,41 +474,17 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     background: var(--bg);
   }
   body.view-graph #graph-shell { display: block; }
-  /* 3D presentation: concentric graph stays 2D in Cytoscape; stage tilts in perspective. */
+  /* Stage wrappers retained for layout; 3D float removed in v0.33.1 — the
+     CSS perspective + rotateX/Y on the cytoscape container hid nodes inside
+     a transformed plane and broke fit/zoom math on viewport changes. */
   #cy-3d-stage {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
     overflow: hidden;
-    perspective: 1680px;
-    perspective-origin: 50% 44%;
   }
   #cy-3d-float {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
-    transform-style: preserve-3d;
-    transform-origin: 50% 48%;
-    will-change: transform;
-    animation: kuberlyNeuralFloat 28s ease-in-out infinite;
-  }
-  @keyframes kuberlyNeuralFloat {
-    0%, 100% {
-      transform: rotateX(5deg) rotateY(-14deg) translateZ(0) translateY(0);
-    }
-    25% {
-      transform: rotateX(11deg) rotateY(6deg) translateZ(36px) translateY(-10px);
-    }
-    50% {
-      transform: rotateX(7deg) rotateY(18deg) translateZ(-14px) translateY(8px);
-    }
-    75% {
-      transform: rotateX(12deg) rotateY(-8deg) translateZ(22px) translateY(-4px);
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    #cy-3d-float {
-      animation: none !important;
-      transform: none !important;
-    }
   }
   #cy {
     position: absolute;
@@ -516,8 +492,6 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     background-color: var(--bg);
     background-image: radial-gradient(circle, rgba(255,255,255,0.05) 1px, transparent 1.4px);
     background-size: 22px 22px;
-    transform: translateZ(0);
-    backface-visibility: hidden;
   }
   #sidebar {
     position: absolute;
@@ -643,7 +617,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
       <option value="overview">Overview (module deps)</option>
       <option value="full" selected>Full graph</option>
     </select>
-    <span id="layout-badge" title="Layout: concentric rings in a slow 3D float (CSS perspective)">concentric · 3D</span>
+    <span id="layout-badge" title="Layout: concentric rings by node degree">concentric</span>
     <span class="stats" id="stats"></span>
   </div>
 </div>
@@ -1234,6 +1208,17 @@ function buildCy() {
       clearBlast();
       cy.nodes().removeClass("match pulse");
       searchEl.value = "";
+    });
+    /* Re-fit when the viewport changes (DevTools open/close, window resize). */
+    let __kuberlyResizeTimer = null;
+    window.addEventListener("resize", () => {
+      if (!cy) return;
+      if (!document.body.classList.contains("view-graph")) return;
+      clearTimeout(__kuberlyResizeTimer);
+      __kuberlyResizeTimer = setTimeout(() => {
+        cy.resize();
+        cy.fit(undefined, 24);
+      }, 80);
     });
   }
   runLayoutImpl(initialLayout);

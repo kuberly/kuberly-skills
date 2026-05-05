@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.33.1 — 2026-05-06
+
+- **FIX:** **`graph.html`** — empty Graph canvas regression. The v0.33.0 3D
+  "neural float" wrapper (**`#cy-3d-stage`** + **`#cy-3d-float`** with
+  **`perspective: 1680px`**, **`transform-style: preserve-3d`**, and the
+  **`kuberlyNeuralFloat`** keyframe rotating up to **rotateX 12°** /
+  **rotateY 18°** / **translateZ 36px**) rendered the cytoscape canvas onto a
+  transformed plane while **`cy.fit()`** computed in untransformed pixels —
+  nodes ended up outside the visible perspective frustum and the canvas
+  appeared blank. Removed the rotation/perspective stack, kept the structural
+  wrappers, and dropped **`transform: translateZ(0)`** + **`backface-visibility:
+  hidden`** on **`#cy`**. Layout badge now reads **`concentric`**.
+- **FIX:** **`graph.html`** — added a debounced **`window.resize`** listener that
+  calls **`cy.resize()`** + **`cy.fit()`** while the Graph view is active, so
+  opening / closing DevTools (or any viewport change) re-fits the canvas
+  instead of leaving stale layout positions off-screen.
+- **TEST:** assert **`kuberlyNeuralFloat`** and **`perspective: 1680px`** stay
+  out of the rendered HTML — regression guard.
+- **BUMP:** apm.yml 0.33.0 → 0.33.1.
+
 ## v0.33.0 — 2026-05-06
 
 - **CHANGE:** **`graph.html`** — graph tab uses **concentric** layout only (built-in

@@ -1767,7 +1767,11 @@ class GraphHtmlVizTests(unittest.TestCase):
                 # Cytoscape (concentric is built-in; fcose/dagre extensions removed).
                 self.assertIn("cytoscape", html)
                 self.assertIn("concentric", html)
-                self.assertIn("kuberlyNeuralFloat", html)
+                # v0.33.1: the 3D float (kuberlyNeuralFloat keyframes + perspective)
+                # was removed because it hid the cytoscape canvas inside a transformed
+                # plane — verify it does not regress back in.
+                self.assertNotIn("kuberlyNeuralFloat", html)
+                self.assertNotIn("perspective: 1680px", html)
                 # No leftover vis.js references.
                 self.assertNotIn("vis-network", html)
                 self.assertNotIn("vis.Network", html)
@@ -1865,7 +1869,7 @@ class GraphHtmlVizTests(unittest.TestCase):
 
         v0.29 lazily builds the graph on the Graph tab; `runLayoutImpl(initialLayout)`
         runs immediately inside `buildCy()` so nodes are not stacked at
-        (0,0) when the canvas first appears. v0.33.0+: concentric-only + 3D float stage.
+        (0,0) when the canvas first appears. v0.33.1: concentric-only, 3D float removed.
         """
         from kuberly_platform import write_graph_html
 
