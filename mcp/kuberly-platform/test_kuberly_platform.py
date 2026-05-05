@@ -659,5 +659,196 @@ class SessionStatusTests(unittest.TestCase):
         self.assertIn("error", out)
 
 
+class StateOverlayTests(unittest.TestCase):
+    """The state overlay turns "module exists in clouds/aws/modules but no
+    components/<env>/<m>.json" from a stop-no-instance into actionable —
+    when the module IS actually deployed (state confirms it). These tests
+    pin the overlay-loader behavior."""
+
+    def setUp(self) -> None:
+        self.tmp = _fake_repo()
+        # Add a `grafana` module to the fake repo — there's no
+        # components/prod/grafana.json (no JSON sidecar), but the overlay
+        # will declare it as deployed.
+        graf = Path(self.tmp.name) / "clouds" / "aws" / "modules" / "grafana"
+        graf.mkdir(parents=True)
+        (graf / "terragrunt.hcl").write_text("# grafana\n")
+        (graf / "kuberly.json").write_text('{"description":"grafana"}\n')
+
+        # Place a state overlay declaring grafana + loki as deployed in prod.
+        # loki ALSO has a JSON sidecar (created by _fake_repo) → should be
+        # annotated `also_in_state=True`. grafana is overlay-only → synthetic.
+        overlay = Path(self.tmp.name) / ".claude" / "state_overlay_prod.json"
+        overlay.parent.mkdir(parents=True, exist_ok=True)
+        overlay.write_text(
+            '{\n'
+            '  "schema_version": 1,\n'
+            '  "generated_at": "2026-05-05T00:00:00Z",\n'
+            '  "generator": "test",\n'
+            '  "cluster": {"env": "prod", "name": "prod", "region": "us-east-1",\n'
+            '              "account_id": "111111111111",\n'
+            '              "state_bucket": "111111111111-us-east-1-prod-tf-states"},\n'
+            '  "deployed_modules": [\n'
+            '    {"name": "loki",    "state_key": "aws/loki/terraform.tfstate"},\n'
+            '    {"name": "grafana", "state_key": "aws/grafana/terraform.tfstate"}\n'
+            '  ],\n'
+            '  "deployed_applications": []\n'
+            '}\n'
+        )
+
+        self.g = KuberlyPlatform(self.tmp.name)
+        self.g.build()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_overlay_synthesizes_missing_component_node(self) -> None:
+        node = self.g.nodes.get("component:prod/grafana")
+        self.assertIsNotNone(node, "overlay should synthesize component:prod/grafana")
+        self.assertEqual(node["type"], "component")
+        self.assertEqual(node["source"], "state")
+
+    def test_overlay_annotates_existing_json_sidecar(self) -> None:
+        node = self.g.nodes.get("component:prod/loki")
+        self.assertIsNotNone(node)
+        # Loki has a JSON sidecar in _fake_repo, so source stays default
+        # ("json"-implicit, i.e. no `source` attr or "json"); state overlay
+        # must NOT overwrite it but should mark it confirmed-by-state.
+        self.assertNotEqual(node.get("source"), "state")
+        self.assertTrue(node.get("also_in_state"))
+
+    def test_overlay_unblocks_actionability_check(self) -> None:
+        # Before overlay: grafana would have been stop-no-instance.
+        self.assertTrue(self.g._has_json_sidecar("prod", "grafana"))
+        res = self.g.quick_scope("bump grafana memory", named_modules=["grafana"])
+        self.assertEqual(res["recommendation"], "dispatch-iac-developer")
+        self.assertTrue(res["actionable"])
+        self.assertEqual(res["unactionable"], [])
+
+    def test_overlay_missing_dir_is_noop(self) -> None:
+        # Build against a repo that has no .claude dir at all — must not error.
+        tmp2 = _fake_repo()
+        try:
+            shutil = __import__("shutil")
+            claude = Path(tmp2.name) / ".claude"
+            if claude.exists():
+                shutil.rmtree(claude)
+            g = KuberlyPlatform(tmp2.name)
+            g.build()  # must not raise
+            self.assertIn("component:prod/loki", g.nodes)  # JSON sidecar still works
+        finally:
+            tmp2.cleanup()
+
+    def test_overlay_with_bad_schema_is_skipped(self) -> None:
+        tmp2 = _fake_repo()
+        try:
+            bad = Path(tmp2.name) / ".claude" / "state_overlay_prod.json"
+            bad.parent.mkdir(parents=True, exist_ok=True)
+            # schema_version != 1 → silently skipped
+            bad.write_text('{"schema_version": 99, "deployed_modules": [{"name":"x"}]}\n')
+            g = KuberlyPlatform(tmp2.name)
+            g.build()
+            self.assertNotIn("component:prod/x", g.nodes)
+        finally:
+            tmp2.cleanup()
+
+
+class StateGraphParseTests(unittest.TestCase):
+    """Unit tests for state_graph.py's pure functions — no AWS calls."""
+
+    def setUp(self) -> None:
+        sg_path = _pkg if (_pkg / "state_graph.py").is_file() else _script_dir
+        if str(sg_path) not in sys.path:
+            sys.path.insert(0, str(sg_path))
+        import state_graph  # noqa: E402
+        self.sg = state_graph
+
+    def test_parse_keeps_module_state(self) -> None:
+        mods, apps = self.sg._parse_state_keys([
+            "aws/loki/terraform.tfstate",
+            "aws/grafana/terraform.tfstate",
+        ])
+        names = sorted(m["name"] for m in mods)
+        self.assertEqual(names, ["grafana", "loki"])
+        self.assertEqual(apps, [])
+
+    def test_parse_skips_init_module(self) -> None:
+        mods, _ = self.sg._parse_state_keys(["aws/init/terraform.tfstate"])
+        self.assertEqual(mods, [])
+
+    def test_parse_skips_non_state_keys(self) -> None:
+        mods, _ = self.sg._parse_state_keys([
+            "aws/loki/terraform.tfstate.tflock",
+            "aws/loki/.terragrunt-cache/x",
+            "aws/loki/some_other_file.json",
+            "outside/aws/loki/terraform.tfstate",
+        ])
+        self.assertEqual(mods, [])
+
+    def test_parse_per_app_modules(self) -> None:
+        mods, apps = self.sg._parse_state_keys([
+            "aws/ecs_app/prod/backend/terraform.tfstate",
+            "aws/lambda_app/prod/worker/terraform.tfstate",
+        ])
+        self.assertEqual(sorted(m["name"] for m in mods), ["ecs_app", "lambda_app"])
+        self.assertEqual(
+            sorted((a["module"], a["env"], a["name"]) for a in apps),
+            [("ecs_app", "prod", "backend"), ("lambda_app", "prod", "worker")],
+        )
+
+    def test_validator_rejects_command_injection(self) -> None:
+        bad = {
+            "schema_version": 1,
+            "generated_at": "2026-05-05T00:00:00Z",
+            "cluster": {
+                "env": "prod", "name": "evil; rm -rf /",
+                "region": "us-east-1", "account_id": "111111111111",
+                "state_bucket": "111111111111-us-east-1-prod-tf-states",
+            },
+            "deployed_modules": [],
+            "deployed_applications": [],
+        }
+        with self.assertRaises(ValueError):
+            self.sg._validate_overlay(bad)
+
+    def test_validator_rejects_long_strings(self) -> None:
+        bad = {
+            "schema_version": 1,
+            "generated_at": "2026-05-05T00:00:00Z",
+            "cluster": {
+                "env": "prod", "name": "prod",
+                "region": "us-east-1",
+                "account_id": "1" * 200,  # implausibly long → leak suspicion
+                "state_bucket": "x-x-x-tf-states",
+            },
+            "deployed_modules": [],
+            "deployed_applications": [],
+        }
+        with self.assertRaises(ValueError):
+            self.sg._validate_overlay(bad)
+
+    def test_validator_rejects_unknown_schema_version(self) -> None:
+        with self.assertRaises(ValueError):
+            self.sg._validate_overlay({"schema_version": 99})
+
+    def test_validator_dedupes_modules(self) -> None:
+        good = {
+            "schema_version": 1,
+            "generated_at": "2026-05-05T00:00:00Z",
+            "cluster": {
+                "env": "prod", "name": "prod",
+                "region": "us-east-1", "account_id": "111111111111",
+                "state_bucket": "111111111111-us-east-1-prod-tf-states",
+            },
+            "deployed_modules": [
+                {"name": "loki", "state_key": "aws/loki/terraform.tfstate"},
+                {"name": "loki", "state_key": "aws/loki/terraform.tfstate"},
+            ],
+            "deployed_applications": [],
+        }
+        out = self.sg._validate_overlay(good)
+        self.assertEqual(len(out["deployed_modules"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
