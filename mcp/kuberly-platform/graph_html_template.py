@@ -1007,7 +1007,12 @@ function setView(mode) {
   document.getElementById("tab-graph").classList.toggle("active", mode === "graph");
   if (mode === "graph") {
     if (!cy) buildCy();
-    requestAnimationFrame(() => { cy.resize(); cy.fit(undefined, 24); });
+    requestAnimationFrame(() => {
+      if (!cy) return;
+      cy.resize();
+      const v = cy.elements(":visible");
+      if (v.length) cy.fit(v, 24);
+    });
   }
 }
 
@@ -1071,17 +1076,25 @@ function buildCy() {
   const isOverview = viewMode === "overview" && elemsNodes.length < graphNodes.length;
 
   const dense = leafCount > 600;
+  /* boundingBox caps the concentric radius math so a runaway level can't
+     drag a node to ~1e17 px (which then collapses cy.fit zoom to ~0 and
+     makes the canvas look empty). Clamping `concentric: n => degree`
+     defends against pathological degree values from the source data. */
   const concentricLayoutOpts = {
     name: "concentric",
     animate: false,
     fit: true,
     padding: isOverview ? 40 : (dense ? 20 : 28),
+    boundingBox: { x1: 0, y1: 0, w: 4000, h: 4000 },
     spacingFactor: dense ? 1.42 : 1.18,
     minNodeSpacing: dense ? 6 : 12,
     startAngle: -Math.PI / 2,
     sweep: 2 * Math.PI,
     clockwise: true,
-    concentric: n => n.degree(),
+    concentric: n => {
+      const d = n.degree(false);
+      return Number.isFinite(d) ? Math.min(d, 100) : 0;
+    },
     levelWidth: () => 1,
   };
   const initialLayout = "concentric";
@@ -1136,7 +1149,10 @@ function buildCy() {
       { selector: "node.downstream", style: { "border-width": 3, "border-color": BRAND.blue } },
       { selector: "edge.highlight", style: { "line-color": BRAND.blue, "target-arrow-color": BRAND.blue, "opacity": 1, "width": 2 } },
     ],
-    layout: concentricLayoutOpts,
+    /* Layout deferred — see runLayoutImpl below. The k8s layer is hidden
+       via applyLayerVisibility immediately after construction; running
+       layout in the constructor would position 800+ k8s nodes that are
+       about to be excluded, blowing up cy.fit's zoom. */
   });
 
   function applyLayerVisibility(layer, on) {
@@ -1149,8 +1165,34 @@ function buildCy() {
   }
   applyLayerVisibility("k8s", false);
 
+  /* Cap any rogue position the layout might emit so cy.fit() can't zoom
+     out to galactic scale. Anything past the boundingBox + a wide margin
+     is recentered to (0, 0); harmless for the layout (we re-run it next
+     iteration) but prevents the empty-canvas symptom. */
+  const SAFE_COORD = 1e5;
+  const sanitizePositions = () => {
+    cy.nodes(":visible").forEach(n => {
+      const p = n.position();
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)
+          || Math.abs(p.x) > SAFE_COORD || Math.abs(p.y) > SAFE_COORD) {
+        n.position({ x: 0, y: 0 });
+      }
+    });
+  };
+  const visibleEles = () => cy.elements(":visible");
+  const safeFit = () => {
+    const v = visibleEles();
+    if (v.length) cy.fit(v, 24);
+  };
   const runLayoutImpl = (_name) => {
-    cy.layout({ ...concentricLayoutOpts, animate: false, fit: true }).run();
+    cy.layout({
+      ...concentricLayoutOpts,
+      animate: false,
+      fit: false,
+      eles: visibleEles(),
+    }).run();
+    sanitizePositions();
+    safeFit();
   };
   window.__kuberlyRunLayout = runLayoutImpl;
   const searchEl = document.getElementById("search");
@@ -1174,7 +1216,12 @@ function buildCy() {
         try { sessionStorage.setItem("kuberlyGraphView", viewSel.value); } catch (e) {}
         if (cy) { cy.destroy(); cy = null; }
         buildCy();
-        requestAnimationFrame(() => { if (cy) { cy.resize(); cy.fit(undefined, 24); } });
+        requestAnimationFrame(() => {
+          if (!cy) return;
+          cy.resize();
+          const v = cy.elements(":visible");
+          if (v.length) cy.fit(v, 24);
+        });
       });
     }
     searchEl.addEventListener("input", () => {
@@ -1217,7 +1264,8 @@ function buildCy() {
       clearTimeout(__kuberlyResizeTimer);
       __kuberlyResizeTimer = setTimeout(() => {
         cy.resize();
-        cy.fit(undefined, 24);
+        const v = cy.elements(":visible");
+        if (v.length) cy.fit(v, 24);
       }, 80);
     });
   }

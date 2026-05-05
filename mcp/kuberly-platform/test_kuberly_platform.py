@@ -1870,6 +1870,9 @@ class GraphHtmlVizTests(unittest.TestCase):
         v0.29 lazily builds the graph on the Graph tab; `runLayoutImpl(initialLayout)`
         runs immediately inside `buildCy()` so nodes are not stacked at
         (0,0) when the canvas first appears. v0.33.1: concentric-only, 3D float removed.
+        v0.33.2: the layout is now ONLY in runLayoutImpl — running it in the
+        cytoscape constructor would lay out the about-to-be-hidden k8s nodes
+        and collapse cy.fit zoom to ~0 (canvas appears empty).
         """
         from kuberly_platform import write_graph_html
 
@@ -1885,6 +1888,15 @@ class GraphHtmlVizTests(unittest.TestCase):
                     "runLayoutImpl(initialLayout)" in html,
                     "expected runLayoutImpl(initialLayout) after cytoscape init",
                 )
+                # v0.33.2: cytoscape ctor must NOT carry a `layout:` key, or
+                # the auto-layout will run on hidden-soon nodes.
+                self.assertNotIn("layout: concentricLayoutOpts", html)
+                # v0.33.2: boundingBox guards the radius math from a pathological
+                # degree blowing positions to ~1e17 px.
+                self.assertIn("boundingBox", html)
+                # v0.33.2: layout + fit operate on visible elements only so a
+                # frozen position on a hidden node can't collapse the viewport.
+                self.assertIn('cy.elements(":visible")', html)
         finally:
             tmp.cleanup()
 

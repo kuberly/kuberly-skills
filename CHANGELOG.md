@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.33.2 — 2026-05-06
+
+- **FIX:** **`graph.html`** — empty Graph canvas, second pass. The v0.33.1 hotfix
+  removed the 3D float wrapper but the canvas was still empty. Diagnostic from
+  the live page (`cy.zoom() = 2.16e-15`, `extent.w = 3.3e17`) showed at least
+  one node was being placed at ~10¹⁷ pixels, collapsing **`cy.fit`** zoom to
+  near-zero so every other node rendered sub-pixel.
+
+  Three changes close the loop:
+  1. **Defer the layout** — drop **`layout: concentricLayoutOpts`** from the
+     **`cytoscape({...})`** constructor. Building the graph runs the layout on
+     all 1308 nodes including the 800+ k8s nodes that are about to be hidden,
+     and that first **`fit:true`** locks in the broken zoom before
+     **`applyLayerVisibility("k8s", false)`** runs. **`runLayoutImpl()`** now
+     handles the only layout pass, after visibility is applied.
+  2. **Hard-cap radius math** — add **`boundingBox: { x1:0, y1:0, w:4000,
+     h:4000 }`** to the concentric options and clamp the **`concentric`**
+     callback to **`Math.min(degree, 100)`** with a **`Number.isFinite`** guard
+     so a pathological degree value can't compound through the radius
+     accumulation.
+  3. **Fit and layout only on visible elements** — **`runLayoutImpl`** uses
+     **`eles: cy.elements(":visible")`**, and every **`cy.fit()`** site
+     (constructor, **`setView`** rAF, **`viewSel`** change, window resize)
+     now passes **`cy.elements(":visible")`** so a frozen-in extreme position
+     on a hidden k8s node can't influence the viewport.
+
+  Plus a post-layout **`sanitizePositions()`** that recenters any node whose
+  coordinates exceed **`SAFE_COORD = 1e5`** or are non-finite — last line of
+  defense against future regressions in the layout math.
+
+- **BUMP:** apm.yml 0.33.1 → 0.33.2.
+
 ## v0.33.1 — 2026-05-06
 
 - **FIX:** **`graph.html`** — empty Graph canvas regression. The v0.33.0 3D
