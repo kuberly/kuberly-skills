@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.34.5 — 2026-05-06
+
+- **FIX:** the click-to-copy command on the empty IAM-trust chart was
+  missing the **`--resources`** flag, so users running it produced a
+  schema-1 overlay (module list only, no per-resource attributes, no
+  `essentials`) and the chart stayed empty. Updated to:
+  `state_graph.py generate --env prod --resources --output ...
+  && kuberly_platform.py generate . -o .kuberly` — schema 2/3 + dashboard
+  rebuild in one shot.
+- **BUMP:** apm.yml 0.34.4 → 0.34.5.
+
 ## v0.34.4 — 2026-05-06
 
 - **RENAME:** dashboard chart "IAM trust principals" → **"IAM role

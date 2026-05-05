@@ -1464,7 +1464,7 @@ function renderDashboardCharts(cats) {
        * apm_modules path. */
       const card = el.parentElement;
       if (card && !card.querySelector(".chart-empty")) {
-        const cmd = "python3 apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/state_graph.py generate --env prod --output .kuberly/state_overlay_prod.json";
+        const cmd = "python3 apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/state_graph.py generate --env prod --resources --output .kuberly/state_overlay_prod.json && python3 apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/kuberly_platform.py generate . -o .kuberly";
         const ph = document.createElement("div");
         ph.className = "chart-empty";
         ph.innerHTML =
