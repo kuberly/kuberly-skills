@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.38.1 — 2026-05-06
+
+- **FIX:** `scripts/render_apps.py` was running `cue cmd dump` directly,
+  but the consumer's CUE module needs a **two-step workflow** (mirroring
+  `cue/generate.sh`): first `cue import -f -l 'config:' -p applications
+  <json> -o config_gen_<file>.cue`, then `cue cmd -t instance=<ns> -t
+  app=<name> dump .`, then cleanup the generated config file. Without
+  the import step, `config: _` in `app.cue` is never bound and the dump
+  emits an empty stream. After the fix, the stage5 prod stack renders
+  17 manifests across 3 apps (Deployment / Service / ServiceAccount /
+  ExternalSecret / VirtualService / AuthorizationPolicy).
+- **FIX:** the `app` tag passed to `cue cmd dump` must be the JSON's
+  internal `name` field, not the file stem. New `_extract_app_meta()`
+  pulls `name` and `namespace` from the JSON (handles both
+  `<top>.name` and `<top>.common.name` shapes).
+- **NEW:** PyYAML used when available — full YAML parsing instead of
+  the regex fallback. Pulls per-Deployment replicas, container ports,
+  serviceAccountName from the spec.template tree.
+- **BUMP:** apm.yml 0.38.0 → 0.38.1.
+
 ## v0.38.0 — 2026-05-06
 
 Per-app rendered manifests now appear as graph nodes.
