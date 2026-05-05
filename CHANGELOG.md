@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.26.0 — 2026-05-05
+
+- **BREAKING:** graph artifacts directory `kuberly/` → `.kuberly/` (dot-prefix
+  convention, matches `.claude/`, `.cursor/`, `.github/`).
+  - Generator default output: `kuberly` → `.kuberly`
+  - MCP server overlay loader, SessionStart hook, agent / skill / cursor-rule
+    references all updated.
+  - Migration for existing v0.25.x consumers:
+    ```
+    git mv kuberly .kuberly
+    python3 apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/kuberly_platform.py generate .
+    ```
+- **FIX:** compound parent styling — switched cytoscape selector from
+  class-binding (`node.compound`) to pseudo-class (`node:parent`). The
+  rounded translucent rect with `--ink-line` border now actually applies to
+  compound containers (previously fell through to default fill `#999`).
+- **BUMP:** apm.yml 0.25.0 → 0.26.0.
+
 ## v0.25.0 — 2026-05-05
 
 - **BREAKING:** graph artifacts relocated from `.claude/` to `kuberly/`. Tool-neutral location so Cursor / Codex / VS Code / future tools share one source of truth.

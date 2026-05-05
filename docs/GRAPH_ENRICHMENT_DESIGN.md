@@ -300,9 +300,9 @@ Hardcoded cross-account ARNs in module HCL (e.g. cross-account Route53 delegatio
 3. **Tier 2 state enrichment** (S3 reads). Opt-in via `--enrich-state` flag or `KUBERLY_ENRICH_STATE=1`. Cost: ~100ms × N modules. Cached for 1h via mtime check on local state cache.
 
 **Cache:**
-- `kuberly/state-cache/<cluster>/<module>.tfstate.json` — raw state, gitignored.
-- `kuberly/graph.json` — gets a new top-level `enrichment: {tier: 1|2, generated_at, state_age_seconds}` field.
-- `kuberly/graph-resources.json` — separate file holding Tier 2 resource nodes. Loaded into the live `KuberlyPlatform` instance only when `KUBERLY_ENRICH_STATE=1`.
+- `.kuberly/state-cache/<cluster>/<module>.tfstate.json` — raw state, gitignored.
+- `.kuberly/graph.json` — gets a new top-level `enrichment: {tier: 1|2, generated_at, state_age_seconds}` field.
+- `.kuberly/graph-resources.json` — separate file holding Tier 2 resource nodes. Loaded into the live `KuberlyPlatform` instance only when `KUBERLY_ENRICH_STATE=1`.
 
 **Trigger:**
 - SessionStart hook (existing) gains optional `--enrich-state` argument. Default off.
@@ -354,7 +354,7 @@ P1 alone justifies the work — the orchestrator and `quick_scope` immediately g
 
 ## 11. Open questions
 
-1. **Server-side or client-side enrichment?** Hook generates a file, MCP reads it (current pattern). Cleaner separation, no AWS creds in MCP server. **Recommendation:** client-side hook writes `kuberly/graph-enriched.json`; MCP loads it lazily. Confirm.
+1. **Server-side or client-side enrichment?** Hook generates a file, MCP reads it (current pattern). Cleaner separation, no AWS creds in MCP server. **Recommendation:** client-side hook writes `.kuberly/graph-enriched.json`; MCP loads it lazily. Confirm.
 2. **OIDC + IRSA topology** — materialize trust relationships as edges (`serviceaccount:backend → resource:aws_iam_role:backend`)? High value for the `irsa-workload-identity` skill's debugging path. **Recommendation:** yes in P4. Trust policy parsing is the hard part — start with the common kuberly-stack patterns, log unknowns.
 3. **Helm release state** — Tier 2 covers AWS. Helm releases (`loki`, `alloy`, `argocd`) live in EKS Secrets, not TF state. **Recommendation:** skip for v1; covered by `eks-observability-stack`. Revisit if `kubectl get` access becomes routine.
 4. **Application coverage** — ECS task defs, Lambda code hashes, ArgoCD sync states. Some in TF state, some not. **Recommendation:** v1 covers what's in TF state (per-app state files for `lambda_app`/`ecs_app`/`bedrock_agentcore_app`). ArgoCD sync state out of scope until P5+.
@@ -375,8 +375,8 @@ The following were resolved before P1 kickoff. They drive the implementation tas
 | 1 | Bucket / key resolution | **Derive from each module's `terragrunt.hcl` directly** — parse the `remote_state.config.{bucket, key}` expressions. NO new fields in `kuberly.json`. Pattern-match the known shapes from §3.5.3 / §3.5.4; classify the formula; resolve placeholders from cluster context. |
 | 2 | Layout fallback | **Support both `clouds/<provider>/modules/` and legacy flat `modules/`** during migration. Detection: presence of `clouds/` at repo root → standard; otherwise flat. |
 | 3 | shared-infra discovery | **Require `components/<env>/shared-infra.json` as a file.** No fallback to embedded-key in arbitrary component JSONs. If absent, env is marked `state_unavailable: missing-cluster-spine`. |
-| 4 | State cache | **Yes — write `kuberly/state-cache/<cluster>/<module>.tfstate.json`** (gitignored) with 1h TTL. |
-| 5 | graph.json freshness field | **Yes — add `enrichment: {tier, generated_at, state_age_seconds}` top-level key** to `kuberly/graph.json`. Non-breaking. |
+| 4 | State cache | **Yes — write `.kuberly/state-cache/<cluster>/<module>.tfstate.json`** (gitignored) with 1h TTL. |
+| 5 | graph.json freshness field | **Yes — add `enrichment: {tier, generated_at, state_age_seconds}` top-level key** to `.kuberly/graph.json`. Non-breaking. |
 | 6 | Resource node v1 list | **11 types**: EKS, RDS / Aurora, Lambda, ECS service, IAM role, Secrets Manager, SQS, SNS, KMS — **plus EFS, ElastiCache, MSK**. |
 | 7 | Redaction lists | **Adopt §6.1 / §6.2 / §6.3 as v1 baseline.** Lists evolve via PR. Snapshot tests run across all surveyed forks. |
 | 8 | Partner-account whitelist | **Derive own + partner accounts from the union of `target.account_id` across every `components/<env>/shared-infra.json` in the repo.** No new schema field. ARNs in that union → keep verbatim with `partner: true` annotation. ARNs in any other account → redact account portion. |

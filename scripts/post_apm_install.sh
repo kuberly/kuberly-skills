@@ -15,7 +15,7 @@
 #   3. Ensure the pre-commit framework's git hook is installed (so the
 #      consumer's .pre-commit-config.yaml entries — including
 #      ensure-apm-skills — actually fire on commits)
-#   4. Refresh `kuberly/graph.json` (and sibling artifacts) by running the
+#   4. Refresh `.kuberly/graph.json` (and sibling artifacts) by running the
 #      kuberly-platform graph generator. This script runs from the
 #      ensure-apm-skills pre-commit hook, so every commit captures a
 #      fresh graph state. The MCP server reads the cached file rather
@@ -96,8 +96,8 @@ fi
 # success — emits the one-line stats banner from kuberly_platform.py.
 GRAPH_GEN="$PKG/mcp/kuberly-platform/kuberly_platform.py"
 if [[ -f "$GRAPH_GEN" && -f "$ROOT/root.hcl" ]]; then
-  mkdir -p "$ROOT/kuberly"
-  python3 "$GRAPH_GEN" generate "$ROOT" -o "$ROOT/kuberly" 2>&1 \
+  mkdir -p "$ROOT/.kuberly"
+  python3 "$GRAPH_GEN" generate "$ROOT" -o "$ROOT/.kuberly" 2>&1 \
     | sed 's/^/graph: /' || true
 fi
 

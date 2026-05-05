@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # regenerate_docs_overlay — pre-commit hook entry that refreshes
-# kuberly/docs_overlay.json incrementally (only changed docs are
+# .kuberly/docs_overlay.json incrementally (only changed docs are
 # re-extracted; embeddings reused via content_sha).
 #
 # Wire into the consumer's .pre-commit-config.yaml:
@@ -8,7 +8,7 @@
 #   - repo: local
 #     hooks:
 #       - id: regenerate-docs-overlay
-#         name: Refresh kuberly/docs_overlay.json
+#         name: Refresh .kuberly/docs_overlay.json
 #         entry: bash apm_modules/kuberly/kuberly-skills/scripts/regenerate_docs_overlay.sh
 #         language: system
 #         pass_filenames: false

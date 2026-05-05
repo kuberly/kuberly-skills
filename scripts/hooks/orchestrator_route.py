@@ -7,7 +7,7 @@ emits a single JSON object on stdout that Claude Code injects as
 `additionalContext`.
 
 The pre-flight check is the cost-saving piece: when the prompt names an
-infra entity (loki, eks, aurora, ...), we look it up in `kuberly/graph.json`
+infra entity (loki, eks, aurora, ...), we look it up in `.kuberly/graph.json`
 *before* the orchestrator spawns any subagent. If the entity is absent we
 prepend a STOP banner; if present we paste the matching node ids as a graph
 slice so the orchestrator doesn't re-query.
@@ -49,7 +49,7 @@ INFRA_KEYWORDS = (
     "openspec",
 )
 
-# Entities we expect to find as nodes in `kuberly/graph.json`. Subset of
+# Entities we expect to find as nodes in `.kuberly/graph.json`. Subset of
 # INFRA_KEYWORDS — only the *named things* (modules, components, apps), not
 # verbs or generic terms. Use hyphens (graph labels are normalized that way).
 NAMED_ENTITIES = (
@@ -135,9 +135,9 @@ def _looks_trivial(prompt: str, lower: str) -> bool:
 
 
 def _graph_path() -> str:
-    """Locate `kuberly/graph.json` relative to CLAUDE_PROJECT_DIR or cwd."""
+    """Locate `.kuberly/graph.json` relative to CLAUDE_PROJECT_DIR or cwd."""
     root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    return os.path.join(root, "kuberly", "graph.json")
+    return os.path.join(root, ".kuberly", "graph.json")
 
 
 def _preflight_graph_check(lower: str):

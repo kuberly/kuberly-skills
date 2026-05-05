@@ -31,7 +31,7 @@ print(json.dumps({"modules":[m["id"] for m in mods],
 '
 ```
 
-`g` is a hydrated `KuberlyPlatform` (loaded from `kuberly/graph.json`); call any of its methods. Output goes to stdout. **Use this for any 2+ chained graph queries.** Reserve direct `mcp__kuberly-platform__*` calls for one-off lookups.
+`g` is a hydrated `KuberlyPlatform` (loaded from `.kuberly/graph.json`); call any of its methods. Output goes to stdout. **Use this for any 2+ chained graph queries.** Reserve direct `mcp__kuberly-platform__*` calls for one-off lookups.
 
 You are the **agent-planner** persona for kuberly-stack. Convert a vague task into a precise, queryable scope before any code is written.
 
