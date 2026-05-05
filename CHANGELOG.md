@@ -1,5 +1,80 @@
 # Changelog
 
+## v0.36.0 — 2026-05-06
+
+Radical dashboard simplification + CUE schemas / GitHub workflows now
+appear as nodes in the 3D Graph view.
+
+### Dashboard cut
+
+The dashboard collapses to **three sections only**:
+
+1. **Hero** — node / edge / env / module counts.
+2. **Stats & overlays** — OpenSpec, docs overlay timestamp, state
+   snapshots, doc-linked module ratio, plus *new* counts: CUE
+   schemas, GitHub workflows, secret references, rendered manifests,
+   app-drift items. Layer pills (`IaC files`, `TG / OpenTofu state`,
+   `K8s resources`, `Docs`) carry the per-layer node counts.
+3. **Node spotlight** — promoted to top, with usability lift:
+   - layer-filter chip row (all / IaC / TG state / K8s / Docs)
+   - free-text search now matches id, label, type **and** layer
+   - per-row layer dot + type/layer subline
+   - **history breadcrumb** (last ≤8 nodes you walked)
+   - **"open in 3D graph →"** button that flips to the Graph tab and
+     centers the camera on the node
+
+Removed (the data still loads — just no longer rendered as dashboard
+sections; the data drives Graph view nodes / edges instead):
+
+- KPI cards (security findings, state age, app health, ...)
+- Infrastructure essentials (chart row + AWS architecture diagram)
+- Category cards (Compute / Data / Identity / Networking / Secrets /
+  Registries / Queues / Kubernetes)
+- Security findings tier list
+- Module age — last applied heatmap
+- IAM identity & access section
+- Apps → IAM → Secrets section
+- Network reachability — security groups
+- Secrets — references and Secrets Manager
+- Application manifests — rendered from CUE
+- CUE schemas list
+- CI/CD — workflows by module
+- Coverage & overlays (replaced by Stats & overlays)
+- Terraform state overlay tile
+- Environments grid
+- Most depended-on nodes
+- Cross-environment drift columns
+- Longest Terragrunt dependency chains
+- Shared-infra blast radius (Mermaid)
+- IRSA — ServiceAccount → IAM role table
+- Modules / Components / Applications tables
+
+### Style alignment with kuberly-web
+
+- KPI accent stripes (`kpi-warn` / `kpi-ok` / `kpi-blue`) removed —
+  out of style with `kuberly.io`.
+- The colored category-card top stripes are gone with the cards.
+- New spotlight uses the same blue / mono / black palette as
+  kuberly-web's `globals.css`.
+
+### New graph-view node types
+
+`scan_cue_schema_nodes()` and `scan_workflow_nodes()` synthesize:
+
+- **`cue_schema`** nodes — one per `cue/**/*.cue` file (id
+  `schema:cue/<file>`), with `package` + `field_count` attrs.
+- **`workflow`** nodes — one per `.github/workflows/*.yml` (id
+  `workflow:.github/workflows/<file>`), with `triggers` attr.
+- **`references`** edges from each workflow to the
+  `module:aws/<m>` and `component:<env>/<m>` it mentions, so the 3D
+  graph answers "which CI/CD job deploys this module" by following
+  inbound edges from a module node.
+
+For the stage5 prod stack this surfaces 5 CUE schemas + 5 workflows
+(adding 10 nodes and 4 references edges).
+
+- **BUMP:** apm.yml 0.35.0 → 0.36.0.
+
 ## v0.35.0 — 2026-05-06
 
 Customer-focused dashboard rebuild + new graphs. The headline KPIs and

@@ -2362,6 +2362,66 @@ class KuberlyPlatform:
         self.scan_docs_overlay()
         self.scan_catalog()
         self.link_components_to_modules()
+        # v0.36.0: surface CUE schemas + GitHub workflows as graph nodes
+        # too — they used to live only on the dashboard payload, but the
+        # 3D Graph view is now the single home for browsable nodes.
+        self.scan_cue_schema_nodes()
+        self.scan_workflow_nodes()
+
+    def scan_cue_schema_nodes(self) -> None:
+        """v0.36.0: emit `schema:cue/<file>` nodes for every cue/*.cue file.
+
+        Each schema node carries its package + top-level field count as
+        attributes. No edges to other nodes yet — the dashboard's node
+        spotlight + the 3D Graph view both index by id, so the user can
+        find any schema and click into it.
+        """
+        cue_dir = self.repo / "cue"
+        if not cue_dir.is_dir():
+            return
+        out = _scan_cue_schemas(self.repo)
+        for f in out.get("files", []):
+            nid = f"schema:{f['file']}"
+            if nid in self.nodes:
+                continue
+            self.add_node(
+                nid, type="cue_schema",
+                label=f["file"],
+                package=f.get("package", ""),
+                field_count=f.get("field_count", 0),
+                source_layer="docs",   # treat schemas as "docs-like"
+            )
+
+    def scan_workflow_nodes(self) -> None:
+        """v0.36.0: emit `workflow:<file>` nodes for every
+        `.github/workflows/*.yml` plus `references` edges from each
+        workflow to the modules / components it touches.
+
+        This makes the 3D Graph view answer "which CI/CD job deploys
+        this module" by clicking the module and following inbound
+        `references` edges.
+        """
+        out = _scan_workflow_origins(self.repo)
+        for w in out.get("workflows", []):
+            wid = f"workflow:{w['file']}"
+            if wid not in self.nodes:
+                self.add_node(
+                    wid, type="workflow",
+                    label=w["file"],
+                    triggers=list(w.get("triggers") or [])[:8],
+                    source_layer="docs",
+                )
+            # Edges to module + component nodes that exist in the graph.
+            for m in w.get("module_refs", []) or []:
+                tgt = f"module:aws/{m}"  # match module node id shape
+                if tgt in self.nodes:
+                    self.add_edge(wid, tgt, relation="references")
+            for c in w.get("component_refs", []) or []:
+                env = c.get("env"); name = c.get("name")
+                if env and name:
+                    tgt = f"component:{env}/{name}"
+                    if tgt in self.nodes:
+                        self.add_edge(wid, tgt, relation="references")
 
     def load_from_cache(self, cache_path: Path) -> None:
         """Hydrate `nodes` and `edges` from a previously-generated graph.json.

@@ -352,11 +352,8 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     color: var(--ink-mute);
     line-height: 1.4;
   }
-  .kpi.kpi-warn { border-left: 3px solid #f5b042; }
-  .kpi.kpi-ok   { border-left: 3px solid #5fd098; }
-  .kpi.kpi-blue { border-left: 3px solid var(--blue-soft); }
-  .kpi.kpi-warn .value { color: #f5d9a0; }
-  .kpi.kpi-ok   .value { color: #b6e8c8; }
+  /* v0.36.0: KPI cards no longer carry colored accent stripes —
+     out-of-style with kuberly-web. Kept neutral. */
 
   /* v0.35.0 dashboard sections — Findings / Module age / App→Secret / Network */
   .findings-tier {
@@ -680,6 +677,213 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     background: rgba(162,102,255,0.08);
     border-color: rgba(162,102,255,0.30);
     color: #c39cff;
+  }
+
+  /* v0.36.0 — improved Node spotlight (now top-of-page primary feature) */
+  .stats-section .coverage-bar {
+    margin-bottom: 12px;
+    gap: 8px;
+  }
+  .spotlight {
+    background: var(--bg-card);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius-lg);
+    padding: 22px 24px;
+    display: grid;
+    grid-template-columns: 1fr 1.2fr;
+    gap: 20px;
+  }
+  @media (max-width: 980px) {
+    .spotlight { grid-template-columns: 1fr; }
+  }
+  .spotlight h2 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: var(--ink);
+  }
+  .spotlight .hero-sub {
+    font-size: 12px;
+    color: var(--ink-mute);
+    margin-bottom: 14px;
+    line-height: 1.5;
+  }
+  .spotlight-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .spotlight input[type=search] {
+    width: 100%;
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--ink-line);
+    background: var(--bg-raised);
+    color: var(--ink);
+    font-size: 13px;
+    font-family: inherit;
+  }
+  .spotlight input[type=search]:focus {
+    outline: none;
+    border-color: var(--blue-soft);
+  }
+  .layer-filter {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .layer-filter .lf {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--ink-line);
+    color: var(--ink-mute);
+    border-radius: 999px;
+    padding: 3px 12px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+  }
+  .layer-filter .lf:hover { color: var(--ink); }
+  .layer-filter .lf.on {
+    background: rgba(22,119,255,0.12);
+    border-color: var(--blue);
+    color: var(--ink);
+  }
+  #spotlight-pick {
+    max-height: 420px;
+    overflow-y: auto;
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
+    background: var(--bg-raised);
+  }
+  .spot-row {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--ink-line-soft);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .spot-row:last-child { border-bottom: none; }
+  .spot-row:hover {
+    background: rgba(255,255,255,0.03);
+  }
+  .lf-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+  }
+  .spot-row-text { flex: 1; min-width: 0; }
+  .spot-row-id {
+    font-size: 11px;
+    color: var(--ink);
+    word-break: break-all;
+  }
+  .spot-row-meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 2px;
+  }
+  .spotlight .detail {
+    background: var(--bg-raised);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    overflow-y: auto;
+    max-height: 520px;
+  }
+  .spot-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+  .spot-head h4 {
+    font-size: 13px;
+    color: var(--ink);
+    font-weight: 600;
+    word-break: break-all;
+    margin: 0;
+  }
+  .spot-open-graph {
+    background: rgba(22,119,255,0.10);
+    border: 1px solid rgba(22,119,255,0.30);
+    color: var(--blue-soft);
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+  .spot-open-graph:hover {
+    background: rgba(22,119,255,0.18);
+    border-color: var(--blue);
+    color: #fff;
+  }
+  .spot-meta {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+    font-size: 11px;
+  }
+  .layer-pill {
+    background: color-mix(in srgb, var(--pc, var(--blue)) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--pc, var(--blue)) 36%, transparent);
+    color: var(--pc, var(--blue));
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .spot-history {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--ink-mute);
+    margin-bottom: 8px;
+    word-break: break-all;
+  }
+  .spot-hist-item {
+    color: var(--blue-soft);
+    cursor: pointer;
+  }
+  .spot-hist-item:hover { color: var(--ink); }
+  .spotlight .neigh {
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--ink-line-soft);
+  }
+  .spotlight .neigh h5 {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--ink-faint);
+    margin-bottom: 6px;
+  }
+  .neigh-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .neigh-row:hover { background: rgba(255,255,255,0.03); }
+  .neigh-id { color: var(--ink); flex: 1; word-break: break-all; }
+  .neigh-row .rel {
+    color: var(--ink-faint);
+    font-family: var(--font-mono);
+    font-size: 10px;
   }
 
   /* Charts row sits above the category grid */
@@ -2165,334 +2369,207 @@ function renderDashboard() {
     nodeIndex[id] = { id, label: n.data.label || id, type: n.data.type || "", layer: n.data.source_layer || "" };
   });
 
+  /* v0.36.0: dashboard radically cut to Hero + Coverage chips + Node
+   * spotlight. All categorized sections (KPI cards, charts, category
+   * tiles, security findings, module age, IAM, Apps→Secrets, network,
+   * CUE, workflows, etc.) were removed from the dashboard — the data
+   * lives on as graph nodes in the 3D Graph view (CUE files + workflow
+   * files added as new node types). The dashboard's job is now just
+   * "what's loaded + jump into the graph". */
+  const newGraphCounts = [];
+  if (DASHBOARD.cue_schemas && DASHBOARD.cue_schemas.file_count)
+    newGraphCounts.push(`<span class="chip">CUE schemas: <strong>$${DASHBOARD.cue_schemas.file_count}</strong></span>`);
+  if (DASHBOARD.workflows && (DASHBOARD.workflows.workflows || []).length)
+    newGraphCounts.push(`<span class="chip">Workflows: <strong>$${DASHBOARD.workflows.workflows.length}</strong></span>`);
+  if (DASHBOARD.secret_refs && (DASHBOARD.secret_refs.secrets || []).length)
+    newGraphCounts.push(`<span class="chip">Secrets refs: <strong>$${DASHBOARD.secret_refs.secrets.length}</strong></span>`);
+  const renderedEnvs = Object.keys(DASHBOARD.rendered_apps || {});
+  if (renderedEnvs.length) {
+    const totalRendered = renderedEnvs.reduce(
+      (s, e) => s + (DASHBOARD.rendered_apps[e].resource_count || 0), 0);
+    newGraphCounts.push(`<span class="chip">Rendered manifests: <strong>$${totalRendered}</strong></span>`);
+  }
+  const driftEnvs = Object.keys(DASHBOARD.app_drift || {});
+  if (driftEnvs.length) {
+    let totalDrift = 0;
+    for (const e of driftEnvs)
+      for (const a of (DASHBOARD.app_drift[e].apps || []))
+        totalDrift += (a.summary?.missing_in_cluster || 0) + (a.summary?.extra_in_cluster || 0);
+    newGraphCounts.push(`<span class="chip">App drift items: <strong>$${totalDrift}</strong></span>`);
+  }
   root.innerHTML = `
     <header class="hero">
-      <h1>Stack intelligence</h1>
+      <div class="hero-eyebrow mono">stack intelligence</div>
+      <h1>$${esc((DASHBOARD.environments?.[0]?.cluster_name) || "kuberly")}</h1>
       <div class="meta-row">
         <span class="chip"><strong>$${m.node_count}</strong> nodes</span>
         <span class="chip"><strong>$${m.edge_count}</strong> edges</span>
         <span class="chip"><strong>$${m.env_count}</strong> envs</span>
         <span class="chip"><strong>$${m.module_count}</strong> modules</span>
-        <span class="chip"><strong>$${(DASHBOARD.k8s && DASHBOARD.k8s.irsa_bindings && DASHBOARD.k8s.irsa_bindings.length) || 0}</strong> IRSA</span>
       </div>
     </header>
-    <div class="kpi-grid">$${kpiHtml}</div>
 
-    <section class="section">
-      <h2>Infrastructure essentials</h2>
-      <div class="chart-row">
-        <div class="chart-card"><h4>Category share</h4><canvas id="chart-cat-share"></canvas></div>
-        <div class="chart-card"><h4>IAM role trust — by principal kind</h4><canvas id="chart-iam-principals"></canvas></div>
-        <div class="chart-card"><h4>Top resource types</h4><canvas id="chart-top-rtypes"></canvas></div>
-      </div>
-      $${renderArchitectureDiagram(DASHBOARD.architecture || {})}
-      $${renderCategoryCards(DASHBOARD.categories || {})}
-    </section>
-
-    <section class="section">
-      <h2>Security findings</h2>
-      $${renderFindings(DASHBOARD.findings || {})}
-    </section>
-
-    <section class="section">
-      <h2>Module age — last applied</h2>
-      $${renderModuleAge(DASHBOARD.module_age || [])}
-    </section>
-
-    <section class="section">
-      <h2>IAM identity & access</h2>
-      $${renderIamView(DASHBOARD.iam || {})}
-    </section>
-
-    <section class="section">
-      <h2>Apps → IAM → Secrets</h2>
-      $${renderAppSecretIam(DASHBOARD.app_secret_iam || [])}
-    </section>
-
-    <section class="section">
-      <h2>Network reachability — security groups</h2>
-      $${renderNetwork(DASHBOARD.network || [])}
-    </section>
-
-    <section class="section">
-      <h2>Secrets — references and Secrets Manager</h2>
-      $${renderSecretRefs(DASHBOARD.secret_refs || {})}
-    </section>
-
-    <section class="section">
-      <h2>Application manifests — rendered from CUE</h2>
-      $${renderRenderedApps(DASHBOARD.rendered_apps || {}, DASHBOARD.app_drift || {})}
-    </section>
-
-    <section class="section">
-      <h2>CUE schemas</h2>
-      $${renderCueSchemas(DASHBOARD.cue_schemas || {})}
-    </section>
-
-    <section class="section">
-      <h2>CI/CD — workflows by module</h2>
-      $${renderWorkflows(DASHBOARD.workflows || {})}
-    </section>
-
-    <section class="section">
-      <h2>Coverage & overlays</h2>
+    <section class="section stats-section">
+      <h2>Stats &amp; overlays</h2>
       <div class="coverage-bar">
-        <span class="chip">OpenSpec: <strong>$${cov.openspec_present ? cov.openspec_changes + " changes" : "not present"}</strong></span>
+        <span class="chip">OpenSpec: <strong>$${cov.openspec_present ? cov.openspec_changes + " changes" : "—"}</strong></span>
         <span class="chip">Docs overlay: <strong>$${(cov.docs_overlay && cov.docs_overlay.generated_at) || "—"}</strong></span>
         <span class="chip">State snapshots: <strong>$${(cov.state_overlay_envs || []).join(", ") || "—"}</strong></span>
         <span class="chip">Doc-linked modules: <strong>$${cov.modules_with_doc_mentions}/$${cov.modules_total}</strong></span>
+        $${newGraphCounts.join("")}
       </div>
       <div class="layer-legend">$${layerLegend}</div>
     </section>
 
-    <section class="section">
-      <h2>Terraform state overlay</h2>
-      $${stateIntro}
-      <div id="tbl-state-env"></div>
-    </section>
-
-    <section class="section">
-      <h2>Environments</h2>
-      <div class="env-grid">$${envCards}</div>
-    </section>
-
-    <section class="section">
-      <h2>Most depended-on nodes</h2>
-      <div class="critical-list">$${critical}</div>
-    </section>
-
-    <section class="section">
-      <h2>Cross-environment drift</h2>
-      <div class="drift-columns">
-        $${driftList("Components", DASHBOARD.drift && DASHBOARD.drift.components)}
-        $${driftList("Applications", DASHBOARD.drift && DASHBOARD.drift.applications)}
-      </div>
-    </section>
-
-    <section class="section">
-      <h2>Longest Terragrunt dependency chains</h2>
-      $${chains}
-    </section>
-
-    <section class="section">
-      <h2>Shared-infra blast radius (Mermaid)</h2>
-      $${blastHtml}
-    </section>
-
-    <section class="section">
-      <h2>IRSA — ServiceAccount → IAM role</h2>
-      <div id="tbl-irsa"></div>
-    </section>
-
-    <section class="section spotlight">
+    <section class="section spotlight" id="spotlight-section">
       <div>
         <h2>Node spotlight</h2>
-        <input type="search" id="spotlight-q" placeholder="Filter by id or label…" autocomplete="off" />
-        <div id="spotlight-pick" style="max-height:220px;overflow-y:auto;font-size:12px"></div>
+        <p class="hero-sub">What was created by what — every node, with its inbound + outbound edges.</p>
+        <div class="spotlight-controls">
+          <input type="search" id="spotlight-q" placeholder="Filter by id, label, type, or layer…" autocomplete="off" />
+          <div class="layer-filter" id="spotlight-layer-filter">
+            <button type="button" data-lf="" class="lf on">all</button>
+            <button type="button" data-lf="static" class="lf">IaC files</button>
+            <button type="button" data-lf="state"  class="lf">TG state</button>
+            <button type="button" data-lf="k8s"    class="lf">K8s resources</button>
+            <button type="button" data-lf="docs"   class="lf">Docs</button>
+          </div>
+        </div>
+        <div id="spotlight-pick"></div>
       </div>
-      <div class="detail" id="spotlight-detail"><h4>Neighborhood</h4><p style="color:var(--ink-faint)">Select a node to see inbound/outbound edges.</p></div>
-    </section>
-
-    <section class="section">
-      <h2>Modules</h2>
-      <div id="tbl-modules"></div>
-    </section>
-    <section class="section">
-      <h2>Components (env × name)</h2>
-      <div id="tbl-components"></div>
-    </section>
-    <section class="section">
-      <h2>Applications (rollup by name)</h2>
-      <div id="tbl-apps-roll"></div>
-    </section>
-    <section class="section">
-      <h2>Applications (per env)</h2>
-      <div id="tbl-apps"></div>
-    </section>
-  `;
-
-  renderSortableTable("tbl-modules", [
-    { key: "provider", label: "Provider" },
-    { key: "name", label: "Module" },
-    { key: "deps", label: "Deps" },
-    { key: "dependents", label: "Dependents" },
-    { key: "doc_mentions", label: "Docs" },
-    { key: "envs", label: "Envs", mono: true },
-  ], DASHBOARD.modules || [], { key: "name", dir: "asc" });
-
-  renderSortableTable("tbl-components", [
-    { key: "env", label: "Env" },
-    { key: "name", label: "Component" },
-    { key: "modules", label: "Modules", mono: true },
-    { key: "cluster_target", label: "Cluster" },
-    { key: "in_state", label: "In state" },
-    { key: "resource_count", label: "Resources" },
-    { key: "state_snapshot_at", label: "State snapshot", mono: true },
-  ], (DASHBOARD.components || []).map(c => ({ ...c, modules: (c.modules || []).join(", "), in_state: c.in_state ? "yes" : "—" })), { key: "env", dir: "asc" });
-
-  renderSortableTable("tbl-apps-roll", [
-    { key: "name", label: "App" },
-    { key: "envs", label: "Envs", mono: true },
-    { key: "runtimes", label: "Runtimes", mono: true },
-    { key: "modules_used", label: "Modules", mono: true },
-    { key: "images", label: "Image repos", mono: true },
-  ], (DASHBOARD.applications_rollup || []).map(r => ({
-    ...r,
-    envs: (r.envs || []).join(", "),
-    runtimes: (r.runtimes || []).join(", "),
-    modules_used: (r.modules_used || []).join(", "),
-    images: (r.images || []).join(", "),
-  })), { key: "name", dir: "asc" });
-
-  renderSortableTable("tbl-apps", [
-    { key: "env", label: "Env" },
-    { key: "name", label: "App" },
-    { key: "runtime", label: "Runtime" },
-    { key: "namespace", label: "NS" },
-    { key: "image", label: "Image", mono: true },
-    { key: "modules_used", label: "Modules", mono: true },
-  ], (DASHBOARD.applications || []).map(a => ({ ...a, modules_used: (a.modules_used || []).join(", ") })), { key: "env", dir: "asc" });
-
-  const stRows = (st.by_env || []).map(r => ({
-    env: r.env,
-    snapshot_at: r.snapshot_at || "—",
-    components: r.components,
-    confirmed: r.static_confirmed_by_state,
-    state_only: r.state_only_components,
-    resources: r.resources,
-  }));
-  renderSortableTable("tbl-state-env", [
-    { key: "env", label: "Env" },
-    { key: "snapshot_at", label: "State snapshot", mono: true },
-    { key: "components", label: "Components" },
-    { key: "confirmed", label: "Static ∩ state" },
-    { key: "state_only", label: "State-only" },
-    { key: "resources", label: "Resource nodes" },
-  ], stRows, { key: "env", dir: "asc" });
-
-  renderSortableTable("tbl-irsa", [
-    { key: "env", label: "Env" },
-    { key: "ns", label: "Namespace" },
-    { key: "sa", label: "ServiceAccount" },
-    { key: "role", label: "IAM role", mono: true },
-  ], irsaRows, { key: "env", dir: "asc" });
-
-  const blastRoot = document.getElementById("blast-acc-root");
-  if (blastRoot && blasts.length) {
-    blasts.forEach(b => {
-      const det = document.createElement("details");
-      det.open = false;
-      const sum = document.createElement("summary");
-      sum.textContent = "shared-infra blast · " + b.env;
-      det.appendChild(sum);
-      const wrap = document.createElement("div");
-      wrap.className = "mermaid-wrap";
-      const pre = document.createElement("pre");
-      pre.className = "mermaid";
-      pre.textContent = b.source;
-      wrap.appendChild(pre);
-      det.appendChild(wrap);
-      blastRoot.appendChild(det);
-    });
-  }
-
-  try {
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: "dark",
-      securityLevel: "loose",
-      maxTextSize: 900000,
-      themeVariables: { primaryColor: "#161b22", primaryTextColor: "#fff", lineColor: "#1677ff" },
-    });
-    if (blastRoot && blastRoot.querySelector(".mermaid")) {
-      try {
-        const p = mermaid.run({ querySelector: "#blast-acc-root .mermaid" });
-        if (p && typeof p.then === "function") {
-          p.catch((e) => console.warn("mermaid", e));
-        }
-      } catch (e2) {
-        console.warn("mermaid run", e2);
-      }
-    }
-    /* Render the Compute → Data → Identity flow strip on the dashboard. */
-    const flowEl = document.getElementById("stack-flow-mmd");
-    if (flowEl) {
-      try {
-        const p = mermaid.run({ nodes: [flowEl] });
-        if (p && typeof p.then === "function") p.catch((e) => console.warn("mermaid flow", e));
-      } catch (e2) { console.warn("mermaid flow run", e2); }
-    }
-  } catch (e) { console.warn("mermaid", e); }
-
-  /* Charts + category-card click-to-expand wiring. */
-  try { renderDashboardCharts(DASHBOARD.categories || {}); }
-  catch (e) { console.warn("charts", e); }
-  /* v0.35.0: generic click-to-copy for any .kbd-copy button rendered on
-   * the dashboard (render_apps.py / diff_apps.py prompts, etc.) */
-  document.querySelectorAll(".kbd-copy").forEach(btn => {
-    if (btn.__wired) return;
-    btn.__wired = true;
-    btn.addEventListener("click", async () => {
-      const text = btn.getAttribute("data-copy") || "";
-      if (!text) return;
-      try {
-        await navigator.clipboard.writeText(text);
-        const tick = btn.querySelector(".kbd-tick");
-        if (tick) {
-          const prev = tick.textContent;
-          tick.textContent = "copied ✓";
-          setTimeout(() => { tick.textContent = prev || "copy"; }, 1600);
-        }
-      } catch (e) {
-        const r = document.createRange(); r.selectNodeContents(btn);
-        const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
-      }
-    });
-  });
-  document.querySelectorAll(".cat-card").forEach(card => {
-    const head = card.querySelector(".cat-head");
-    if (!head) return;
-    head.addEventListener("click", () => {
-      const open = card.getAttribute("data-open") === "true";
-      card.setAttribute("data-open", open ? "false" : "true");
-    });
-  });
-
-  /* Spotlight */
+      <div class="detail" id="spotlight-detail">
+        <h4>Neighborhood</h4>
+        <p style="color:var(--ink-faint);font-size:12px">Pick a node on the left to see its inbound and outbound edges. Click any neighbor to walk the graph.</p>
+      </div>
+  /* v0.36.0 Spotlight — promoted to top of dashboard, with layer filter,
+   * recent-history breadcrumb, and a "open in 3D Graph" double-click
+   * shortcut. Everything still pure DOM — no extra deps. */
   const spotQ = document.getElementById("spotlight-q");
   const spotPick = document.getElementById("spotlight-pick");
   const spotDet = document.getElementById("spotlight-detail");
   const allNodes = Object.values(nodeIndex);
+  const layerBtns = document.querySelectorAll("#spotlight-layer-filter .lf");
+  let activeLayer = "";  /* "" = all */
+  const history = [];    /* recent node ids the user clicked */
+
+  function _layerColor(layer) {
+    if (layer === "static") return "var(--blue)";
+    if (layer === "state")  return "var(--aws)";
+    if (layer === "k8s")    return "var(--k8s-red)";
+    return "var(--ink-mute)";
+  }
+  function _layerLabel(layer) {
+    if (layer === "static") return "IaC";
+    if (layer === "state")  return "state";
+    if (layer === "k8s")    return "k8s";
+    if (layer === "docs")   return "docs";
+    return layer || "?";
+  }
 
   function spotlightDetail(id) {
     const inc = EDGES.filter(e => e.data.target === id);
     const out = EDGES.filter(e => e.data.source === id);
     const n = nodeIndex[id] || {};
-    const inl = inc.map(e => `<div><a data-j="$${esc(e.data.source)}">$${esc(e.data.source)}</a> <span style="color:var(--ink-faint)">[$${esc(e.data.relation)}]</span></div>`).join("") || "<span style='color:var(--ink-faint)'>none</span>";
-    const outl = out.map(e => `<div><a data-j="$${esc(e.data.target)}">$${esc(e.data.target)}</a> <span style="color:var(--ink-faint)">[$${esc(e.data.relation)}]</span></div>`).join("") || "<span style='color:var(--ink-faint)'>none</span>";
-    spotDet.innerHTML = `<h4>$${esc(id)}</h4><div style="color:var(--ink-mute)">$${esc(n.label)} · $${esc(n.type)} · $${esc(n.layer)}</div>
+    if (!history.length || history[history.length - 1] !== id) {
+      history.push(id);
+      if (history.length > 8) history.shift();
+    }
+    const link = (otherId, rel) => {
+      const o = nodeIndex[otherId] || {};
+      const dot = `<span class="lf-dot" style="background:$${_layerColor(o.layer)}"></span>`;
+      return `<div class="neigh-row" data-j="$${esc(otherId)}">
+        $${dot}<span class="mono neigh-id">$${esc(otherId)}</span>
+        <span class="rel">[$${esc(rel)}]</span>
+      </div>`;
+    };
+    const inl = inc.map(e => link(e.data.source, e.data.relation)).join("")
+      || `<span style="color:var(--ink-faint)">none</span>`;
+    const outl = out.map(e => link(e.data.target, e.data.relation)).join("")
+      || `<span style="color:var(--ink-faint)">none</span>`;
+    const breadcrumb = history.length > 1
+      ? `<div class="spot-history">history: ` +
+        history.slice(0, -1).map(h =>
+          `<a class="spot-hist-item" data-j="$${esc(h)}">$${esc(h)}</a>`
+        ).join(`<span style="color:var(--ink-faint)"> › </span>`) +
+        `</div>`
+      : "";
+    spotDet.innerHTML = `
+      $${breadcrumb}
+      <div class="spot-head">
+        <h4 class="mono">$${esc(id)}</h4>
+        <button type="button" class="spot-open-graph" data-j="$${esc(id)}">open in 3D graph →</button>
+      </div>
+      <div class="spot-meta">
+        <span class="layer-pill" style="--pc:$${_layerColor(n.layer)}">$${esc(_layerLabel(n.layer))}</span>
+        <span class="mono" style="color:var(--ink-mute)">$${esc(n.type || "")}</span>
+        <span class="mono" style="color:var(--ink-faint)">$${esc(n.label || "")}</span>
+      </div>
       <div class="neigh"><h5>Inbound ($${inc.length})</h5>$${inl}</div>
-      <div class="neigh"><h5>Outbound ($${out.length})</h5>$${outl}</div>`;
-    spotDet.querySelectorAll("a[data-j]").forEach(a => {
-      a.addEventListener("click", ev => { ev.preventDefault(); spotlightDetail(a.getAttribute("data-j")); });
+      <div class="neigh"><h5>Outbound ($${out.length})</h5>$${outl}</div>
+    `;
+    spotDet.querySelectorAll("[data-j]").forEach(a => {
+      a.addEventListener("click", ev => {
+        ev.preventDefault();
+        const tgt = a.getAttribute("data-j");
+        if (a.classList.contains("spot-open-graph")) {
+          if (typeof setView === "function") setView("graph");
+          /* Tiny delay so Graph3D init fires; then center on the node. */
+          setTimeout(() => {
+            try {
+              if (typeof Graph3D !== "undefined" && Graph3D) {
+                const live = (Graph3D.graphData().nodes || []).find(n => n.id === tgt);
+                if (live && typeof live.x === "number") {
+                  Graph3D.centerAt(live.x, live.y, 600);
+                  Graph3D.cameraPosition(
+                    { x: live.x, y: live.y, z: (live.z || 0) + 220 },
+                    live, 1000);
+                }
+              }
+            } catch (_) {}
+          }, 200);
+          return;
+        }
+        spotlightDetail(tgt);
+      });
     });
   }
 
   function filterSpotlight() {
     const q = (spotQ.value || "").trim().toLowerCase();
-    const hit = !q ? allNodes.slice(0, 40) : allNodes.filter(n => n.id.toLowerCase().includes(q) || (n.label && n.label.toLowerCase().includes(q))).slice(0, 60);
-    spotPick.innerHTML = hit.map(n => `<div style="padding:6px 0;border-bottom:1px solid var(--ink-line-soft);cursor:pointer" data-id="$${esc(n.id)}"><span class="mono">$${esc(n.id)}</span><br/><span style="color:var(--ink-faint)">$${esc(n.type)}</span></div>`).join("");
+    let pool = allNodes;
+    if (activeLayer) pool = pool.filter(n => n.layer === activeLayer);
+    const hit = (!q
+      ? pool
+      : pool.filter(n =>
+          n.id.toLowerCase().includes(q)
+          || (n.label && n.label.toLowerCase().includes(q))
+          || (n.type && n.type.toLowerCase().includes(q))
+          || (n.layer && n.layer.toLowerCase().includes(q))
+        )
+    ).slice(0, 80);
+    spotPick.innerHTML = hit.map(n => `
+      <div class="spot-row" data-id="$${esc(n.id)}">
+        <span class="lf-dot" style="background:$${_layerColor(n.layer)}"></span>
+        <div class="spot-row-text">
+          <div class="mono spot-row-id">$${esc(n.id)}</div>
+          <div class="spot-row-meta">$${esc(n.type)} · $${esc(_layerLabel(n.layer))}</div>
+        </div>
+      </div>
+    `).join("");
     spotPick.querySelectorAll("[data-id]").forEach(el => {
       el.addEventListener("click", () => spotlightDetail(el.getAttribute("data-id")));
     });
   }
   spotQ.addEventListener("input", filterSpotlight);
+  layerBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeLayer = btn.getAttribute("data-lf") || "";
+      layerBtns.forEach(b => b.classList.toggle("on",
+        (b.getAttribute("data-lf") || "") === activeLayer));
+      filterSpotlight();
+    });
+  });
   filterSpotlight();
-
-  /* Edge list for spotlight — cytoscape uses elements with data wrapper */
-  if (!EDGES[0] || !EDGES[0].data) {
-    /* normalize if ever bare */
-  }
 }
 
 /* --- View switching & 3D force-directed graph (v0.34.0) --------------- *

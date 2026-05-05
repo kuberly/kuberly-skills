@@ -2047,8 +2047,9 @@ class GraphHtmlVizTests(unittest.TestCase):
                 self.assertIn("kuberly", html)
                 self.assertIn("Dashboard", html)
                 self.assertIn("kuberly-dashboard-json", html)
-                self.assertIn("Terraform state overlay", html)
-                self.assertIn("tbl-state-env", html)
+                # v0.36.0: dashboard cut to Hero + Coverage + Spotlight.
+                self.assertIn("Stats &amp; overlays", html)
+                self.assertIn("Node spotlight", html)
         finally:
             tmp.cleanup()
 
@@ -2083,10 +2084,13 @@ class GraphHtmlVizTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
-    def test_graph_html_dashboard_categories(self):
-        """v0.34.0: dashboard renders the 8 infra-essentials category cards
-        (compute / data / identity / networking / secrets / registries /
-        queues / k8s) plus Chart.js + the favicon."""
+    def test_graph_html_dashboard_minimal(self):
+        """v0.36.0: dashboard cut to three sections — Hero, Stats &
+        overlays, and Node spotlight. All the v0.34/v0.35 category /
+        chart / findings / network / IAM sections were removed; their
+        underlying data still loads (and surfaces in the 3D Graph view)
+        but is no longer rendered as dashboard sections.
+        """
         from kuberly_platform import write_graph_html
 
         tmp, g = self._build_graph()
@@ -2095,21 +2099,33 @@ class GraphHtmlVizTests(unittest.TestCase):
                 out_path = Path(out)
                 write_graph_html(g, out_path)
                 html = (out_path / "graph.html").read_text(encoding="utf-8")
-                # Category card render hooks.
-                self.assertIn("function renderCategoryCards", html)
-                self.assertIn("function renderDashboardCharts", html)
-                self.assertIn("function renderArchitectureDiagram", html)
-                self.assertIn('id="chart-cat-share"', html)
-                self.assertIn('id="chart-iam-principals"', html)
-                self.assertIn('id="chart-top-rtypes"', html)
-                # iconify-icon library loaded for the architecture tiles.
-                self.assertIn("iconify-icon", html)
-                self.assertIn("code.iconify.design", html)
-                # Chart.js loaded.
-                self.assertIn("chart.umd.min.js", html)
-                # Inline SVG favicon (data URI).
+                # Hero + the three retained sections.
+                self.assertIn('id="kuberly-dashboard-json"', html)
+                self.assertIn("Stats &amp; overlays", html)
+                self.assertIn("Node spotlight", html)
+                # Spotlight got a layer-filter chip row and an
+                # "open in 3D graph" button (v0.36.0 usability lift).
+                self.assertIn('id="spotlight-layer-filter"', html)
+                self.assertIn("spot-open-graph", html)
+                # Inline SVG favicon (data URI) is still present.
                 self.assertIn('rel="icon"', html)
                 self.assertIn("data:image/svg+xml", html)
+                # KPI accent stripes were removed (kuberly-web style).
+                self.assertNotIn("kpi-warn", html)
+                self.assertNotIn("kpi-ok", html)
+                # The dropped category sections must NOT appear as
+                # dashboard h2 titles.
+                for dropped in ("Infrastructure essentials",
+                                "Security findings",
+                                "Module age — last applied",
+                                "IAM identity &amp; access",
+                                "Apps → IAM → Secrets",
+                                "Network reachability — security groups",
+                                "CUE schemas",
+                                "CI/CD — workflows by module",
+                                "Terraform state overlay"):
+                    self.assertNotIn(f"<h2>{dropped}</h2>", html,
+                        f"v0.36.0 should not render section: {dropped}")
         finally:
             tmp.cleanup()
 
