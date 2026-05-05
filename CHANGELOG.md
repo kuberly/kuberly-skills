@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.34.1 — 2026-05-06
+
+Visual polish on the v0.34.0 3D graph — the dim, scattered cluster
+becomes a bright, clustered, firing neural network.
+
+- **VISUAL:** node radius scaling **`nodeRelSize`** 3.4 → **7**;
+  per-node weighted value 2 → 2 + degree*0.5 (cap 16). Big high-degree
+  hubs read clearly even from a wide camera.
+- **VISUAL:** **`nodeOpacity`** 0.92 → **1.0**; **`linkOpacity`**
+  0.55 → **0.75**; **`linkWidth`** 0.6 → **1.4**. Bolder lines, more
+  contrast against the dark background.
+- **VISUAL:** **`linkDirectionalParticles(2)`** + per-link spike color
+  picked from a vibrant 8-color neon palette via stable endpoint hash.
+  Different "neural pathways" glow in different colors.
+- **VISUAL:** global firing pulse (220 ms tick) modulates particle
+  width on a sine wave (1.2 → 3.4 px) and rotates the spike palette
+  every 4 ticks so the whole network reads as continuously firing.
+- **LAYOUT:** custom **`d3Force("cluster")`** pulls each `source_layer`
+  toward its own attractor in 3D space — `static`, `state`, `k8s`,
+  `docs` separate into their own lobes instead of one fuzzy ball.
+  Charge raised -220 → -380, link distance 60 → 38 so each lobe
+  packs densely.
+- **CAMERA:** initial fly to `z=520` after 400 ms so the cluster fills
+  the viewport instead of looking like a tiny dot.
+- **BUMP:** apm.yml 0.34.0 → 0.34.1.
+
 ## v0.34.0 — 2026-05-06
 
 Major UX overhaul of `.kuberly/graph.html` — both the **Graph view** and

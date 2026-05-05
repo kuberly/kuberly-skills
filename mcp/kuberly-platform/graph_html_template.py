@@ -1607,6 +1607,36 @@ function buildGraph3D() {
     return "rgba(255,255,255,0.10)";
   }
 
+  /* --- v0.34.1 visuals: bolder nodes/links + neural-spike particles ----- *
+   *   Per-link "spike" color picked from a vibrant neon palette using a
+   *   stable hash of the endpoints — different pathways glow differently.
+   *   A global pulse driven by Date.now() modulates particle width every
+   *   frame so the network reads as constantly firing. The cluster force
+   *   pulls each source_layer toward its own offset in 3D space so the
+   *   floating shape resolves into 3-4 lobes instead of one fuzzy ball. */
+  const SPIKE_PALETTE = [
+    "#00f5ff", "#3c89e8", "#a266ff", "#ff5e9c",
+    "#ffd700", "#ff8b3d", "#9aff5e", "#5fd098",
+  ];
+  function _hashStr(s) {
+    let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return Math.abs(h);
+  }
+  function spikeColorFn(link) {
+    const sid = typeof link.source === "object" ? link.source.id : link.source;
+    const tid = typeof link.target === "object" ? link.target.id : link.target;
+    return SPIKE_PALETTE[_hashStr((sid || "") + "|" + (tid || "")) % SPIKE_PALETTE.length];
+  }
+  /* Build a per-source_layer cluster offset so each layer has its own
+     attractor in 3D space. Layers we don't show by default still get a
+     slot — when toggled on they'll pull in toward their position. */
+  const CLUSTER_OFFSETS = {
+    static: { x: -260, y:    0, z:    0 },
+    state:  { x:  260, y:    0, z:    0 },
+    k8s:    { x:    0, y:  220, z:  -60 },
+    docs:   { x:    0, y: -220, z:   60 },
+  };
+
   /* --- Mount ForceGraph3D --------------------------------------------- */
   const host = document.getElementById("graph-3d");
   Graph3D = ForceGraph3D({ controlType: "orbit" })(host)
@@ -1614,19 +1644,22 @@ function buildGraph3D() {
     .width(host.clientWidth)
     .height(host.clientHeight)
     .nodeId("id")
-    .nodeLabel(n => `<div style="font-family:Geist,system-ui,sans-serif;font-size:12px;padding:6px 8px;background:rgba(20,24,30,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#fff;">$${escapeHtml(n.label || n.id)}<br><span style="opacity:0.6;font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;">$${escapeHtml(n.type || "")} · $${escapeHtml(n.source_layer)}</span></div>`)
-    .nodeVal(n => 1 + Math.min(((OUT_BY_ID.get(n.id) || []).length + (IN_BY_ID.get(n.id) || []).length) * 0.4, 12))
-    .nodeRelSize(3.4)
-    .nodeOpacity(0.92)
+    .nodeLabel(n => `<div style="font-family:Geist,system-ui,sans-serif;font-size:12px;padding:6px 8px;background:rgba(20,24,30,0.95);border:1px solid rgba(255,255,255,0.18);border-radius:6px;color:#fff;">$${escapeHtml(n.label || n.id)}<br><span style="opacity:0.6;font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;">$${escapeHtml(n.type || "")} · $${escapeHtml(n.source_layer)}</span></div>`)
+    .nodeVal(n => 2 + Math.min(((OUT_BY_ID.get(n.id) || []).length + (IN_BY_ID.get(n.id) || []).length) * 0.5, 16))
+    .nodeRelSize(7)
+    .nodeOpacity(1.0)
     .nodeColor(nodeColorFn)
-    .nodeResolution(10)
+    .nodeResolution(14)
     .linkColor(linkColorFn)
-    .linkOpacity(0.55)
-    .linkWidth(0.6)
-    .linkDirectionalParticles(0)
+    .linkOpacity(0.75)
+    .linkWidth(1.4)
+    .linkDirectionalParticles(2)
+    .linkDirectionalParticleSpeed(0.006)
+    .linkDirectionalParticleWidth(2.5)
+    .linkDirectionalParticleColor(spikeColorFn)
     .enableNodeDrag(true)
-    .cooldownTime(15000)
-    .warmupTicks(60)
+    .cooldownTime(20000)
+    .warmupTicks(80)
     .onNodeClick(n => {
       GRAPH_STATE.selectedId = n.id;
       renderSidebar(n);
@@ -1640,16 +1673,61 @@ function buildGraph3D() {
       Graph3D.nodeColor(nodeColorFn).linkColor(linkColorFn);
     });
 
-  /* d3-force-3d tuning — high charge for that spread-out gas/galaxy feel,
-     long link distance so clusters don't crush together. */
+  /* d3-force-3d tuning + a custom per-layer cluster force. Higher charge
+     and shorter link distance pack each cluster densely, then the cluster
+     force shoves each source_layer toward its own attractor. */
   if (Graph3D.d3Force) {
     const charge = Graph3D.d3Force("charge");
-    if (charge && charge.strength) charge.strength(-220);
+    if (charge && charge.strength) charge.strength(-380);
     const link = Graph3D.d3Force("link");
-    if (link && link.distance) link.distance(60);
+    if (link && link.distance) link.distance(38);
+    const clusterForce = (alpha) => {
+      const data = Graph3D.graphData();
+      if (!data || !data.nodes) return;
+      data.nodes.forEach(n => {
+        const t = CLUSTER_OFFSETS[n.source_layer];
+        if (!t) return;
+        const k = alpha * 0.18;
+        if (typeof n.x === "number") n.vx = (n.vx || 0) + (t.x - n.x) * k;
+        if (typeof n.y === "number") n.vy = (n.vy || 0) + (t.y - n.y) * k;
+        if (typeof n.z === "number") n.vz = (n.vz || 0) + (t.z - n.z) * k;
+      });
+    };
+    Graph3D.d3Force("cluster", clusterForce);
   }
 
   Graph3D.graphData(currentGraphData());
+
+  /* Global neural-firing pulse: every ~1.6s nudge particle width up and
+     back so the whole network looks like it's firing in waves. We also
+     periodically rotate the particle color palette by re-applying the
+     spike color fn so links shift their "channel" over time.  */
+  if (window.__kuberlyPulse) clearInterval(window.__kuberlyPulse);
+  let _pulse = 0;
+  window.__kuberlyPulse = setInterval(() => {
+    if (!Graph3D) return;
+    if (!document.body.classList.contains("view-graph")) return;
+    _pulse += 1;
+    const w = 2.0 + Math.sin(_pulse * 0.35) * 1.4;
+    Graph3D.linkDirectionalParticleWidth(Math.max(1.2, w));
+    /* Every 4th tick, rotate spike palette so links flash different colors. */
+    if (_pulse % 4 === 0) {
+      Graph3D.linkDirectionalParticleColor(link => {
+        const sid = typeof link.source === "object" ? link.source.id : link.source;
+        const tid = typeof link.target === "object" ? link.target.id : link.target;
+        return SPIKE_PALETTE[(_hashStr((sid || "") + "|" + (tid || "")) + _pulse) % SPIKE_PALETTE.length];
+      });
+    }
+  }, 220);
+
+  /* Camera fly: sit closer than zoomToFit's default so the cluster fills
+     the view from the start. The cluster force settles things over ~20s,
+     by which time the user can scroll out / orbit if they want a wide. */
+  setTimeout(() => {
+    if (Graph3D) {
+      Graph3D.cameraPosition({ x: 0, y: 0, z: 520 }, { x: 0, y: 0, z: 0 }, 1200);
+    }
+  }, 400);
 
   /* --- Sidebar / search / layer toggle / blast wiring ------------------ */
   const searchEl = document.getElementById("search");
