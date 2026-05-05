@@ -48,3 +48,37 @@ Schema 1 + per-module `resources[]`: each resource's `address`, `type`, `name`, 
 The `query_resources` MCP tool filters them: `query_resources(resource_type="helm_release")`, `query_resources(module="loki", environment="prod")`, `query_resources(name_contains="secret", include_redacted=False)`.
 
 **Schema 2 requires** `s3:GetObject` on the state bucket in addition to `s3:ListBucket`. Commit the overlay file alongside the bump — the platform graph picks it up automatically on build.
+
+## Live-cluster overlay (v0.19.0+)
+
+`k8s_graph.py` does for the **runtime layer** what `state_graph.py` does for the infra layer: shells out to `kubectl get -o json`, extracts whitelisted fields per kind, emits a sanitized `.claude/k8s_overlay_<env>.json` file the consumer commits.
+
+```bash
+# be connected to the cluster:
+aws eks update-kubeconfig --name prod --region eu-central-1
+
+python3 scripts/mcp/kuberly-platform/k8s_graph.py generate \
+    --env prod --output .claude/k8s_overlay_prod.json
+
+# subset / opt-ins:
+#   --namespaces monitoring,argocd       limit to listed ns
+#   --include-pods                       include Pods (off by default — transient)
+#   --context arn:aws:eks:...            override kubectl current-context
+#   --dry-run                            print without writing
+```
+
+### Per-kind whitelist
+
+Workloads (Deployment / StatefulSet / DaemonSet / Job / CronJob / Pod): name, namespace, labels, ownerRefs, replicas, serviceAccountName, container names, image refs, configMap/secret/PVC volume references **(names only)**, envFrom/env.valueFrom **(names only)**.
+
+Service: selector, ports (number+protocol). Ingress: hosts, backend service refs. ConfigMap / Secret: **`data_keys` only — values NEVER read**. ServiceAccount: name + IRSA role ARN annotation. HPA: target, min/max replicas. NetworkPolicy: pod selector, policy types.
+
+**Always dropped**: env values, `command`, `args`, `status`, all `data` / `stringData`, all unlisted annotations.
+
+### IRSA bridge
+
+ServiceAccounts with `eks.amazonaws.com/role-arn` annotation get an `irsa_bound` edge to the matching `resource:<env>/<m>/.../aws_iam_role.<n>` node from the state overlay. This means once both overlays are committed, the graph spans **EKS IAM role (Terraform) → ServiceAccount (k8s) → workload (k8s)** — useful for "what cluster workload uses this IAM role" queries.
+
+### MCP tool: `query_k8s`
+
+Filter `k8s_resource:` nodes by `environment` / `namespace` / `kind` / `name_contains` / `label_selector`. Set `include_redacted=False` to hide Secret/ConfigMap nodes when sharing graph dumps.

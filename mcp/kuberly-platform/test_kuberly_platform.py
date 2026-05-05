@@ -1061,5 +1061,209 @@ class StateOverlaySchema2Tests(unittest.TestCase):
         self.assertEqual(out["count"], 3)
 
 
+class K8sGraphExtractTests(unittest.TestCase):
+    """Per-kind extractor tests for k8s_graph.py — no kubectl, no cluster."""
+
+    def setUp(self) -> None:
+        sg_path = _pkg if (_pkg / "k8s_graph.py").is_file() else _script_dir
+        if str(sg_path) not in sys.path:
+            sys.path.insert(0, str(sg_path))
+        import k8s_graph
+        self.kg = k8s_graph
+
+    def test_deployment_extraction_drops_secrets(self) -> None:
+        deploy = {
+            "kind": "Deployment", "apiVersion": "apps/v1",
+            "metadata": {"name": "loki", "namespace": "monitoring",
+                         "labels": {"app": "loki"},
+                         "annotations": {"deployment.kubernetes.io/revision": "5",
+                                         "secret.payload": "leak-me"}},
+            "spec": {
+                "replicas": 3,
+                "template": {"spec": {
+                    "serviceAccountName": "loki",
+                    "containers": [{
+                        "name": "loki", "image": "grafana/loki:3.0.0",
+                        "command": ["sh", "-c", "rm -rf /"],
+                        "args": ["--password=topsecret"],
+                        "env": [{"name": "DB_PASS", "value": "leakme"}],
+                        "envFrom": [{"configMapRef": {"name": "loki-cfg"}}],
+                    }],
+                    "volumes": [
+                        {"name": "creds", "secret": {"secretName": "loki-creds"}},
+                    ],
+                }},
+            },
+            "status": {"readyReplicas": 3},
+        }
+        out = self.kg._extract_resource(deploy)
+        blob = json.dumps(out)
+        for forbidden in ("topsecret", "leakme", "rm -rf",
+                          "leak-me", "deployment.kubernetes.io/revision",
+                          "readyReplicas"):
+            self.assertNotIn(forbidden, blob, f"leaked: {forbidden!r}")
+        self.assertEqual(out["replicas"], 3)
+        self.assertEqual(out["service_account"], "loki")
+        self.assertIn("loki-cfg", out["config_refs"])
+        self.assertIn("loki-creds", out["secret_refs"])
+
+    def test_secret_extraction_keeps_keys_drops_values(self) -> None:
+        secret = {
+            "kind": "Secret", "apiVersion": "v1",
+            "metadata": {"name": "creds", "namespace": "monitoring"},
+            "type": "Opaque",
+            "data": {"password": "VEhJU0lTU0VDUkVU", "token": "WVlZ"},
+            "stringData": {"raw": "RAW-SECRET"},
+        }
+        out = self.kg._extract_resource(secret)
+        blob = json.dumps(out)
+        for forbidden in ("VEhJU0lTU0VDUkVU", "WVlZ", "RAW-SECRET"):
+            self.assertNotIn(forbidden, blob)
+        self.assertEqual(out["secret_type"], "Opaque")
+        self.assertEqual(sorted(out["data_keys"]), ["password", "token"])
+
+    def test_configmap_extraction_keeps_keys_drops_values(self) -> None:
+        cm = {
+            "kind": "ConfigMap", "apiVersion": "v1",
+            "metadata": {"name": "cfg", "namespace": "monitoring"},
+            "data": {"loki.yaml": "auth_enabled: false\nadmin_password: TOPSECRET"},
+        }
+        out = self.kg._extract_resource(cm)
+        self.assertNotIn("TOPSECRET", json.dumps(out))
+        self.assertEqual(out["data_keys"], ["loki.yaml"])
+
+    def test_serviceaccount_irsa_lift(self) -> None:
+        sa = {
+            "kind": "ServiceAccount", "apiVersion": "v1",
+            "metadata": {"name": "loki", "namespace": "monitoring",
+                         "annotations": {
+                             "eks.amazonaws.com/role-arn": "arn:aws:iam::111111111111:role/loki",
+                             "kubectl.kubernetes.io/last-applied": "{...}",  # NOT in keep set
+                         }},
+        }
+        out = self.kg._extract_resource(sa)
+        self.assertEqual(out["irsa_role_arn"], "arn:aws:iam::111111111111:role/loki")
+        self.assertIn("eks.amazonaws.com/role-arn", out["annotations"])
+        self.assertNotIn("kubectl.kubernetes.io/last-applied", out["annotations"])
+
+    def test_unknown_annotations_dropped(self) -> None:
+        deploy = {
+            "kind": "Deployment", "apiVersion": "apps/v1",
+            "metadata": {"name": "x", "namespace": "y",
+                         "annotations": {"random.example.com/payload": "DO-NOT-LEAK"}},
+            "spec": {"replicas": 1, "template": {"spec": {}}},
+        }
+        out = self.kg._extract_resource(deploy)
+        self.assertNotIn("DO-NOT-LEAK", json.dumps(out))
+
+
+class K8sOverlayConsumerTests(unittest.TestCase):
+    """End-to-end: k8s overlay file -> graph nodes/edges + IRSA bridge."""
+
+    def setUp(self) -> None:
+        self.tmp = _fake_repo()
+        # State overlay creates aws_iam_role.loki resource node — IRSA target
+        Path(self.tmp.name, ".claude", "state_overlay_prod.json").parent.mkdir(
+            parents=True, exist_ok=True)
+        Path(self.tmp.name, ".claude", "state_overlay_prod.json").write_text(json.dumps({
+            "schema_version": 2, "generated_at": "2026-05-05T00:00:00Z",
+            "generator": "test",
+            "cluster": {"env": "prod", "name": "prod", "region": "us-east-1",
+                        "account_id": "111111111111",
+                        "state_bucket": "111111111111-us-east-1-prod-tf-states"},
+            "deployed_modules": [{"name": "loki", "state_key": "aws/loki/terraform.tfstate"}],
+            "deployed_applications": [],
+            "modules": {"loki": {"resource_count": 1, "output_names": [],
+                "resources": [{"address": "module.iam.aws_iam_role.loki",
+                               "type": "aws_iam_role", "name": "loki",
+                               "provider": "hashicorp/aws", "instance_count": 1,
+                               "depends_on": []}]}},
+        }) + "\n")
+        # K8s overlay
+        Path(self.tmp.name, ".claude", "k8s_overlay_prod.json").write_text(json.dumps({
+            "schema_version": 1, "generated_at": "2026-05-05T00:00:00Z",
+            "generator": "test",
+            "cluster": {"env": "prod", "name": "prod", "context": ""},
+            "namespaces": ["monitoring"],
+            "resources": [
+                {"kind": "Deployment", "apiVersion": "apps/v1",
+                 "namespace": "monitoring", "name": "loki",
+                 "labels": {"app.kubernetes.io/name": "loki"},
+                 "owner_refs": [],
+                 "service_account": "loki", "replicas": 2,
+                 "containers": ["loki"], "images": ["grafana/loki:3.0.0"],
+                 "config_refs": ["loki-cfg"], "secret_refs": ["loki-creds"],
+                 "pvc_refs": []},
+                {"kind": "Service", "apiVersion": "v1",
+                 "namespace": "monitoring", "name": "loki",
+                 "labels": {}, "owner_refs": [],
+                 "selector": {"app.kubernetes.io/name": "loki"},
+                 "ports": [{"port": 3100, "protocol": "TCP"}],
+                 "service_type": "ClusterIP"},
+                {"kind": "ServiceAccount", "apiVersion": "v1",
+                 "namespace": "monitoring", "name": "loki",
+                 "labels": {}, "owner_refs": [],
+                 "annotations": {"eks.amazonaws.com/role-arn":
+                                 "arn:aws:iam::111111111111:role/loki"},
+                 "irsa_role_arn": "arn:aws:iam::111111111111:role/loki"},
+                {"kind": "Secret", "apiVersion": "v1",
+                 "namespace": "monitoring", "name": "loki-creds",
+                 "labels": {}, "owner_refs": [],
+                 "secret_type": "Opaque", "data_keys": ["password"]},
+            ],
+        }) + "\n")
+        self.g = KuberlyPlatform(self.tmp.name)
+        self.g.build()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_k8s_nodes_synthesized(self) -> None:
+        kinds = sorted({n.get("k8s_kind") for n in self.g.nodes.values()
+                        if n.get("type") == "k8s_resource"})
+        self.assertEqual(kinds, ["Deployment", "Secret", "Service", "ServiceAccount"])
+
+    def test_workload_uses_sa_edge(self) -> None:
+        edges = [(e["source"], e["target"]) for e in self.g.edges
+                 if e.get("relation") == "uses_sa"]
+        self.assertIn(("k8s:prod/monitoring/Deployment/loki",
+                       "k8s:prod/monitoring/ServiceAccount/loki"), edges)
+
+    def test_service_selects_workload_via_label_match(self) -> None:
+        edges = [(e["source"], e["target"]) for e in self.g.edges
+                 if e.get("relation") == "selects"]
+        self.assertIn(("k8s:prod/monitoring/Service/loki",
+                       "k8s:prod/monitoring/Deployment/loki"), edges)
+
+    def test_irsa_bridge_to_state_iam_role(self) -> None:
+        edges = [(e["source"], e["target"]) for e in self.g.edges
+                 if e.get("relation") == "irsa_bound"]
+        self.assertIn(("k8s:prod/monitoring/ServiceAccount/loki",
+                       "resource:prod/loki/module.iam.aws_iam_role.loki"), edges)
+
+    def test_secret_node_redacted(self) -> None:
+        secret = self.g.nodes["k8s:prod/monitoring/Secret/loki-creds"]
+        self.assertTrue(secret.get("redacted"))
+        # No value-bearing fields in the node either.
+        forbidden = {"data", "stringData", "value"}
+        self.assertEqual(forbidden & set(secret.keys()), set())
+
+    def test_query_k8s_filter_by_kind(self) -> None:
+        out = self.g.query_k8s(kind="Deployment")
+        self.assertEqual(out["count"], 1)
+
+    def test_query_k8s_label_selector(self) -> None:
+        out = self.g.query_k8s(label_selector={"app.kubernetes.io/name": "loki"})
+        # Only the Deployment carries that label in the fixture.
+        self.assertEqual(out["count"], 1)
+        self.assertEqual(out["matches"][0]["k8s_kind"], "Deployment")
+
+    def test_query_k8s_exclude_redacted(self) -> None:
+        out = self.g.query_k8s(include_redacted=False)
+        kinds = {m["k8s_kind"] for m in out["matches"]}
+        self.assertNotIn("Secret", kinds)
+        self.assertNotIn("ConfigMap", kinds)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

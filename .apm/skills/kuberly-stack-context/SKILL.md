@@ -24,6 +24,20 @@ Use this skill when the workspace is a **kuberly-stack** fork or upstream clone.
 | Module authoring | `MODULE_CONVENTIONS.md` |
 | Terragrunt + JSON | `INFRASTRUCTURE_CONFIGURATION_GUIDE.md` |
 
+## Graph layers — query before reading files
+
+The kuberly-platform MCP exposes three graph layers, each backed by the consumer's commit history. **Prefer querying the graph over scanning HCL/JSON** — it's faster and the answers are richer.
+
+| Layer | Source | What's in it | Tools |
+|---|---|---|---|
+| **Static** | `clouds/`, `components/`, `applications/` HCL+JSON | Modules, components, applications, terragrunt deps | `query_nodes`, `get_neighbors`, `blast_radius`, `drift` |
+| **State overlay** | `.claude/state_overlay_<env>.json` (from `state_graph.py`) | Deployed module list + per-resource graph (type, name, depends_on; **no values**) — bridges with the static graph via component nodes | `query_resources` |
+| **K8s overlay** | `.claude/k8s_overlay_<env>.json` (from `k8s_graph.py`) | Live-cluster Deployments / Services / SAs / Secrets (key names) / etc. + selector edges + IRSA bridge to state IAM roles | `query_k8s` |
+
+If the answer is "what kind of resources does module X manage", reach for `query_resources(module="X")`. "What workloads in the cluster?" → `query_k8s(kind="Deployment")`. "What does this Service select?" → `get_neighbors(node="k8s:prod/ns/Service/foo")`. The IRSA bridge means you can ask "what cluster workload uses IAM role Y" by walking from the `aws_iam_role` resource node through `irsa_bound` edges.
+
+Sensitive resources (Secrets, ConfigMaps, helm_release values) appear with `redacted: true` — existence is in the graph, values were never extracted.
+
 ## Customer forks
 
 If `AGENTS.md` in the fork mentions maintainer-only paths under `~/.cursor/`, treat those as **workstation-only** — do not paste org ARNs or internal-only URLs into upstream-facing PRs.

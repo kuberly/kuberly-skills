@@ -563,6 +563,169 @@ class KuberlyPlatform:
             if isinstance(modules_section, dict):
                 self._scan_state_resources(env, modules_section)
 
+    # Annotations whose presence we want to surface as graph attrs.
+    _K8S_REDACTED_KINDS = frozenset({"Secret", "ConfigMap"})
+
+    def scan_k8s_overlays(self):
+        """Load `.claude/k8s_overlay_*.json` (produced by `k8s_graph.py`)
+        and synthesize live-cluster nodes + edges into the graph.
+
+        Where state_graph.py is the **infrastructure** layer (Terraform
+        modules + resources), k8s_graph.py is the **runtime** layer
+        (Deployments, Services, ServiceAccounts, etc.). The two are
+        bridged via IRSA: a k8s ServiceAccount with
+        `eks.amazonaws.com/role-arn` annotation gets an `irsa_bound`
+        edge to the matching `resource:*/aws_iam_role.<name>` node from
+        the state overlay.
+
+        The overlay file is producer-validated. Here we only consume
+        whitelisted fields and skip malformed entries silently.
+        """
+        overlay_dir = self.repo / ".claude"
+        if not overlay_dir.is_dir():
+            return
+        for of in sorted(overlay_dir.glob("k8s_overlay_*.json")):
+            data = load_json_safe(of)
+            if not data or data.get("schema_version") != 1:
+                continue
+            cluster = data.get("cluster") or {}
+            env = cluster.get("env")
+            if not env or not isinstance(env, str):
+                continue
+            self._scan_k8s_resources(env, data.get("resources") or [])
+
+    def _scan_k8s_resources(self, env: str, resources: list) -> None:
+        """Synthesize k8s:* nodes + intra-cluster edges from one overlay."""
+        # Index by (ns, kind, name) for selector / ref resolution.
+        nodes_by_kind_ns: dict[tuple[str, str], list[dict]] = {}
+        # Pass 1: create all nodes.
+        for r in resources:
+            if not isinstance(r, dict):
+                continue
+            kind = r.get("kind") or ""
+            ns = r.get("namespace") or ""
+            name = r.get("name") or ""
+            if not (kind and name):
+                continue
+            nid = f"k8s:{env}/{ns}/{kind}/{name}" if ns else f"k8s:{env}//{kind}/{name}"
+            attrs = {
+                "type": "k8s_resource",
+                "label": f"{kind}/{name}",
+                "environment": env,
+                "k8s_kind": kind,
+                "k8s_namespace": ns,
+                "k8s_name": name,
+                "labels": r.get("labels") or {},
+                "annotations": r.get("annotations") or {},
+            }
+            # Carry kind-specific fields through verbatim.
+            for k in (
+                "replicas", "service_account", "containers", "images",
+                "config_refs", "secret_refs", "pvc_refs",
+                "selector", "ports", "service_type",
+                "hosts", "backends",
+                "data_keys", "secret_type",
+                "irsa_role_arn",
+                "min_replicas", "max_replicas", "target_kind", "target_name",
+                "pod_selector", "policy_types",
+                "owner_refs",
+            ):
+                if k in r:
+                    attrs[k] = r[k]
+            if kind in self._K8S_REDACTED_KINDS:
+                attrs["redacted"] = True
+            self.add_node(nid, **attrs)
+            nodes_by_kind_ns.setdefault((ns, kind), []).append(attrs | {"_id": nid})
+
+        # Pass 2: edges.
+        for r in resources:
+            if not isinstance(r, dict):
+                continue
+            kind = r.get("kind") or ""
+            ns = r.get("namespace") or ""
+            name = r.get("name") or ""
+            if not (kind and name):
+                continue
+            src = f"k8s:{env}/{ns}/{kind}/{name}" if ns else f"k8s:{env}//{kind}/{name}"
+
+            # ownerRefs -> parent in same ns
+            for owner in (r.get("owner_refs") or []):
+                ok, on = owner.get("kind"), owner.get("name")
+                if ok and on:
+                    parent = f"k8s:{env}/{ns}/{ok}/{on}"
+                    self.add_edge(parent, src, relation="owns")
+
+            # workload -> ServiceAccount
+            sa = r.get("service_account")
+            if sa:
+                self.add_edge(src, f"k8s:{env}/{ns}/ServiceAccount/{sa}",
+                              relation="uses_sa")
+
+            # workload -> ConfigMap / Secret / PVC
+            for cn in (r.get("config_refs") or []):
+                self.add_edge(src, f"k8s:{env}/{ns}/ConfigMap/{cn}",
+                              relation="reads_configmap")
+            for sn in (r.get("secret_refs") or []):
+                self.add_edge(src, f"k8s:{env}/{ns}/Secret/{sn}",
+                              relation="reads_secret")
+            for pn in (r.get("pvc_refs") or []):
+                self.add_edge(src, f"k8s:{env}/{ns}/PersistentVolumeClaim/{pn}",
+                              relation="mounts_pvc")
+
+            # Service -> workload via selector
+            if kind == "Service":
+                sel = r.get("selector") or {}
+                if sel:
+                    for (cand_ns, cand_kind), cands in nodes_by_kind_ns.items():
+                        if cand_ns != ns:
+                            continue
+                        if cand_kind not in (
+                                "Deployment", "StatefulSet", "DaemonSet",
+                                "ReplicaSet", "Pod", "Job", "CronJob"):
+                            continue
+                        for c in cands:
+                            labels = c.get("labels") or {}
+                            if all(labels.get(k) == v for k, v in sel.items()):
+                                self.add_edge(src, c["_id"], relation="selects")
+
+            # Ingress -> Service
+            if kind == "Ingress":
+                for be in (r.get("backends") or []):
+                    s = be.get("service")
+                    if s:
+                        self.add_edge(src, f"k8s:{env}/{ns}/Service/{s}",
+                                      relation="routes_to")
+
+            # HPA -> target workload
+            if kind == "HorizontalPodAutoscaler":
+                tk, tn = r.get("target_kind"), r.get("target_name")
+                if tk and tn:
+                    self.add_edge(src, f"k8s:{env}/{ns}/{tk}/{tn}",
+                                  relation="scales")
+
+        # Pass 3: IRSA bridge — link ServiceAccount with role ARN to
+        # matching aws_iam_role resource node from the state overlay.
+        for r in resources:
+            if not isinstance(r, dict) or r.get("kind") != "ServiceAccount":
+                continue
+            arn = r.get("irsa_role_arn") or ""
+            if not arn or ":role/" not in arn:
+                continue
+            # ARN: arn:aws:iam::<acct>:role/<optional-path/>/<name>
+            #   strip ":role/" prefix, take the last path segment.
+            tail = arn.split(":role/", 1)[-1]
+            role_name = tail.rsplit("/", 1)[-1]
+            ns = r.get("namespace") or ""
+            sa_name = r.get("name") or ""
+            sa_nid = f"k8s:{env}/{ns}/ServiceAccount/{sa_name}"
+            # Find resource:<env>/<mod>/...aws_iam_role.<role_name>
+            for nid, node in self.nodes.items():
+                if (node.get("type") == "resource"
+                        and node.get("environment") == env
+                        and node.get("resource_type") == "aws_iam_role"
+                        and node.get("resource_name") == role_name):
+                    self.add_edge(sa_nid, nid, relation="irsa_bound")
+
     def _scan_state_resources(self, env: str, modules_section: dict) -> None:
         """Synthesize `resource:<env>/<mod>/<addr>` nodes and depends_on
         edges from the schema 2 overlay's `modules` section."""
@@ -848,6 +1011,38 @@ class KuberlyPlatform:
                 continue
             results.append(node)
         return results
+
+    def query_k8s(self, environment: str = None, namespace: str = None,
+                  kind: str = None, name_contains: str = None,
+                  label_selector: dict = None,
+                  include_redacted: bool = True) -> dict:
+        """Filter `k8s_resource:` nodes synthesized from
+        `.claude/k8s_overlay_*.json`. label_selector is a {key: value}
+        dict — matches only resources whose labels contain ALL pairs."""
+        matches: list[dict] = []
+        for nid, node in self.nodes.items():
+            if node.get("type") != "k8s_resource":
+                continue
+            if environment and node.get("environment") != environment:
+                continue
+            if namespace and node.get("k8s_namespace") != namespace:
+                continue
+            if kind and node.get("k8s_kind") != kind:
+                continue
+            if not include_redacted and node.get("redacted"):
+                continue
+            if name_contains:
+                hay = (node.get("k8s_name", "") + " " + nid).lower()
+                if name_contains.lower() not in hay:
+                    continue
+            if label_selector:
+                labels = node.get("labels") or {}
+                if not all(labels.get(k) == v for k, v in label_selector.items()):
+                    continue
+            matches.append(node)
+        matches.sort(key=lambda n: n.get("id", ""))
+        truncated = len(matches) > 200
+        return {"matches": matches[:200], "count": len(matches), "truncated": truncated}
 
     def query_resources(self, environment: str = None, module: str = None,
                         resource_type: str = None, name_contains: str = None,
@@ -1810,6 +2005,9 @@ class KuberlyPlatform:
         self.scan_applications()
         self.scan_modules()
         self.scan_state_overlays()
+        # k8s overlay must run AFTER state overlay so the IRSA bridge can
+        # find aws_iam_role resource nodes synthesized from state.
+        self.scan_k8s_overlays()
         self.scan_catalog()
         self.link_components_to_modules()
 
@@ -3082,6 +3280,36 @@ def _compact_summary(name: str, result, args: dict) -> str:
             rows.append(f"{rt}\t{env}/{mod}/{lbl}{tag}")
         return head + "\n" + "\n".join(rows)
 
+    if name == "query_k8s":
+        matches = result.get("matches", [])
+        n = result.get("count", len(matches))
+        head = f"query_k8s: {n}"
+        if result.get("truncated"):
+            head += " (truncated to first 200; add filters)"
+        if not matches:
+            return head
+        rows = []
+        for m in matches:
+            tag = " [redacted]" if m.get("redacted") else ""
+            kind = m.get("k8s_kind") or "?"
+            ns = m.get("k8s_namespace") or "-"
+            nm = m.get("k8s_name") or "?"
+            extra = ""
+            if kind in ("Deployment", "StatefulSet"):
+                rep = m.get("replicas")
+                if rep is not None:
+                    extra = f"  replicas={rep}"
+            elif kind == "Service":
+                ports = m.get("ports") or []
+                extra = "  ports=" + ",".join(f"{p['port']}/{p['protocol']}" for p in ports[:4])
+            elif kind == "ServiceAccount" and m.get("irsa_role_arn"):
+                extra = "  irsa=" + m["irsa_role_arn"].rsplit("/", 1)[-1]
+            elif kind in ("Secret", "ConfigMap"):
+                keys = m.get("data_keys") or []
+                extra = f"  keys={len(keys)}"
+            rows.append(f"{kind}\t{ns}/{nm}{extra}{tag}")
+        return head + "\n" + "\n".join(rows)
+
     if name in ("get_node", "get_neighbors"):
         info = result.get("node_info") or {}
         node = result.get("node") or "?"
@@ -3304,6 +3532,23 @@ def run_mcp_server(graph: KuberlyPlatform):
                     "resource_type": {"type": "string", "description": "Terraform resource type filter, e.g. 'helm_release', 'aws_iam_role'"},
                     "name_contains": {"type": "string", "description": "Substring match against resource address / id"},
                     "include_redacted": {"type": "boolean", "default": True, "description": "Include resources of sensitive types (existence only, never values)"},
+                    "format": _FORMAT_PROP,
+                },
+            },
+        },
+        {
+            "name": "query_k8s",
+            "defer_loading": True,
+            "description": "Filter `k8s_resource:` nodes synthesized from the live-cluster overlay (`.claude/k8s_overlay_*.json`, produced by `k8s_graph.py`). Knows Deployments, StatefulSets, Services, Ingresses, ConfigMaps, Secrets, ServiceAccounts, HPAs, NetworkPolicies. Secret/ConfigMap nodes carry `redacted: true` and `data_keys[]` only — values are NEVER in the graph. ServiceAccounts with IRSA annotations are bridged (edge `irsa_bound`) to the matching `resource:*/aws_iam_role.<n>` node from the state overlay.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "environment":     {"type": "string", "description": "env filter, e.g. 'prod'"},
+                    "namespace":       {"type": "string", "description": "k8s namespace filter, e.g. 'monitoring'"},
+                    "kind":            {"type": "string", "description": "k8s kind filter, e.g. 'Deployment', 'Service', 'Secret'"},
+                    "name_contains":   {"type": "string", "description": "Substring match against resource name"},
+                    "label_selector":  {"type": "object", "description": "{key: value} pairs that ALL must match the resource's labels"},
+                    "include_redacted": {"type": "boolean", "default": True, "description": "Include Secret / ConfigMap nodes (existence only — `data_keys` shown, never values)"},
                     "format": _FORMAT_PROP,
                 },
             },
@@ -3566,6 +3811,15 @@ def run_mcp_server(graph: KuberlyPlatform):
                 module=args.get("module"),
                 resource_type=args.get("resource_type"),
                 name_contains=args.get("name_contains"),
+                include_redacted=args.get("include_redacted", True),
+            )
+        elif name == "query_k8s":
+            return g.query_k8s(
+                environment=args.get("environment"),
+                namespace=args.get("namespace"),
+                kind=args.get("kind"),
+                name_contains=args.get("name_contains"),
+                label_selector=args.get("label_selector"),
                 include_redacted=args.get("include_redacted", True),
             )
         elif name == "get_node":
