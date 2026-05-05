@@ -1579,7 +1579,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     </span>
     <span class="wordmark">kuberly</span>
     <span class="eyebrow">$VERSION_CHIP</span>
-    <span class="tagline">Terragrunt intelligence — drift, blast radius, and live overlays in one surface.</span>
+    <span class="tagline">stack intelligence — IaC, state, live cluster, secrets, CI/CD, schemas — one navigable graph.</span>
   </div>
   <nav class="tabs" aria-label="Primary view">
     <button type="button" class="tab active" id="tab-dashboard" data-view="dashboard">Dashboard</button>
@@ -2441,6 +2441,9 @@ function renderDashboard() {
         <h4>Neighborhood</h4>
         <p style="color:var(--ink-faint);font-size:12px">Pick a node on the left to see its inbound and outbound edges. Click any neighbor to walk the graph.</p>
       </div>
+    </section>
+  `;
+
   /* v0.36.0 Spotlight — promoted to top of dashboard, with layer filter,
    * recent-history breadcrumb, and a "open in 3D Graph" double-click
    * shortcut. Everything still pure DOM — no extra deps. */

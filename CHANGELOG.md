@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.36.1 — 2026-05-06
+
+- **FIX:** v0.36.0 left the `root.innerHTML` template literal unclosed
+  (the `</section>` and trailing `` `; `` were dropped during the
+  dashboard cut). Result: `Uncaught SyntaxError: Unexpected token
+  'class'` at the first JS line after the orphaned HTML, the dashboard
+  rendered as a single empty box. Restored the closer.
+- **TAGLINE:** "Terragrunt intelligence — drift, blast radius, and live
+  overlays in one surface." → **"stack intelligence — IaC, state, live
+  cluster, secrets, CI/CD, schemas — one navigable graph."** The page
+  is much more than Terragrunt now.
+- **BUMP:** apm.yml 0.36.0 → 0.36.1.
+
 ## v0.36.0 — 2026-05-06
 
 Radical dashboard simplification + CUE schemas / GitHub workflows now
