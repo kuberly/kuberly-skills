@@ -1,5 +1,96 @@
 # Changelog
 
+## v0.34.0 — 2026-05-06
+
+Major UX overhaul of `.kuberly/graph.html` — both the **Graph view** and
+the **Dashboard** are rewritten to surface infrastructure essentials
+operators (and customers) actually want to read.
+
+### Graph view — 3D force-directed (3d-force-graph)
+
+- **REPLACE:** Cytoscape (2D, concentric layout) is replaced with
+  **3d-force-graph** (three.js + d3-force-3d). The stack now reads as a
+  floating spherical/galactic structure with edges *inside* the volume
+  instead of stacked rings on a flat plane.
+- d3 force tuning: `charge.strength = -220`, `link.distance = 60` so
+  clusters spread out into a low-density gas instead of crushing
+  together. Drag interaction enabled. Node label tooltips on hover.
+- Layer toggles (static / state / k8s / docs) and the overview / full
+  view-mode dropdown rebuild **`graphData`** instead of toggling
+  cytoscape classes — no stale layout state.
+- Search re-colors matched nodes via the `nodeColor` callback; non-hits
+  dim. Enter pans+camera-flies to the first match.
+- Sidebar with attrs / incoming / outgoing / **blast radius** is
+  preserved; blast does a BFS over upstream/downstream and recolors
+  via the same `nodeColor`/`linkColor` callbacks. ESC clears.
+- Window-resize listener calls **`Graph3D.width(...).height(...)`**
+  on viewport change (DevTools open / close, etc.).
+
+### Schema v3 — whitelisted attribute extraction
+
+- **NEW:** `state_graph.py` schema_version bumped 2 → 3. Schema 2
+  remains accepted; schema 3 adds an OPTIONAL `essentials` field per
+  resource — a tightly whitelisted projection of `instance.attributes`
+  (sizes, instance classes, versions, IAM trust principals, EBS GB,
+  EFS modes, SG rule CIDRs, etc.).
+- **`_ESSENTIALS_WHITELIST`** is the security boundary. Per resource
+  type, only the listed keys are projected through; everything else is
+  dropped before the field is built. Supports ~30 AWS types
+  (EKS / RDS / Aurora / ElastiCache / EBS / EFS / S3 / IAM / VPC /
+  NAT / SG + rules / Lambda / KMS / ECR / SQS / CloudWatch / EventBridge
+  / CloudFront).
+- **`_extract_iam_principals`** parses `assume_role_policy` and emits
+  only the principals list (`service:eks.amazonaws.com`,
+  `aws:arn:...:role/x`, `federated:arn:...:oidc-provider/y`). Actions,
+  Conditions, and the raw policy body NEVER pass through.
+- **`_sanitize_essential`** caps strings at 512 chars, lists at 50,
+  shallow dicts at 16 keys. Hand-edited overlays attempting to smuggle
+  giant blobs are truncated through `_validate_essentials_field`.
+- Sensitive resource types (`kubernetes_secret`, `random_password`, TLS,
+  etc.) bypass the harvester entirely — even if a type is whitelisted,
+  if it's in **`_SENSITIVE_RESOURCE_TYPES`** the essentials block is
+  not built.
+
+### Dashboard — category cards + charts + flow
+
+- **NEW:** Eight category cards (Compute / Data / Identity / Networking
+  / Secrets+KMS / Registries / Queues+Logs / Kubernetes) with
+  color-coded top stripes, headline counts, kind chips, and an
+  expandable drill-down body listing each resource with its
+  whitelisted essentials (e.g. `db.t4g.medium · postgres 16.3`,
+  `100 GB · gp3`, `service:eks.amazonaws.com · aws:arn:...`,
+  `0.0.0.0/0 (ingress 443)` flagged red).
+- **NEW:** Three **Chart.js** charts above the cards — doughnut
+  (category share of resources), bar (IAM principal-kind distribution),
+  horizontal bar (top resource types).
+- **NEW:** Mermaid **flow diagram** "Networking → Compute → Data" with
+  Identity / Secrets / Registries fanning into Compute, counts pulled
+  live from `categories` so an empty bucket still renders a `0` node.
+- IAM principals get color-coded pills by kind (service / aws /
+  federated). 0.0.0.0/0 SG rules emit red finding pills both at the
+  card level and the row level.
+
+### Misc
+
+- **NEW:** SVG favicon (data URI of the kuberly LogoMark) — the tab
+  no longer shows the generic globe placeholder.
+- **REMOVE:** Cytoscape and the v0.33.x concentric layout pipeline
+  (`concentricLayoutOpts`, `sanitizePositions`, etc.) are gone.
+
+### Tests
+
+- 8 new tests in `StateGraphResourceExtractTests` cover the schema-v3
+  extractor (EKS cluster, IAM trust principals, SG rule CIDRs,
+  random-attr redaction, sensitive-type skip, schema-3 validator,
+  oversized-blob cap).
+- `test_graph_html_dashboard_categories` asserts the category cards
+  + Chart.js + favicon + flow diagram all land in the rendered HTML.
+- `test_graph_html_has_3d_force_graph` asserts cytoscape is gone and
+  `ForceGraph3D` + `d3Force` tuning are present.
+- Total: 135 tests pass (was 127).
+
+- **BUMP:** apm.yml 0.33.2 → 0.34.0.
+
 ## v0.33.2 — 2026-05-06
 
 - **FIX:** **`graph.html`** — empty Graph canvas, second pass. The v0.33.1 hotfix

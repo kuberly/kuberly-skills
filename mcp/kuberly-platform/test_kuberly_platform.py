@@ -1060,6 +1060,193 @@ class StateGraphResourceExtractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.sg._validate_overlay(bad)
 
+    # ----- v0.34.0 / schema v3: essentials extraction + redaction guard ----
+
+    def test_extract_essentials_eks_cluster(self) -> None:
+        state = self._state([
+            {"mode": "managed", "type": "aws_eks_cluster", "name": "prod",
+             "provider": 'provider["registry.terraform.io/hashicorp/aws"]',
+             "instances": [{"attributes": {
+                 "version": "1.30",
+                 "endpoint": "https://abc.eks.eu-central-1.amazonaws.com",
+                 "role_arn": "arn:aws:iam::1:role/eks",
+                 "kubeconfig_b64": "VkVSWVNFQ1JFVA==",  # NOT whitelisted
+             }}]},
+        ])
+        out = self.sg._extract_module_resources(state)
+        ess = out["resources"][0].get("essentials") or []
+        self.assertEqual(len(ess), 1)
+        self.assertEqual(ess[0].get("version"), "1.30")
+        self.assertEqual(ess[0].get("role_arn"), "arn:aws:iam::1:role/eks")
+        # Redaction: non-whitelisted attribute MUST NOT leak.
+        self.assertNotIn("kubeconfig_b64", ess[0])
+        self.assertNotIn("VkVSWVNFQ1JFVA==", json.dumps(out))
+
+    def test_extract_essentials_iam_role_principals(self) -> None:
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {"Effect": "Allow",
+                 "Principal": {"Service": "eks.amazonaws.com"},
+                 "Action": "sts:AssumeRole",
+                 "Condition": {"StringEquals": {"my:secret-condition": "TOPSECRET"}}},
+                {"Effect": "Allow",
+                 "Principal": {"AWS": ["arn:aws:iam::123:role/admin",
+                                       "arn:aws:iam::456:root"]},
+                 "Action": "sts:AssumeRole"},
+                {"Effect": "Allow",
+                 "Principal": {"Federated": "arn:aws:iam::123:oidc-provider/oidc.eks.x"},
+                 "Action": "sts:AssumeRoleWithWebIdentity"},
+            ],
+        }
+        state = self._state([
+            {"mode": "managed", "type": "aws_iam_role", "name": "alb",
+             "provider": 'provider["registry.terraform.io/hashicorp/aws"]',
+             "instances": [{"attributes": {
+                 "name": "alb",
+                 "max_session_duration": 3600,
+                 "assume_role_policy": json.dumps(policy),
+             }}]},
+        ])
+        out = self.sg._extract_module_resources(state)
+        ess = out["resources"][0]["essentials"][0]
+        self.assertEqual(ess.get("name"), "alb")
+        self.assertEqual(ess.get("max_session_duration"), 3600)
+        principals = ess.get("principals") or []
+        self.assertIn("service:eks.amazonaws.com", principals)
+        self.assertIn("aws:arn:aws:iam::123:role/admin", principals)
+        self.assertIn("federated:arn:aws:iam::123:oidc-provider/oidc.eks.x", principals)
+        # The `assume_role_policy` raw blob must NOT pass through; only
+        # `principals` extracted from it. Action / Condition keys are gone.
+        self.assertNotIn("assume_role_policy", ess)
+        self.assertNotIn("TOPSECRET", json.dumps(out))
+
+    def test_extract_essentials_security_group_rule(self) -> None:
+        state = self._state([
+            {"mode": "managed", "type": "aws_security_group_rule", "name": "open",
+             "provider": 'provider["registry.terraform.io/hashicorp/aws"]',
+             "instances": [{"attributes": {
+                 "type": "ingress", "from_port": 443, "to_port": 443,
+                 "protocol": "tcp", "cidr_blocks": ["0.0.0.0/0"],
+                 "source_security_group_id": "",
+                 "internal_arn": "arn:aws:secret",  # NOT whitelisted
+             }}]},
+        ])
+        out = self.sg._extract_module_resources(state)
+        ess = out["resources"][0]["essentials"][0]
+        self.assertEqual(ess.get("from_port"), 443)
+        self.assertEqual(ess.get("cidr_blocks"), ["0.0.0.0/0"])
+        self.assertNotIn("internal_arn", ess)
+
+    def test_extract_essentials_redaction_random_attrs_dropped(self) -> None:
+        """Belt-and-suspenders: a previously-unknown attribute on a known
+        whitelisted type must NEVER appear in the essentials output. Add
+        wild attrs and check none leak through."""
+        state = self._state([
+            {"mode": "managed", "type": "aws_ebs_volume", "name": "data",
+             "provider": 'provider["registry.terraform.io/hashicorp/aws"]',
+             "instances": [{"attributes": {
+                 "size": 100, "type": "gp3",
+                 "tags_all": {"Owner": "TOPSECRET-team"},
+                 "kms_key_id": "arn:aws:kms:1:key/SECRET-KEY-ID",
+                 "snapshot_id": "snap-PRIVATESNAP",
+             }}]},
+        ])
+        out = self.sg._extract_module_resources(state)
+        ess = out["resources"][0]["essentials"][0]
+        # whitelisted survived
+        self.assertEqual(ess.get("size"), 100)
+        self.assertEqual(ess.get("type"), "gp3")
+        # non-whitelisted REDACTED
+        for forbidden in ("TOPSECRET-team", "SECRET-KEY-ID", "snap-PRIVATESNAP", "tags_all", "kms_key_id"):
+            self.assertNotIn(forbidden, json.dumps(out),
+                             f"non-whitelisted attribute leaked: {forbidden}")
+
+    def test_extract_essentials_skipped_for_sensitive_types(self) -> None:
+        """kubernetes_secret is in _SENSITIVE_RESOURCE_TYPES; even if its
+        type is whitelisted, the harvester must skip it entirely."""
+        state = self._state([
+            {"mode": "managed", "type": "kubernetes_secret", "name": "creds",
+             "provider": 'provider["registry.terraform.io/hashicorp/kubernetes"]',
+             "instances": [{"attributes": {"data": {"password": "DONTLEAK"}}}]},
+        ])
+        out = self.sg._extract_module_resources(state)
+        rec = out["resources"][0]
+        self.assertNotIn("essentials", rec)
+        self.assertNotIn("DONTLEAK", json.dumps(out))
+
+    def test_validator_accepts_schema_3_with_essentials(self) -> None:
+        doc = {
+            "schema_version": 3,
+            "generated_at": "2026-05-06T00:00:00Z",
+            "cluster": {
+                "env": "prod", "name": "prod",
+                "region": "us-east-1", "account_id": "111111111111",
+                "state_bucket": "111111111111-us-east-1-prod-tf-states",
+            },
+            "deployed_modules": [{"name": "eks", "state_key": "aws/eks/terraform.tfstate"}],
+            "deployed_applications": [],
+            "modules": {
+                "eks": {
+                    "resource_count": 1,
+                    "resources": [
+                        {"address": "aws_eks_cluster.prod",
+                         "type": "aws_eks_cluster", "name": "prod",
+                         "provider": "hashicorp/aws", "instance_count": 1,
+                         "depends_on": [],
+                         "essentials": [{"version": "1.30"}]}
+                    ],
+                    "output_names": [],
+                }
+            },
+        }
+        out = self.sg._validate_overlay(doc)
+        self.assertEqual(out["schema_version"], 3)
+        self.assertEqual(
+            out["modules"]["eks"]["resources"][0]["essentials"],
+            [{"version": "1.30"}],
+        )
+
+    def test_validator_strips_unknown_essentials_keys(self) -> None:
+        """A hand-edited overlay with junk in `essentials` must round-trip
+        only through _validate_essentials_field — every value is
+        re-sanitized; oversized strings get truncated, unknown shapes
+        dropped. Verify we do NOT pass a giant attacker-controlled blob
+        through the validator."""
+        big_string = "x" * 100_000
+        doc = {
+            "schema_version": 3,
+            "generated_at": "2026-05-06T00:00:00Z",
+            "cluster": {
+                "env": "prod", "name": "prod",
+                "region": "us-east-1", "account_id": "111111111111",
+                "state_bucket": "111111111111-us-east-1-prod-tf-states",
+            },
+            "deployed_modules": [{"name": "eks", "state_key": "aws/eks/terraform.tfstate"}],
+            "deployed_applications": [],
+            "modules": {
+                "eks": {
+                    "resource_count": 1,
+                    "resources": [
+                        {"address": "aws_eks_cluster.prod",
+                         "type": "aws_eks_cluster", "name": "prod",
+                         "provider": "hashicorp/aws", "instance_count": 1,
+                         "depends_on": [],
+                         "essentials": [
+                             {"version": "1.30", "attacker_blob": big_string,
+                              "nested_giant_dict": {"k": big_string}},
+                         ]}
+                    ],
+                    "output_names": [],
+                }
+            },
+        }
+        out = self.sg._validate_overlay(doc)
+        ess = out["modules"]["eks"]["resources"][0]["essentials"][0]
+        # Strings are length-capped, never the full 100k.
+        self.assertLess(len(json.dumps(ess)), 5000,
+                        "validator failed to cap oversized essentials blob")
+
 
 class StateOverlaySchema2Tests(unittest.TestCase):
     """End-to-end: overlay file with schema 2 -> resource nodes + edges + redaction."""
@@ -1764,12 +1951,13 @@ class GraphHtmlVizTests(unittest.TestCase):
                 html_file = out_path / "graph.html"
                 self.assertTrue(html_file.is_file())
                 html = html_file.read_text(encoding="utf-8")
-                # Cytoscape (concentric is built-in; fcose/dagre extensions removed).
-                self.assertIn("cytoscape", html)
-                self.assertIn("concentric", html)
-                # v0.33.1: the 3D float (kuberlyNeuralFloat keyframes + perspective)
-                # was removed because it hid the cytoscape canvas inside a transformed
-                # plane — verify it does not regress back in.
+                # v0.34.0: Graph view uses 3d-force-graph (three.js + d3-force-3d).
+                # Cytoscape was removed; assert the new lib is loaded.
+                self.assertIn("3d-force-graph", html)
+                self.assertIn("ForceGraph3D(", html)
+                self.assertNotIn("cytoscape.min.js", html)
+                # Regression guards from prior fixes — none of these should ever
+                # come back even if someone restages an old cytoscape view.
                 self.assertNotIn("kuberlyNeuralFloat", html)
                 self.assertNotIn("perspective: 1680px", html)
                 # No leftover vis.js references.
@@ -1864,15 +2052,14 @@ class GraphHtmlVizTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
-    def test_graph_html_has_initial_layout_call(self):
-        """v0.25.0 / v0.29.0: a layout must run once cytoscape is constructed.
+    def test_graph_html_has_3d_force_graph(self):
+        """v0.34.0: Graph view is a 3D force-directed graph.
 
-        v0.29 lazily builds the graph on the Graph tab; `runLayoutImpl(initialLayout)`
-        runs immediately inside `buildCy()` so nodes are not stacked at
-        (0,0) when the canvas first appears. v0.33.1: concentric-only, 3D float removed.
-        v0.33.2: the layout is now ONLY in runLayoutImpl — running it in the
-        cytoscape constructor would lay out the about-to-be-hidden k8s nodes
-        and collapse cy.fit zoom to ~0 (canvas appears empty).
+        Cytoscape (2D) was removed. The page uses `3d-force-graph` (three.js
+        + d3-force-3d) so the stack reads as a floating sphere with edges
+        inside it. Assert the lib is wired up: container, instantiation,
+        graphData call, and the d3 force tuning that gives the spread-out
+        gas/galaxy spacing.
         """
         from kuberly_platform import write_graph_html
 
@@ -1882,30 +2069,53 @@ class GraphHtmlVizTests(unittest.TestCase):
                 out_path = Path(out)
                 write_graph_html(g, out_path)
                 html = (out_path / "graph.html").read_text(encoding="utf-8")
-                self.assertIn("function buildCy", html)
-                self.assertIn("initialLayout", html)
-                self.assertTrue(
-                    "runLayoutImpl(initialLayout)" in html,
-                    "expected runLayoutImpl(initialLayout) after cytoscape init",
-                )
-                # v0.33.2: cytoscape ctor must NOT carry a `layout:` key, or
-                # the auto-layout will run on hidden-soon nodes.
-                self.assertNotIn("layout: concentricLayoutOpts", html)
-                # v0.33.2: boundingBox guards the radius math from a pathological
-                # degree blowing positions to ~1e17 px.
-                self.assertIn("boundingBox", html)
-                # v0.33.2: layout + fit operate on visible elements only so a
-                # frozen position on a hidden node can't collapse the viewport.
-                self.assertIn('cy.elements(":visible")', html)
+                # Container the WebGL canvas mounts into.
+                self.assertIn('id="graph-3d"', html)
+                # Library + instantiation.
+                self.assertIn("3d-force-graph", html)
+                self.assertIn("ForceGraph3D(", html)
+                self.assertIn(".graphData(", html)
+                # Spread-out spacing — charge force tuned, link distance set.
+                self.assertIn('d3Force("charge")', html)
+                self.assertIn('d3Force("link")', html)
+                # Lazy build on tab switch, like prior versions.
+                self.assertIn("function buildGraph3D", html)
         finally:
             tmp.cleanup()
 
-    def test_graph_html_uses_parent_pseudoclass(self):
-        """v0.26.0: the cytoscape style array uses the built-in `:parent`
-        pseudo-class to target compound containers. Class-binding
-        (`node.compound`) is fragile because the python builder does not
-        emit that class on every code path — `:parent` matches any node
-        with children, no class needed.
+    def test_graph_html_dashboard_categories(self):
+        """v0.34.0: dashboard renders the 8 infra-essentials category cards
+        (compute / data / identity / networking / secrets / registries /
+        queues / k8s) plus Chart.js + the favicon."""
+        from kuberly_platform import write_graph_html
+
+        tmp, g = self._build_graph()
+        try:
+            with tempfile.TemporaryDirectory() as out:
+                out_path = Path(out)
+                write_graph_html(g, out_path)
+                html = (out_path / "graph.html").read_text(encoding="utf-8")
+                # Category card render hooks.
+                self.assertIn("function renderCategoryCards", html)
+                self.assertIn("function renderDashboardCharts", html)
+                self.assertIn("function buildStackFlowDiagram", html)
+                self.assertIn('id="chart-cat-share"', html)
+                self.assertIn('id="chart-iam-principals"', html)
+                self.assertIn('id="chart-top-rtypes"', html)
+                self.assertIn('id="stack-flow-mmd"', html)
+                # Chart.js loaded.
+                self.assertIn("chart.umd.min.js", html)
+                # Inline SVG favicon (data URI).
+                self.assertIn('rel="icon"', html)
+                self.assertIn("data:image/svg+xml", html)
+        finally:
+            tmp.cleanup()
+
+    def test_graph_html_layer_filter_keys(self):
+        """v0.34.0: 3d-force-graph filters by source_layer, not cytoscape
+        compound parents. Verify GRAPH_STATE.layers carries the four
+        canonical layer keys so each toggle pill maps cleanly onto the
+        node-visibility filter.
         """
         from kuberly_platform import write_graph_html
 
@@ -1915,13 +2125,12 @@ class GraphHtmlVizTests(unittest.TestCase):
                 out_path = Path(out)
                 write_graph_html(g, out_path)
                 html = (out_path / "graph.html").read_text(encoding="utf-8")
-                self.assertIn('"node:parent"', html,
-                    "rendered HTML missing `node:parent` style selector — "
-                    "compound parents will fall through to default fill")
-                # Make sure no leftover class-binding selector remains.
-                self.assertNotIn('"node.compound"', html,
-                    "rendered HTML still references the class-binding "
-                    "`node.compound` selector — should be `:parent`")
+                # Filter object must mention every layer the toggle pills offer.
+                for layer in ("static", "state", "k8s", "docs"):
+                    self.assertIn(f"{layer}:", html,
+                        f"layer key `{layer}:` not present in GRAPH_STATE.layers")
+                # k8s layer defaults off (it's the noisy live overlay).
+                self.assertIn("k8s: false", html)
         finally:
             tmp.cleanup()
 

@@ -53,11 +53,15 @@ from pathlib import Path
 
 # schema_version 1: list-only — only `deployed_modules` + `deployed_applications`.
 # schema_version 2: schema 1 + per-module `resources` graph (resource type/name/
-#   provider/dependencies, NEVER attribute values). The producer (`generate
-#   --resources`) downloads each state file via `aws s3 cp`, parses JSON, and
-#   passes only whitelisted fields through. Consumers tolerate either schema.
-SCHEMA_VERSION_LATEST = 2
-SCHEMA_VERSIONS_SUPPORTED = {1, 2}
+#   provider/dependencies, NEVER attribute values).
+# schema_version 3 (v0.34.0): schema 2 + an optional, per-resource `essentials`
+#   block — a TIGHTLY whitelisted projection of resource attributes that
+#   answers operator questions (instance class, allocated GB, IAM trust
+#   principals, EBS size, etc.) without leaking secrets. The whitelist is in
+#   _ESSENTIALS_WHITELIST; values are sanitized through _sanitize_essential.
+#   Anything not in the whitelist is dropped before the field is even built.
+SCHEMA_VERSION_LATEST = 3
+SCHEMA_VERSIONS_SUPPORTED = {1, 2, 3}
 
 _RE_CLUSTER_STR = re.compile(r"^[a-zA-Z0-9._-]+$")
 _RE_MODULE_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -89,9 +93,252 @@ def _sanitize_str(value: object, pattern: re.Pattern, field: str,
     return value
 
 
+# ----- schema v3: per-type attribute whitelist -----------------------
+# This is the SECURITY BOUNDARY for surfacing essentials in the operator
+# dashboard. Only keys listed here may pass through — anything else is
+# dropped before serialization. Values themselves go through
+# _sanitize_essential which enforces type, length, and shape.
+#
+# Editing this whitelist is a sensitive change. Rules of thumb:
+#   - Sizes, classes, types, versions, modes — yes (operator metadata).
+#   - Names of buckets / queues / repos / SGs — yes (already in addresses).
+#   - Endpoint URLs / DNS — case-by-case, internal endpoints OK.
+#   - Policy bodies, kubeconfig blobs, kms key material — never.
+#   - Anything containing "secret" / "password" / "key_material" — never.
+_ESSENTIALS_WHITELIST: dict[str, tuple[str, ...]] = {
+    # Compute / EKS
+    "aws_eks_cluster":        ("version", "endpoint", "role_arn", "platform_version"),
+    "aws_eks_node_group":     ("instance_types", "scaling_config", "disk_size",
+                               "ami_type", "capacity_type", "labels", "version"),
+    "aws_eks_fargate_profile":("selector", "subnet_ids"),
+    "aws_eks_addon":          ("addon_name", "addon_version"),
+    # Data
+    "aws_db_instance":        ("engine", "engine_version", "instance_class",
+                               "allocated_storage", "multi_az", "storage_type", "port"),
+    "aws_rds_cluster":        ("engine", "engine_version", "database_name",
+                               "port", "storage_type", "engine_mode"),
+    "aws_rds_cluster_instance":("instance_class", "engine", "engine_version", "publicly_accessible"),
+    "aws_elasticache_replication_group":(
+                               "node_type", "num_node_groups", "replicas_per_node_group",
+                               "engine_version", "port", "automatic_failover_enabled"),
+    "aws_elasticache_user":   ("user_id", "no_password_required"),
+    "aws_ebs_volume":         ("size", "type", "iops", "throughput", "encrypted",
+                               "availability_zone"),
+    "aws_efs_file_system":    ("performance_mode", "throughput_mode", "encrypted"),
+    "aws_efs_mount_target":   ("availability_zone_name",),
+    "aws_s3_bucket":          ("bucket",),
+    "aws_db_subnet_group":    ("name",),
+    "aws_elasticache_subnet_group":("name",),
+    # Identity / IAM
+    "aws_iam_role":           ("name", "max_session_duration", "assume_role_policy"),
+    "aws_iam_policy":         ("name", "description"),
+    "aws_iam_role_policy_attachment":("role", "policy_arn"),
+    "aws_iam_role_policy":    ("name", "role"),
+    "aws_iam_openid_connect_provider":("url", "client_id_list"),
+    # Networking
+    "aws_vpc":                ("cidr_block", "enable_dns_hostnames"),
+    "aws_subnet":             ("cidr_block", "availability_zone", "map_public_ip_on_launch"),
+    "aws_nat_gateway":        ("connectivity_type",),
+    "aws_internet_gateway":   (),
+    "aws_egress_only_internet_gateway": (),
+    "aws_security_group":     ("name", "description", "vpc_id"),
+    "aws_security_group_rule":("type", "from_port", "to_port", "protocol",
+                               "cidr_blocks", "source_security_group_id"),
+    "aws_vpc_endpoint":       ("service_name", "vpc_endpoint_type"),
+    # Secrets / KMS
+    "aws_secretsmanager_secret":("name",),  # NEVER value
+    "aws_kms_key":            ("description", "key_usage", "key_spec", "multi_region"),
+    "aws_kms_alias":          ("name",),
+    # Registries
+    "aws_ecr_repository":     ("name", "image_tag_mutability"),
+    "aws_ecr_lifecycle_policy":("repository",),
+    # Compute / Lambda
+    "aws_lambda_function":    ("function_name", "runtime", "memory_size",
+                               "timeout", "architectures"),
+    # CDN / DNS
+    "aws_cloudfront_distribution":("enabled", "price_class", "is_ipv6_enabled"),
+    # Queues / Logs / EventBridge
+    "aws_sqs_queue":          ("name", "fifo_queue", "visibility_timeout_seconds",
+                               "message_retention_seconds"),
+    "aws_cloudwatch_log_group":("name", "retention_in_days"),
+    "aws_cloudwatch_event_rule":("name", "schedule_expression"),
+}
+
+# Allow primitives + small homogeneous lists / shallow dicts. Anything
+# else is dropped silently — no Exception, just no leak.
+_ESSENTIAL_PRIMITIVE = (str, int, float, bool)
+_ESSENTIAL_MAX_STR = 512
+_ESSENTIAL_MAX_LIST = 50
+_ESSENTIAL_MAX_DICT_KEYS = 16
+
+
+def _sanitize_essential(value):
+    """Coerce a value into a JSON-safe primitive / list / shallow dict.
+
+    Strings are length-capped. Lists must be homogeneous primitives or
+    shallow dicts of primitives. Returns None if the value is anything
+    we don't recognize — callers drop None entries.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        return value[:_ESSENTIAL_MAX_STR]
+    if isinstance(value, list):
+        if len(value) > _ESSENTIAL_MAX_LIST:
+            value = value[:_ESSENTIAL_MAX_LIST]
+        out = []
+        for item in value:
+            if isinstance(item, _ESSENTIAL_PRIMITIVE):
+                if isinstance(item, str):
+                    out.append(item[:_ESSENTIAL_MAX_STR])
+                else:
+                    out.append(item)
+            elif isinstance(item, dict):
+                # Only allow flat dicts of primitives.
+                inner = {}
+                for k, v in list(item.items())[:_ESSENTIAL_MAX_DICT_KEYS]:
+                    if not isinstance(k, str) or len(k) > 64:
+                        continue
+                    if isinstance(v, _ESSENTIAL_PRIMITIVE):
+                        inner[k] = v[:_ESSENTIAL_MAX_STR] if isinstance(v, str) else v
+                if inner:
+                    out.append(inner)
+        return out if out else []
+    if isinstance(value, dict):
+        # Shallow-flatten one level.
+        if len(value) > _ESSENTIAL_MAX_DICT_KEYS:
+            value = dict(list(value.items())[:_ESSENTIAL_MAX_DICT_KEYS])
+        out = {}
+        for k, v in value.items():
+            if not isinstance(k, str) or len(k) > 64:
+                continue
+            if isinstance(v, _ESSENTIAL_PRIMITIVE):
+                out[k] = v[:_ESSENTIAL_MAX_STR] if isinstance(v, str) else v
+            elif isinstance(v, list) and all(isinstance(x, _ESSENTIAL_PRIMITIVE) for x in v[:8]):
+                out[k] = [x[:_ESSENTIAL_MAX_STR] if isinstance(x, str) else x
+                          for x in v[:_ESSENTIAL_MAX_LIST]]
+        return out if out else {}
+    return None
+
+
+def _extract_iam_principals(assume_role_policy: object) -> list[str]:
+    """Pull principals out of an IAM assume_role_policy (string JSON or dict).
+
+    Returns a list of human-readable principal strings:
+      - "service:eks.amazonaws.com"
+      - "aws:arn:aws:iam::123456789012:root"
+      - "federated:arn:aws:iam::...:oidc-provider/..."
+    Order-stable, deduplicated, capped at 32. Anything we can't parse
+    cleanly returns []. NEVER returns the actions / conditions block.
+    """
+    doc = assume_role_policy
+    if isinstance(doc, str):
+        try:
+            doc = json.loads(doc)
+        except (ValueError, TypeError):
+            return []
+    if not isinstance(doc, dict):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for stmt in doc.get("Statement", []) or []:
+        if not isinstance(stmt, dict):
+            continue
+        if stmt.get("Effect") and stmt["Effect"] != "Allow":
+            continue
+        prin = stmt.get("Principal")
+        if not isinstance(prin, dict):
+            continue
+        for kind, val in prin.items():
+            if not isinstance(kind, str):
+                continue
+            kind_lc = kind.lower()
+            if isinstance(val, str):
+                vals = [val]
+            elif isinstance(val, list):
+                vals = [v for v in val if isinstance(v, str)]
+            else:
+                continue
+            for v in vals:
+                tag = f"{kind_lc}:{v}"[:_ESSENTIAL_MAX_STR]
+                if tag not in seen:
+                    seen.add(tag)
+                    out.append(tag)
+                if len(out) >= 32:
+                    return out
+    return out
+
+
+def _build_essentials(rtype: str, attrs: dict) -> dict:
+    """Project `attrs` (a Terraform instance.attributes dict) onto the
+    whitelisted keys for this resource type. Returns {} if the type isn't
+    whitelisted — that is the safe default.
+
+    Special handling: aws_iam_role.assume_role_policy is replaced with a
+    `principals: [...]` list (the only piece operators actually want).
+    """
+    keys = _ESSENTIALS_WHITELIST.get(rtype)
+    if keys is None or not isinstance(attrs, dict):
+        return {}
+    out: dict = {}
+    for k in keys:
+        if k not in attrs:
+            continue
+        if rtype == "aws_iam_role" and k == "assume_role_policy":
+            principals = _extract_iam_principals(attrs[k])
+            if principals:
+                out["principals"] = principals
+            continue
+        sanitized = _sanitize_essential(attrs[k])
+        if sanitized is None:
+            continue
+        # Drop empty containers — no signal value.
+        if isinstance(sanitized, (list, dict)) and not sanitized:
+            continue
+        out[k] = sanitized
+    return out
+
+
+def _validate_essentials_field(value: object, ctx: str) -> list[dict]:
+    """Validator for the schema-v3 `essentials` field on a resource entry.
+
+    Re-runs `_sanitize_essential` on every value as a belt-and-suspenders
+    check (a hand-edited overlay file shouldn't be able to slip a giant
+    dict through). Returns the list (possibly truncated) — never raises;
+    on any structural problem returns [].
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return []
+    out: list[dict] = []
+    for i, entry in enumerate(value):
+        if i >= _ESSENTIAL_MAX_LIST:
+            break
+        if not isinstance(entry, dict):
+            continue
+        clean: dict = {}
+        for k, v in entry.items():
+            if not isinstance(k, str) or len(k) > 64:
+                continue
+            sv = _sanitize_essential(v)
+            if sv is None:
+                continue
+            clean[k] = sv
+        if clean:
+            out.append(clean)
+    return out
+
+
 def _validate_resource_entry(entry: dict, ctx: str) -> dict:
-    """Schema 2: per-resource whitelist. Drops attributes / values entirely —
-    only structural metadata + dependency edges survive."""
+    """Schema 2/3: per-resource whitelist. Drops attributes / values entirely
+    except for the schema-v3 `essentials` block, which is itself
+    whitelist-projected through _build_essentials at extraction time and
+    re-sanitized through _validate_essentials_field on read."""
     if not isinstance(entry, dict):
         raise ValueError(f"{ctx}: expected object")
     safe = {
@@ -117,6 +364,12 @@ def _validate_resource_entry(entry: dict, ctx: str) -> dict:
         safe_deps.append(_sanitize_str(d, _RE_RESOURCE_ADDR,
                                        f"{ctx}.depends_on[{j}]", max_len=_MAX_ADDR))
     safe["depends_on"] = sorted(set(safe_deps))
+    # Schema v3: optional `essentials` field — re-sanitized on read so a
+    # hand-edited overlay can't smuggle a fat blob through.
+    if "essentials" in entry:
+        ess = _validate_essentials_field(entry["essentials"], f"{ctx}.essentials")
+        if ess:
+            safe["essentials"] = ess
     return safe
 
 
@@ -419,10 +672,22 @@ def _extract_module_resources(state_doc: dict) -> dict:
         rprov = _clean_provider(r.get("provider", ""))
         instances = r.get("instances", []) or []
         depends_on: set[str] = set()
+        # Schema v3: harvest whitelisted attributes per instance. Resources
+        # known to carry sensitive blobs (kubeconfig, secret values) are
+        # skipped wholesale — see _SENSITIVE_RESOURCE_TYPES.
+        essentials_list: list[dict] = []
+        harvest_essentials = (
+            rtype in _ESSENTIALS_WHITELIST and rtype not in _SENSITIVE_RESOURCE_TYPES
+        )
         for inst in instances:
             for d in (inst.get("dependencies", []) or []):
                 if isinstance(d, str):
                     depends_on.add(d)
+            if harvest_essentials:
+                attrs = inst.get("attributes") or {}
+                projected = _build_essentials(rtype, attrs)
+                if projected:
+                    essentials_list.append(projected)
 
         # Skip oddly-shaped entries silently — better to underreport than
         # raise mid-extraction and lose the rest of the module's graph.
@@ -447,14 +712,22 @@ def _extract_module_resources(state_doc: dict) -> dict:
             and _RE_RESOURCE_ADDR.match(d)
         })
 
-        out_resources.append({
+        record = {
             "address": address,
             "type": rtype,
             "name": rname,
             "provider": rprov,
             "instance_count": len(instances),
             "depends_on": clean_deps,
-        })
+        }
+        if essentials_list:
+            # Sanitize once more on the way out — symmetric with the read-side
+            # validator. Defensive: prevents future _build_essentials bugs from
+            # leaking unprojected values.
+            sanitized = _validate_essentials_field(essentials_list, f"{address}.essentials")
+            if sanitized:
+                record["essentials"] = sanitized
+        out_resources.append(record)
 
     output_names: list[str] = []
     for k in (state_doc.get("outputs") or {}).keys():

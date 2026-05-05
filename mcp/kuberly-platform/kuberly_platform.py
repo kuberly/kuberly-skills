@@ -587,7 +587,7 @@ class KuberlyPlatform:
             return
         for of in sorted(overlay_dir.glob("state_overlay_*.json")):
             data = load_json_safe(of)
-            if not data or data.get("schema_version") not in (1, 2):
+            if not data or data.get("schema_version") not in (1, 2, 3):
                 continue
             cluster = data.get("cluster") or {}
             env = cluster.get("env")
@@ -968,6 +968,12 @@ class KuberlyPlatform:
                 }
                 if rtype in self._SENSITIVE_RESOURCE_TYPES:
                     attrs["redacted"] = True
+                # Schema v3: forward whitelisted essentials onto the node so
+                # the dashboard category aggregator can read them without
+                # touching the raw overlay file.
+                ess = r.get("essentials")
+                if isinstance(ess, list) and ess:
+                    attrs["essentials"] = ess
                 self.add_node(rid, **attrs)
                 if comp_nid in self.nodes:
                     self.add_edge(comp_nid, rid, relation="contains")
@@ -2489,6 +2495,206 @@ def _json_for_inline_script(obj: object) -> str:
     )
 
 
+# ----- v0.34.0: per-category essentials aggregation ------------------
+# Maps a Terraform resource_type to a (category, kind_label) tuple. Order
+# of the categories below is the order they appear on the dashboard.
+_CATEGORY_RULES: list[tuple[str, str, set[str]]] = [
+    ("compute", "EKS Cluster",     {"aws_eks_cluster"}),
+    ("compute", "EKS Node Group",  {"aws_eks_node_group"}),
+    ("compute", "Fargate Profile", {"aws_eks_fargate_profile"}),
+    ("compute", "EKS Addon",       {"aws_eks_addon"}),
+    ("compute", "Lambda",          {"aws_lambda_function"}),
+    ("data",    "RDS / Aurora",    {"aws_rds_cluster", "aws_rds_cluster_instance",
+                                    "aws_db_instance", "aws_db_subnet_group"}),
+    ("data",    "ElastiCache",     {"aws_elasticache_replication_group",
+                                    "aws_elasticache_user", "aws_elasticache_user_group",
+                                    "aws_elasticache_subnet_group"}),
+    ("data",    "EBS Volume",      {"aws_ebs_volume"}),
+    ("data",    "EFS",             {"aws_efs_file_system", "aws_efs_mount_target"}),
+    ("data",    "S3 Bucket",       {"aws_s3_bucket"}),
+    ("identity","IAM Role",        {"aws_iam_role"}),
+    ("identity","IAM Policy",      {"aws_iam_policy"}),
+    ("identity","Role Attachment", {"aws_iam_role_policy_attachment",
+                                    "aws_iam_role_policy"}),
+    ("identity","OIDC Provider",   {"aws_iam_openid_connect_provider"}),
+    ("networking","VPC",           {"aws_vpc"}),
+    ("networking","Subnet",        {"aws_subnet"}),
+    ("networking","NAT Gateway",   {"aws_nat_gateway"}),
+    ("networking","IGW",           {"aws_internet_gateway",
+                                    "aws_egress_only_internet_gateway"}),
+    ("networking","Security Group",{"aws_security_group"}),
+    ("networking","SG Rule",       {"aws_security_group_rule"}),
+    ("networking","VPC Endpoint",  {"aws_vpc_endpoint"}),
+    ("networking","CloudFront",    {"aws_cloudfront_distribution"}),
+    ("secrets", "Secrets Manager", {"aws_secretsmanager_secret",
+                                    "aws_secretsmanager_secret_version"}),
+    ("secrets", "KMS Key",         {"aws_kms_key", "aws_kms_alias"}),
+    ("registries","ECR Repository",{"aws_ecr_repository", "aws_ecr_repository_policy",
+                                    "aws_ecr_lifecycle_policy"}),
+    ("queues",  "SQS Queue",       {"aws_sqs_queue", "aws_sqs_queue_policy"}),
+    ("queues",  "CloudWatch Logs", {"aws_cloudwatch_log_group"}),
+    ("queues",  "EventBridge",     {"aws_cloudwatch_event_rule",
+                                    "aws_cloudwatch_event_target"}),
+    ("k8s",     "Helm Release",    {"helm_release"}),
+    ("k8s",     "k8s Namespace",   {"kubernetes_namespace_v1", "kubernetes_namespace"}),
+    ("k8s",     "ClusterRoleBinding",{"kubernetes_cluster_role_binding"}),
+    ("k8s",     "kubectl Manifest",{"kubectl_manifest"}),
+]
+
+# Headline color per category (matches the JS palette in renderDashboard).
+_CATEGORY_TITLES: dict[str, dict[str, str]] = {
+    "compute":    {"title": "Compute",    "icon": "⚙",  "color": "#1677ff"},
+    "data":       {"title": "Data",       "icon": "◆",  "color": "#3c89e8"},
+    "identity":   {"title": "Identity",   "icon": "◐",  "color": "#ff9900"},
+    "networking": {"title": "Networking", "icon": "▦",  "color": "#d89614"},
+    "secrets":    {"title": "Secrets / KMS","icon": "✱","color": "#a266ff"},
+    "registries": {"title": "Registries", "icon": "▣",  "color": "#7c5cff"},
+    "queues":     {"title": "Queues / Logs","icon": "≋","color": "#22a1c4"},
+    "k8s":        {"title": "Kubernetes", "icon": "❯",  "color": "#39c47a"},
+}
+
+
+def _resource_category(rtype: str) -> tuple[str, str] | None:
+    for cat, kind, types in _CATEGORY_RULES:
+        if rtype in types:
+            return (cat, kind)
+    return None
+
+
+def _flag_findings(rtype: str, ess: dict) -> list[str]:
+    """Return human-readable findings for an essentials block — currently
+    only flags `0.0.0.0/0` ingress on aws_security_group_rule. Returned
+    list is rendered as red chips on the dashboard card."""
+    findings: list[str] = []
+    if rtype == "aws_security_group_rule":
+        cidrs = ess.get("cidr_blocks") or []
+        if isinstance(cidrs, list) and any(c == "0.0.0.0/0" for c in cidrs if isinstance(c, str)):
+            kind = ess.get("type") or "rule"
+            ports = (
+                f"{ess.get('from_port')}-{ess.get('to_port')}"
+                if ess.get("from_port") != ess.get("to_port")
+                else f"{ess.get('from_port')}"
+            )
+            findings.append(f"open to 0.0.0.0/0 ({kind} {ports}/{ess.get('protocol','?')})")
+    return findings
+
+
+def _compute_categories(resource_nodes: list[dict]) -> dict:
+    """Bucket resource nodes by category and produce the per-card payload
+    consumed by JS renderDashboard. See _CATEGORY_RULES for the resource_type
+    → category mapping. Resources without a category map are dropped from
+    this aggregation (they still appear on the legacy state-overlay card)."""
+    by_cat: dict[str, dict] = {}
+    for cat in _CATEGORY_TITLES:
+        meta = _CATEGORY_TITLES[cat]
+        by_cat[cat] = {
+            "name": cat,
+            "title": meta["title"],
+            "icon": meta["icon"],
+            "color": meta["color"],
+            "kind_counts": defaultdict(int),
+            "items": [],
+            "totals": {},
+            "findings": [],
+        }
+    # Aggregators that need a running tally across resources.
+    ebs_total_gb = 0
+    iam_principal_kinds: dict[str, int] = defaultdict(int)
+    helm_charts: list[str] = []
+    for n in resource_nodes:
+        rtype = n.get("resource_type") or ""
+        cat_kind = _resource_category(rtype)
+        if not cat_kind:
+            continue
+        cat, kind = cat_kind
+        bucket = by_cat[cat]
+        bucket["kind_counts"][kind] += 1
+        ess_list = n.get("essentials") or []
+        first = ess_list[0] if ess_list and isinstance(ess_list[0], dict) else {}
+        item = {
+            "address": n.get("label") or "",
+            "env": n.get("environment") or "",
+            "module": n.get("module") or "",
+            "kind": kind,
+            "rtype": rtype,
+            "details": first,  # raw essentials for drill-down
+        }
+        # Per-resource enrichments.
+        if rtype == "aws_ebs_volume":
+            sz = first.get("size")
+            if isinstance(sz, (int, float)):
+                ebs_total_gb += int(sz)
+                item["display"] = f"{int(sz)} GB · {first.get('type','?')}"
+        elif rtype == "aws_iam_role":
+            principals = first.get("principals") or []
+            if isinstance(principals, list):
+                for p in principals:
+                    if isinstance(p, str) and ":" in p:
+                        kind_part = p.split(":", 1)[0]
+                        iam_principal_kinds[kind_part] += 1
+                item["display"] = f"{len(principals)} trust principal{'s' if len(principals) != 1 else ''}"
+                item["principals"] = principals
+        elif rtype in ("aws_db_instance", "aws_rds_cluster_instance"):
+            ic = first.get("instance_class") or ""
+            ev = first.get("engine_version") or first.get("engine") or ""
+            item["display"] = " · ".join(x for x in (ic, ev) if x)
+        elif rtype == "aws_elasticache_replication_group":
+            nt = first.get("node_type") or ""
+            ng = first.get("num_node_groups")
+            ev = first.get("engine_version") or ""
+            sub = []
+            if nt: sub.append(nt)
+            if isinstance(ng, int): sub.append(f"{ng} shard{'s' if ng != 1 else ''}")
+            if ev: sub.append(f"v{ev}")
+            item["display"] = " · ".join(sub)
+        elif rtype == "aws_eks_cluster":
+            v = first.get("version") or ""
+            item["display"] = f"k8s {v}" if v else ""
+        elif rtype == "aws_eks_node_group":
+            it = first.get("instance_types") or []
+            sc = first.get("scaling_config") or {}
+            ds = first.get("disk_size")
+            sub = []
+            if isinstance(it, list) and it: sub.append(",".join(it[:3]))
+            if isinstance(sc, dict):
+                desired = sc.get("desired_size"); mn = sc.get("min_size"); mx = sc.get("max_size")
+                if desired is not None: sub.append(f"{mn}-{desired}-{mx} nodes")
+            if ds: sub.append(f"{ds} GB disk")
+            item["display"] = " · ".join(sub)
+        elif rtype == "aws_lambda_function":
+            rt = first.get("runtime") or ""
+            mem = first.get("memory_size")
+            sub = []
+            if rt: sub.append(rt)
+            if mem: sub.append(f"{mem} MB")
+            item["display"] = " · ".join(sub)
+        elif rtype == "helm_release":
+            chart = n.get("resource_name") or ""
+            if chart:
+                helm_charts.append(chart)
+        # Surface findings (e.g. 0.0.0.0/0 SG rules) on both the item AND the bucket.
+        finds = _flag_findings(rtype, first)
+        if finds:
+            item["findings"] = finds
+            bucket["findings"].extend(finds)
+        bucket["items"].append(item)
+    # Per-category totals — sub-line rendered under the title.
+    by_cat["data"]["totals"]["ebs_total_gb"] = ebs_total_gb
+    by_cat["identity"]["totals"]["principal_kinds"] = dict(iam_principal_kinds)
+    by_cat["k8s"]["totals"]["helm_charts"] = sorted(set(helm_charts))[:32]
+    # Coerce defaultdicts to dicts for JSON output.
+    for cat in by_cat.values():
+        cat["kind_counts"] = dict(cat["kind_counts"])
+        cat["items"].sort(key=lambda x: (x["kind"], x["env"], x["address"]))
+        cat["count"] = sum(cat["kind_counts"].values())
+        # Headline string: "N items · top kinds"
+        top_kinds = sorted(cat["kind_counts"].items(), key=lambda x: -x[1])[:3]
+        cat["headline"] = " · ".join(
+            f"{c} {k}{'s' if c != 1 and not k.endswith('s') else ''}" for k, c in top_kinds
+        )
+    return by_cat
+
+
 def _compute_dashboard_data(
     graph: KuberlyPlatform, out_dir: Path | None = None
 ) -> dict:
@@ -2883,6 +3089,7 @@ def _compute_dashboard_data(
             "total": len(docs_nodes),
         },
         "state": state_summary,
+        "categories": _compute_categories(resource_nodes),
         "longest_chains": [list(c) for c in stats.get("longest_chains", [])][:5],
     }
 
