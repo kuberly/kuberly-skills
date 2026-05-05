@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.39.1 — 2026-05-06
+
+- **MOVE:** the Stats & overlays section becomes the **dashboard
+  footer**. New `<footer class="dash-footer">` rendered at the very
+  bottom of the dashboard with two slim rows (`overlays` and
+  `graph nodes by layer`).
+- **DEDUP:** dropped the "newGraphCounts" chip row that duplicated
+  CUE schemas / Workflows / Applications counts already shown in the
+  per-layer legend.
+- **STYLE:** footer rows are dense mono-typography pills (8 px
+  padding, single-line) rather than full-width section chips. Section
+  border-top separates the footer visually.
+- **BUMP:** apm.yml 0.39.0 → 0.39.1.
+
 ## v0.39.0 — 2026-05-06
 
 - **CHARTS:** migrate from Chart.js to **Apache ECharts** for the

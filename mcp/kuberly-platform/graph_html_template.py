@@ -682,6 +682,40 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     color: #c39cff;
   }
 
+  /* v0.39.1: dashboard footer — slim stats row at the very bottom. */
+  .dash-footer {
+    margin-top: 28px;
+    padding: 16px 0 24px;
+    border-top: 1px solid var(--ink-line);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .dash-footer-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-mute);
+  }
+  .dash-foot-key {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 9px;
+    color: var(--ink-faint);
+    margin-right: 4px;
+    min-width: 110px;
+  }
+  .dash-foot-val {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--ink-line-soft);
+    border-radius: 999px;
+    padding: 2px 10px;
+  }
+  .dash-foot-val strong { color: var(--ink); margin-left: 4px; }
+
   /* v0.36.0 — improved Node spotlight (now top-of-page primary feature) */
   .stats-section .coverage-bar {
     margin-bottom: 12px;
@@ -2641,27 +2675,10 @@ function renderDashboard() {
    * lives on as graph nodes in the 3D Graph view (CUE files + workflow
    * files added as new node types). The dashboard's job is now just
    * "what's loaded + jump into the graph". */
-  const newGraphCounts = [];
-  if (DASHBOARD.cue_schemas && DASHBOARD.cue_schemas.file_count)
-    newGraphCounts.push(`<span class="chip">CUE schemas: <strong>$${DASHBOARD.cue_schemas.file_count}</strong></span>`);
-  if (DASHBOARD.workflows && (DASHBOARD.workflows.workflows || []).length)
-    newGraphCounts.push(`<span class="chip">Workflows: <strong>$${DASHBOARD.workflows.workflows.length}</strong></span>`);
-  if (DASHBOARD.secret_refs && (DASHBOARD.secret_refs.secrets || []).length)
-    newGraphCounts.push(`<span class="chip">Secrets refs: <strong>$${DASHBOARD.secret_refs.secrets.length}</strong></span>`);
-  const renderedEnvs = Object.keys(DASHBOARD.rendered_apps || {});
-  if (renderedEnvs.length) {
-    const totalRendered = renderedEnvs.reduce(
-      (s, e) => s + (DASHBOARD.rendered_apps[e].resource_count || 0), 0);
-    newGraphCounts.push(`<span class="chip">Rendered manifests: <strong>$${totalRendered}</strong></span>`);
-  }
-  const driftEnvs = Object.keys(DASHBOARD.app_drift || {});
-  if (driftEnvs.length) {
-    let totalDrift = 0;
-    for (const e of driftEnvs)
-      for (const a of (DASHBOARD.app_drift[e].apps || []))
-        totalDrift += (a.summary?.missing_in_cluster || 0) + (a.summary?.extra_in_cluster || 0);
-    newGraphCounts.push(`<span class="chip">App drift items: <strong>$${totalDrift}</strong></span>`);
-  }
+  /* v0.39.1: dropped newGraphCounts duplicate row — those counts are
+   * already shown in the layer-legend (CUE schemas / CI/CD workflows /
+   * Applications). The footer stats now live at the bottom of the
+   * dashboard, dedup'd. */
   /* v0.37.0: SaaS-grade hero band with prominent KPI tiles. */
   const arch = DASHBOARD.architecture || {};
   const findings = (DASHBOARD.findings && DASHBOARD.findings.summary) || {};
@@ -2696,18 +2713,6 @@ function renderDashboard() {
       <div id="arch-detail-panel" hidden></div>
     </section>
 
-    <section class="section stats-section">
-      <h2>Stats &amp; overlays</h2>
-      <div class="coverage-bar">
-        <span class="chip">OpenSpec: <strong>$${cov.openspec_present ? cov.openspec_changes + " changes" : "—"}</strong></span>
-        <span class="chip">Docs overlay: <strong>$${(cov.docs_overlay && cov.docs_overlay.generated_at) || "—"}</strong></span>
-        <span class="chip">State snapshots: <strong>$${(cov.state_overlay_envs || []).join(", ") || "—"}</strong></span>
-        <span class="chip">Doc-linked modules: <strong>$${cov.modules_with_doc_mentions}/$${cov.modules_total}</strong></span>
-        $${newGraphCounts.join("")}
-      </div>
-      <div class="layer-legend">$${layerLegend}</div>
-    </section>
-
     <section class="section spotlight" id="spotlight-section">
       <div>
         <h2>Node spotlight</h2>
@@ -2732,6 +2737,20 @@ function renderDashboard() {
         <p style="color:var(--ink-faint);font-size:12px">Pick a node on the left to see its inbound and outbound edges. Click any neighbor to walk the graph.</p>
       </div>
     </section>
+
+    <footer class="dash-footer">
+      <div class="dash-footer-row">
+        <span class="dash-foot-key">overlays</span>
+        <span class="dash-foot-val">OpenSpec <strong>$${cov.openspec_present ? cov.openspec_changes + " changes" : "—"}</strong></span>
+        <span class="dash-foot-val">docs <strong>$${(cov.docs_overlay && cov.docs_overlay.generated_at) || "—"}</strong></span>
+        <span class="dash-foot-val">state snapshots <strong>$${(cov.state_overlay_envs || []).join(", ") || "—"}</strong></span>
+        <span class="dash-foot-val">doc-linked <strong>$${cov.modules_with_doc_mentions}/$${cov.modules_total}</strong></span>
+      </div>
+      <div class="dash-footer-row">
+        <span class="dash-foot-key">graph nodes by layer</span>
+        $${layerLegend}
+      </div>
+    </footer>
   `;
   /* Wire charts after innerHTML is in DOM. */
   try { renderDashboardCharts(DASHBOARD.categories || {}); }

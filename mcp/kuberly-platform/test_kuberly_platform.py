@@ -2047,9 +2047,9 @@ class GraphHtmlVizTests(unittest.TestCase):
                 self.assertIn("kuberly", html)
                 self.assertIn("Dashboard", html)
                 self.assertIn("kuberly-dashboard-json", html)
-                # v0.36.0: dashboard cut to Hero + Coverage + Spotlight.
-                self.assertIn("Stats &amp; overlays", html)
+                # v0.39.1: stats moved to footer; primary section is Spotlight.
                 self.assertIn("Node spotlight", html)
+                self.assertIn("dash-footer", html)
         finally:
             tmp.cleanup()
 
@@ -2099,10 +2099,10 @@ class GraphHtmlVizTests(unittest.TestCase):
                 out_path = Path(out)
                 write_graph_html(g, out_path)
                 html = (out_path / "graph.html").read_text(encoding="utf-8")
-                # Hero + the three retained sections.
+                # Hero + retained sections.
                 self.assertIn('id="kuberly-dashboard-json"', html)
-                self.assertIn("Stats &amp; overlays", html)
                 self.assertIn("Node spotlight", html)
+                self.assertIn("dash-footer", html)
                 # Spotlight got a layer-filter chip row and an
                 # "open in 3D graph" button (v0.36.0 usability lift).
                 self.assertIn('id="spotlight-layer-filter"', html)
