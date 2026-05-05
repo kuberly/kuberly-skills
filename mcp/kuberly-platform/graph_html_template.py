@@ -149,6 +149,8 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .layer-toggle[data-layer=state]  .dot { background: var(--aws); }
   .layer-toggle[data-layer=k8s]    .dot { background: var(--k8s-red); }
   .layer-toggle[data-layer=docs]   .dot { background: var(--ink-mute); }
+  .layer-toggle[data-layer=schema] .dot { background: #a266ff; }
+  .layer-toggle[data-layer=ci_cd]  .dot { background: #5fd098; }
   #graph-view-mode,
   #graph-group-by {
     background: rgba(255,255,255,0.04);
@@ -1197,6 +1199,139 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     background: rgba(255,255,255,0.015);
     color: var(--ink-faint);
   }
+  .arch-tile.active {
+    border-color: var(--blue);
+    background: rgba(22,119,255,0.10);
+    box-shadow: 0 0 0 1px var(--blue), 0 18px 36px -22px rgba(0,0,0,0.6);
+  }
+  /* v0.37.0: inline detail panel that opens when an arch tile is clicked. */
+  #arch-detail-panel {
+    margin-top: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--blue);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .ad-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--ink-line);
+    background: rgba(22,119,255,0.06);
+  }
+  .ad-head iconify-icon { font-size: 26px; flex: 0 0 auto; }
+  .ad-title { font-size: 14px; font-weight: 600; color: var(--ink); flex: 1; }
+  .ad-count { font-family: var(--font-mono); color: var(--blue-soft); font-size: 12px; }
+  .ad-actions { display: flex; gap: 8px; }
+  .ad-graph, .ad-close {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--ink-line);
+    color: var(--ink);
+    border-radius: var(--radius);
+    padding: 4px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .ad-graph:hover { border-color: var(--blue); background: rgba(22,119,255,0.12); }
+  .ad-close { padding: 2px 10px; font-size: 16px; line-height: 1; }
+  .ad-close:hover { border-color: #ff5e5e; color: #ff8b8b; }
+  .ad-body {
+    max-height: 420px;
+    overflow-y: auto;
+  }
+  .ad-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .ad-table th, .ad-table td {
+    padding: 8px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--ink-line-soft);
+    vertical-align: top;
+  }
+  .ad-table th {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--ink-faint);
+    background: rgba(255,255,255,0.02);
+    position: sticky;
+    top: 0;
+  }
+  .ad-table tbody tr:hover { background: rgba(255,255,255,0.025); }
+  .ad-addr { color: var(--ink); word-break: break-all; }
+  .ad-cell { color: var(--ink-mute); font-family: var(--font-mono); font-size: 11px; }
+  .ad-detail { color: var(--ink-mute); font-family: var(--font-mono); font-size: 11px; }
+  .ad-detail strong { color: var(--ink); }
+
+  /* v0.37.0: SaaS-grade hero band — large numbers, gradient surface,
+     proper visual rhythm. Replaces the plain "1318 nodes" chip row. */
+  .hero-saas {
+    background:
+      radial-gradient(1100px 400px at 95% -50%, rgba(22,119,255,0.10), transparent 60%),
+      radial-gradient(700px 300px at 0% 80%, rgba(255,153,0,0.06), transparent 60%),
+      linear-gradient(180deg, var(--bg-card) 0%, var(--bg-raised) 100%);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius-lg);
+    padding: 28px 32px 24px;
+    margin-bottom: 20px;
+  }
+  .hero-saas .hero-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--ink-faint);
+    margin-bottom: 6px;
+  }
+  .hero-saas h1 {
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    margin: 0 0 18px;
+  }
+  .hero-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 22px;
+    padding-top: 18px;
+    border-top: 1px solid var(--ink-line);
+  }
+  .hero-kpi {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .hero-kpi .label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-faint);
+  }
+  .hero-kpi .value {
+    font-size: 28px;
+    font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .hero-kpi .sub {
+    font-size: 11px;
+    color: var(--ink-mute);
+    font-family: var(--font-mono);
+  }
+  .section-sub {
+    color: var(--ink-mute);
+    font-size: 12px;
+    margin: -6px 0 14px;
+    line-height: 1.5;
+  }
 
   .section {
     margin-bottom: 36px;
@@ -1242,6 +1377,10 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .ll-pill.ll-k8s    .ll-dot { background: var(--k8s-red); box-shadow: 0 0 6px rgba(228,77,77,0.45); }
   .ll-pill.ll-docs   { border-color: var(--ink-line); }
   .ll-pill.ll-docs   .ll-dot { background: var(--ink-mute); }
+  .ll-pill.ll-schema { border-color: rgba(162,102,255,0.32); }
+  .ll-pill.ll-schema .ll-dot { background: #a266ff; box-shadow: 0 0 6px rgba(162,102,255,0.45); }
+  .ll-pill.ll-ci_cd  { border-color: rgba(95,208,152,0.32); }
+  .ll-pill.ll-ci_cd  .ll-dot { background: #5fd098; box-shadow: 0 0 6px rgba(95,208,152,0.40); }
   .ll-pill strong { color: var(--ink); margin-left: 2px; }
 
   .env-grid {
@@ -1600,6 +1739,12 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
       <label class="layer-toggle active" data-layer="docs"
              title="Documentation references — module READMEs, runbooks, ADRs that mention the modules in this graph.">
         <input type="checkbox" data-layer="docs" checked><span class="dot"></span>Docs</label>
+      <label class="layer-toggle active" data-layer="schema"
+             title="CUE schema files — cue/**/*.cue. Top-level field declarations that govern application JSON validity.">
+        <input type="checkbox" data-layer="schema" checked><span class="dot"></span>CUE</label>
+      <label class="layer-toggle active" data-layer="ci_cd"
+             title="GitHub workflows — .github/workflows/*.yml. References show which workflow deploys which module.">
+        <input type="checkbox" data-layer="ci_cd" checked><span class="dot"></span>CI/CD</label>
     </div>
     <select id="graph-view-mode" title="Graph scope — start with overview on large stacks">
       <option value="overview">Overview (module deps)</option>
@@ -2026,24 +2171,84 @@ function renderArchitectureDiagram(arch) {
       <div class="arch-tiles">$${tiles}</div>
     </div>`;
   }).join("");
-  /* Wire click handlers AFTER innerHTML insert — kept out of render
-   * function so it runs after dashboard root.innerHTML is in the DOM. */
+  /* v0.37.0: tile click opens an inline detail panel below the diagram
+   * listing every resource of that service. A second click on the same
+   * tile (or the panel close button) collapses it. The "open in 3D
+   * graph →" button on the panel still routes to the Graph view with
+   * the resource_type filter applied. */
   setTimeout(() => {
+    const panel = document.getElementById("arch-detail-panel");
     document.querySelectorAll(".arch-tile[data-rtype]").forEach(tile => {
       if (tile.__wired) return;
       tile.__wired = true;
       tile.addEventListener("click", () => {
         const rtype = tile.getAttribute("data-rtype");
-        if (!rtype) return;
-        /* Switch to Graph view + apply the filter. setView triggers
-         * buildGraph3D on first use, which registers the helper. */
-        if (typeof setView === "function") setView("graph");
-        /* Defer until Graph3D + GRAPH_STATE are initialized. */
-        setTimeout(() => {
-          if (typeof window.__kuberlyFilterByResourceType === "function") {
-            window.__kuberlyFilterByResourceType(rtype);
+        if (!rtype || !panel) return;
+        /* Find the service payload by walking the cached architecture. */
+        const layers = (DASHBOARD.architecture && DASHBOARD.architecture.layers) || [];
+        let svc = null;
+        for (const L of layers) {
+          for (const s of L.services) {
+            if (s.rtype === rtype) { svc = s; break; }
           }
-        }, 80);
+          if (svc) break;
+        }
+        if (!svc) return;
+        /* Toggle off if already open on the same rtype. */
+        if (panel.getAttribute("data-rtype") === rtype && !panel.hidden) {
+          panel.hidden = true;
+          document.querySelectorAll(".arch-tile.active").forEach(t => t.classList.remove("active"));
+          return;
+        }
+        document.querySelectorAll(".arch-tile.active").forEach(t => t.classList.remove("active"));
+        tile.classList.add("active");
+        panel.setAttribute("data-rtype", rtype);
+        const rows = (svc.items || []).map(it => {
+          const det = it.details || {};
+          const subParts = [];
+          for (const [k, v] of Object.entries(det)) {
+            if (typeof v === "object") continue;
+            if (subParts.length >= 4) break;
+            subParts.push(`<span class="ad-detail">$${esc(k)}: <strong>$${esc(String(v))}</strong></span>`);
+          }
+          return `<tr>
+            <td><span class="ad-addr mono">$${esc(it.address || "")}</span></td>
+            <td><span class="ad-cell">$${esc(it.module || "")}</span></td>
+            <td><span class="ad-cell">$${esc(it.env || "")}</span></td>
+            <td>$${subParts.join(" · ") || `<span style="color:var(--ink-faint)">—</span>`}</td>
+          </tr>`;
+        }).join("");
+        panel.innerHTML = `
+          <div class="ad-head">
+            <iconify-icon icon="$${esc(svc.icon)}" aria-hidden="true"></iconify-icon>
+            <div class="ad-title">$${esc(svc.label)}</div>
+            <div class="ad-count">$${svc.count} resource$${svc.count === 1 ? '' : 's'}</div>
+            <div class="ad-actions">
+              <button type="button" class="ad-graph" data-rtype="$${esc(rtype)}">open in 3D graph →</button>
+              <button type="button" class="ad-close" aria-label="Close">×</button>
+            </div>
+          </div>
+          <div class="ad-body">
+            <table class="ad-table">
+              <thead><tr><th>Address</th><th>Module</th><th>Env</th><th>Details</th></tr></thead>
+              <tbody>$${rows || `<tr><td colspan="4" style="color:var(--ink-faint)">no items</td></tr>`}</tbody>
+            </table>
+          </div>
+        `;
+        panel.hidden = false;
+        panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        panel.querySelector(".ad-close")?.addEventListener("click", () => {
+          panel.hidden = true;
+          document.querySelectorAll(".arch-tile.active").forEach(t => t.classList.remove("active"));
+        });
+        panel.querySelector(".ad-graph")?.addEventListener("click", () => {
+          if (typeof setView === "function") setView("graph");
+          setTimeout(() => {
+            if (typeof window.__kuberlyFilterByResourceType === "function") {
+              window.__kuberlyFilterByResourceType(rtype);
+            }
+          }, 80);
+        });
       });
     });
   }, 0);
@@ -2310,10 +2515,22 @@ function renderDashboard() {
     state:  "TG / OpenTofu state",
     k8s:    "K8s resources",
     docs:   "Docs",
+    schema: "CUE schemas",
+    ci_cd:  "CI/CD workflows",
   };
-  const layerLegend = ["static", "state", "k8s", "docs"].map(L =>
-    `<span class="ll-pill ll-$${L}" title="$${esc(L === 'static' ? 'Infrastructure-as-Code files in the repo (HCL / JSON / CUE)' : L === 'state' ? 'Resources actually created by Terragrunt / OpenTofu for this cluster/env' : L === 'k8s' ? 'Live Kubernetes cluster resources (Deployments, Services, Pods, ...)' : 'Documentation references — module READMEs, runbooks, ADRs')}"><span class="ll-dot"></span>$${esc(LAYER_LABELS[L])}: <strong>$${layers[L] || 0}</strong></span>`
-  ).join(" ");
+  const LAYER_TIPS = {
+    static: "Infrastructure-as-Code files in the repo (HCL / JSON / CUE)",
+    state:  "Resources actually created by Terragrunt / OpenTofu for this cluster/env",
+    k8s:    "Live Kubernetes cluster resources (Deployments, Services, Pods, ...)",
+    docs:   "Documentation references — module READMEs, runbooks, ADRs",
+    schema: "CUE schema files — cue/**/*.cue. Defines valid app JSON shape",
+    ci_cd:  "GitHub workflows — .github/workflows/*.yml. References modules / components",
+  };
+  const layerLegend = ["static", "state", "k8s", "docs", "schema", "ci_cd"]
+    .filter(L => (layers[L] || 0) > 0)
+    .map(L =>
+      `<span class="ll-pill ll-$${L}" title="$${esc(LAYER_TIPS[L])}"><span class="ll-dot"></span>$${esc(LAYER_LABELS[L])}: <strong>$${layers[L] || 0}</strong></span>`
+    ).join(" ");
 
   const envCards = (DASHBOARD.environments || []).map(e => {
     const dcomp = (e.drift_components || []).length;
@@ -2397,17 +2614,39 @@ function renderDashboard() {
         totalDrift += (a.summary?.missing_in_cluster || 0) + (a.summary?.extra_in_cluster || 0);
     newGraphCounts.push(`<span class="chip">App drift items: <strong>$${totalDrift}</strong></span>`);
   }
+  /* v0.37.0: SaaS-grade hero band with prominent KPI tiles. */
+  const arch = DASHBOARD.architecture || {};
+  const findings = (DASHBOARD.findings && DASHBOARD.findings.summary) || {};
+  const stateAge = kpis.state_age || {};
+  const heroKpis = `
+    <div class="hero-kpi"><div class="label">AWS resources</div><div class="value">$${arch.total_resources || 0}</div><div class="sub">$${arch.total_services || 0} services · $${(arch.layers || []).length} layers</div></div>
+    <div class="hero-kpi"><div class="label">Findings</div><div class="value">$${findings.total || 0}</div><div class="sub">$${findings.high || 0} high · $${findings.medium || 0} med · $${findings.low || 0} low</div></div>
+    <div class="hero-kpi"><div class="label">State age</div><div class="value">$${esc(stateAge.value || "—")}</div><div class="sub">$${esc(stateAge.sub || "")}</div></div>
+    <div class="hero-kpi"><div class="label">Modules</div><div class="value">$${m.module_count}</div><div class="sub">across $${m.env_count} env$${m.env_count === 1 ? '' : 's'}</div></div>
+    <div class="hero-kpi"><div class="label">Graph</div><div class="value">$${m.node_count}</div><div class="sub">$${m.edge_count} edges</div></div>
+  `;
   root.innerHTML = `
-    <header class="hero">
-      <div class="hero-eyebrow mono">stack intelligence</div>
+    <header class="hero-saas">
+      <div class="hero-eyebrow">stack intelligence</div>
       <h1>$${esc((DASHBOARD.environments?.[0]?.cluster_name) || "kuberly")}</h1>
-      <div class="meta-row">
-        <span class="chip"><strong>$${m.node_count}</strong> nodes</span>
-        <span class="chip"><strong>$${m.edge_count}</strong> edges</span>
-        <span class="chip"><strong>$${m.env_count}</strong> envs</span>
-        <span class="chip"><strong>$${m.module_count}</strong> modules</span>
-      </div>
+      <div class="hero-kpis">$${heroKpis}</div>
     </header>
+
+    <section class="section">
+      <h2>Architecture — deployed AWS services</h2>
+      <p class="section-sub">Click a tile to see every resource of that type, or open the 3D graph filtered to it.</p>
+      $${renderArchitectureDiagram(arch)}
+      <div id="arch-detail-panel" hidden></div>
+    </section>
+
+    <section class="section">
+      <h2>Distributions</h2>
+      <div class="chart-row">
+        <div class="chart-card"><h4>Category share</h4><canvas id="chart-cat-share"></canvas></div>
+        <div class="chart-card"><h4>IAM role trust — by principal kind</h4><canvas id="chart-iam-principals"></canvas></div>
+        <div class="chart-card"><h4>Top resource types</h4><canvas id="chart-top-rtypes"></canvas></div>
+      </div>
+    </section>
 
     <section class="section stats-section">
       <h2>Stats &amp; overlays</h2>
@@ -2429,10 +2668,12 @@ function renderDashboard() {
           <input type="search" id="spotlight-q" placeholder="Filter by id, label, type, or layer…" autocomplete="off" />
           <div class="layer-filter" id="spotlight-layer-filter">
             <button type="button" data-lf="" class="lf on">all</button>
-            <button type="button" data-lf="static" class="lf">IaC files</button>
-            <button type="button" data-lf="state"  class="lf">TG state</button>
-            <button type="button" data-lf="k8s"    class="lf">K8s resources</button>
-            <button type="button" data-lf="docs"   class="lf">Docs</button>
+            <button type="button" data-lf="static" class="lf">IaC</button>
+            <button type="button" data-lf="state"  class="lf">state</button>
+            <button type="button" data-lf="k8s"    class="lf">k8s</button>
+            <button type="button" data-lf="docs"   class="lf">docs</button>
+            <button type="button" data-lf="schema" class="lf">CUE</button>
+            <button type="button" data-lf="ci_cd"  class="lf">CI/CD</button>
           </div>
         </div>
         <div id="spotlight-pick"></div>
@@ -2443,6 +2684,30 @@ function renderDashboard() {
       </div>
     </section>
   `;
+  /* Wire charts after innerHTML is in DOM. */
+  try { renderDashboardCharts(DASHBOARD.categories || {}); }
+  catch (e) { console.warn("charts", e); }
+  /* Click-to-copy buttons (kept generic). */
+  document.querySelectorAll(".kbd-copy").forEach(btn => {
+    if (btn.__wired) return;
+    btn.__wired = true;
+    btn.addEventListener("click", async () => {
+      const text = btn.getAttribute("data-copy") || "";
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        const tick = btn.querySelector(".kbd-tick");
+        if (tick) {
+          const prev = tick.textContent;
+          tick.textContent = "copied ✓";
+          setTimeout(() => { tick.textContent = prev || "copy"; }, 1600);
+        }
+      } catch (e) {
+        const r = document.createRange(); r.selectNodeContents(btn);
+        const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+      }
+    });
+  });
 
   /* v0.36.0 Spotlight — promoted to top of dashboard, with layer filter,
    * recent-history breadcrumb, and a "open in 3D Graph" double-click
@@ -2459,6 +2724,8 @@ function renderDashboard() {
     if (layer === "static") return "var(--blue)";
     if (layer === "state")  return "var(--aws)";
     if (layer === "k8s")    return "var(--k8s-red)";
+    if (layer === "schema") return "#a266ff";
+    if (layer === "ci_cd")  return "#5fd098";
     return "var(--ink-mute)";
   }
   function _layerLabel(layer) {
@@ -2466,6 +2733,8 @@ function renderDashboard() {
     if (layer === "state")  return "state";
     if (layer === "k8s")    return "k8s";
     if (layer === "docs")   return "docs";
+    if (layer === "schema") return "CUE";
+    if (layer === "ci_cd")  return "CI/CD";
     return layer || "?";
   }
 
@@ -2626,6 +2895,8 @@ function buildGraph3D() {
     state:  _v("--aws")  || "#ff9900",
     k8s:    _v("--k8s-red") || "#e44d4d",
     docs:   "rgba(255,255,255,0.65)",
+    schema: "#a266ff",
+    ci_cd:  "#5fd098",
   };
   const HIGHLIGHT = _v("--blue-soft") || "#3c89e8";
   const DIM_COLOR = "rgba(120,120,140,0.18)";
@@ -2680,7 +2951,8 @@ function buildGraph3D() {
   /* v0.34.2: filter sets — empty = no filter, populated = whitelist of values
    * the node attribute must match. groupBy drives both color and cluster. */
   GRAPH_STATE = {
-    layers: { static: true, state: true, k8s: false, docs: true },
+    layers: { static: true, state: true, k8s: false, docs: true,
+              schema: true, ci_cd: true },
     viewMode,
     search: "",
     selectedId: null,

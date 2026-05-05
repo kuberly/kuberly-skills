@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.37.0 — 2026-05-06
+
+Dashboard restored to a real SaaS layout + Graph view gets dedicated
+toggles for the new graph types.
+
+### Dashboard
+
+- **NEW: SaaS hero band** — gradient surface, eyebrow + cluster name
+  title, KPI tiles (AWS resources / Findings / State age / Modules /
+  Graph) replacing the chip row. Uses the kuberly-web blue/orange
+  radial gradient palette.
+- **RESTORED: AWS architecture diagram** — layered service tiles
+  (Edge / Compute / Data / Network / Identity / Secrets / Registries /
+  Ops / k8s) with iconify AWS icons, counts, sample address per tile.
+- **NEW: click-to-list drilldown** — clicking any architecture tile
+  opens an inline detail panel with **every resource** of that
+  service (address, module, env, key essentials), an `open in 3D
+  graph →` button, and a close affordance. Click the same tile again
+  (or ×) to collapse.
+- **RESTORED: Distributions chart row** — Chart.js doughnut for
+  category share, bar for IAM trust by principal kind, horizontal
+  bar for top resource types.
+- Stats & overlays + Node spotlight unchanged from v0.36.0.
+
+### New layer pills in the Graph topbar
+
+- **CUE** — purple `#a266ff`, schema files (`schema:cue/...`)
+- **CI/CD** — green `#5fd098`, workflows
+  (`workflow:.github/workflows/...`)
+- Both layers default ON. Toggle pills filter the 3D graph.
+- New `_node_source_layer` returns `"schema"` / `"ci_cd"` for the
+  matching nodes; cluster force gives them their own attractor in 3D
+  space so the lobes spread cleanly.
+- Spotlight layer-filter row gains matching CUE / CI/CD chips so you
+  can drill straight into either set.
+
+### Misc
+
+- **BUMP:** apm.yml 0.36.1 → 0.37.0.
+
 ## v0.36.1 — 2026-05-06
 
 - **FIX:** v0.36.0 left the `root.innerHTML` template literal unclosed

@@ -2369,12 +2369,8 @@ class KuberlyPlatform:
         self.scan_workflow_nodes()
 
     def scan_cue_schema_nodes(self) -> None:
-        """v0.36.0: emit `schema:cue/<file>` nodes for every cue/*.cue file.
-
-        Each schema node carries its package + top-level field count as
-        attributes. No edges to other nodes yet — the dashboard's node
-        spotlight + the 3D Graph view both index by id, so the user can
-        find any schema and click into it.
+        """v0.37.0: emit `schema:cue/<file>` nodes with source_layer="schema"
+        so they get their own toggle pill in the Graph view topbar.
         """
         cue_dir = self.repo / "cue"
         if not cue_dir.is_dir():
@@ -2389,17 +2385,12 @@ class KuberlyPlatform:
                 label=f["file"],
                 package=f.get("package", ""),
                 field_count=f.get("field_count", 0),
-                source_layer="docs",   # treat schemas as "docs-like"
+                source_layer="schema",
             )
 
     def scan_workflow_nodes(self) -> None:
-        """v0.36.0: emit `workflow:<file>` nodes for every
-        `.github/workflows/*.yml` plus `references` edges from each
-        workflow to the modules / components it touches.
-
-        This makes the 3D Graph view answer "which CI/CD job deploys
-        this module" by clicking the module and following inbound
-        `references` edges.
+        """v0.37.0: emit `workflow:<file>` nodes with source_layer="ci_cd"
+        plus `references` edges to modules/components they touch.
         """
         out = _scan_workflow_origins(self.repo)
         for w in out.get("workflows", []):
@@ -2409,7 +2400,7 @@ class KuberlyPlatform:
                     wid, type="workflow",
                     label=w["file"],
                     triggers=list(w.get("triggers") or [])[:8],
-                    source_layer="docs",
+                    source_layer="ci_cd",
                 )
             # Edges to module + component nodes that exist in the graph.
             for m in w.get("module_refs", []) or []:
@@ -2459,15 +2450,23 @@ def write_graph_json(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = F
 
 
 def _node_source_layer(node: dict) -> str:
-    """Classify a node into one of {static, state, k8s, docs}.
+    """Classify a node into one of {static, state, k8s, docs, schema, ci_cd}.
 
     The graph builder doesn't always set a `source` attr explicitly, so
     we derive it from type / id prefix. Used by the dashboard for the
-    layer-distribution chart and previously by the cytoscape viz for
-    color encoding.
+    layer-distribution chart and by the 3D graph view for the layer-
+    toggle pills + cluster-force grouping.
     """
     ntype = node.get("type", "") or ""
     nid = node.get("id", "") or ""
+    # Explicit source_layer wins (set by scanners that opt-in to a layer).
+    explicit = node.get("source_layer", "")
+    if explicit in ("static", "state", "k8s", "docs", "schema", "ci_cd"):
+        return explicit
+    if ntype == "cue_schema" or nid.startswith("schema:"):
+        return "schema"
+    if ntype == "workflow" or nid.startswith("workflow:"):
+        return "ci_cd"
     if ntype == "k8s_resource" or nid.startswith("k8s:"):
         return "k8s"
     if ntype == "doc" or nid.startswith("doc:"):
