@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.32.2 — 2026-05-06
+
+- **FIX:** MCP stdio failed when the host used a system **``python3``** without
+  the PyPI **``mcp``** package (Cursor showed *install mcp>=1.10* then closed).
+  **``scripts/ensure_mcp_venv.sh``** now creates **``.venv-mcp``** at the
+  consumer repo root and **``pip install -r …/requirements-mcp.txt``**;
+  **``post_apm_install.sh``** runs it before **``sync_claude_config.py``**.
+  Cursor and Claude Code MCP entries use **``.venv-mcp/bin/python3``**;
+  **``apm.yml``** MCP **``command``** matches for other APM targets.
+- **GITIGNORE:** ignore repo-root **``.venv-mcp/** (consumer workspace).
+- **BUMP:** apm.yml 0.32.1 → 0.32.2.
+
 ## v0.32.1 — 2026-05-06
 
 - **FIX:** Cursor **hooks** — use supported event name **`beforeSubmitPrompt`**

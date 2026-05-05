@@ -6,11 +6,9 @@ Python **Model Context Protocol** server and **`generate`** CLI for Terragrunt/O
 
 `python3 scripts/mcp/kuberly-platform/kuberly_platform.py mcp --repo .`
 
-**MCP runtime dependency (v0.30.0+):** the stdio server uses the official PyPI [`mcp`](https://pypi.org/project/mcp/) package (**FastMCP** / `mcp.server.fastmcp` for stdio since v0.31.0; `mcp>=1.10`). Install it into the same interpreter that launches the server, for example:
+**MCP runtime dependency (v0.30.0+):** the stdio server uses the official PyPI [`mcp`](https://pypi.org/project/mcp/) package (**FastMCP** / `mcp.server.fastmcp` for stdio since v0.31.0; `mcp>=1.10`). **Consumers (v0.32.2+):** after `apm install`, `post_apm_install.sh` runs **`scripts/ensure_mcp_venv.sh`**, which creates **`.venv-mcp/`** at the repo root and installs **`requirements-mcp.txt`** — Cursor / Claude MCP configs point at **`.venv-mcp/bin/python3`** so a system Python without `mcp` still works.
 
-`pip install -r scripts/mcp/kuberly-platform/requirements-mcp.txt`
-
-(or `pip install 'mcp>=1.10'`). Without it, `kuberly_platform.py mcp` exits with code 2 and a short stderr hint.
+Manual / ad-hoc runs: install into the interpreter you use, for example `pip install -r scripts/mcp/kuberly-platform/requirements-mcp.txt` (or `pip install 'mcp>=1.10'`). Without `mcp`, `kuberly_platform.py mcp` exits with code 2 and a short stderr hint.
 
 Use `${workspaceFolder}` in Cursor for `--repo` when using absolute workspace roots.
 

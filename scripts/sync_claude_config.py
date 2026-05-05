@@ -103,9 +103,14 @@ def _hooks_block_cursor() -> dict[str, list[dict[str, Any]]]:
 
 
 def _mcp_server_claude() -> dict[str, Any]:
-    """kuberly-platform MCP server for Claude Code project-scope `.mcp.json`."""
+    """kuberly-platform MCP server for Claude Code project-scope `.mcp.json`.
+
+    Uses ``.venv-mcp/bin/python3`` (created by ``ensure_mcp_venv.sh``) so the
+    PyPI ``mcp`` package is available even when system ``python3`` lacks it.
+    Cwd for MCP is the project root, so this relative path resolves.
+    """
     return {
-        "command": "python3",
+        "command": ".venv-mcp/bin/python3",
         "args": [
             f"{APM_CACHE_PATH}/mcp/kuberly-platform/kuberly_platform.py",
             "mcp",
@@ -118,12 +123,14 @@ def _mcp_server_claude() -> dict[str, Any]:
 def _mcp_server_cursor() -> dict[str, Any]:
     """kuberly-platform MCP server for Cursor `.cursor/mcp.json`.
 
-    Cursor requires **stdio** MCP servers (`type: stdio`); `${workspaceFolder}`
-    is expanded by Cursor for both the script path and `--repo`.
+    Cursor requires **stdio** MCP servers (`type: stdio`). We use
+    ``${workspaceFolder}/.venv-mcp/bin/python3`` so the PyPI ``mcp`` package is
+    present (``ensure_mcp_venv.sh``); ``${workspaceFolder}`` expands for the
+    script path and ``--repo``.
     """
     return {
         "type": "stdio",
-        "command": "python3",
+        "command": "${workspaceFolder}/.venv-mcp/bin/python3",
         "args": [
             "${workspaceFolder}/apm_modules/kuberly/kuberly-skills/mcp/"
             "kuberly-platform/kuberly_platform.py",

@@ -9,6 +9,8 @@
 #
 # What this does:
 #   1. Sync persona files into .claude/agents/ and .cursor/agents/
+#   1b. Ensure ``.venv-mcp`` (PyPI ``mcp``) for stdio MCP when system python
+#       does not have ``mcp`` installed.
 #   2. Merge canonical hook + MCP entries into .claude/settings.json,
 #      .mcp.json, .cursor/hooks.json, .cursor/mcp.json
 #   2b. Copy canonical Cursor rules from .apm/cursor/rules/ -> .cursor/rules/
@@ -42,6 +44,10 @@ fi
 # 1. Persona sync (writes to .claude/agents/ and .cursor/agents/)
 SYNC_AGENTS="$PKG/scripts/sync_agents.sh"
 [[ -x "$SYNC_AGENTS" ]] && bash "$SYNC_AGENTS"
+
+# 1b. MCP stdio dependency (PyPI ``mcp``) — dedicated venv at repo root.
+ENSURE_MCP_VENV="$PKG/scripts/ensure_mcp_venv.sh"
+[[ -f "$ENSURE_MCP_VENV" ]] && bash "$ENSURE_MCP_VENV"
 
 # 2. Hook + MCP wiring (writes to four runtime config files)
 SYNC_CLAUDE="$PKG/scripts/sync_claude_config.py"

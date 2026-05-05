@@ -54,6 +54,9 @@ apm_modules/
 # Local venv for MCP SDK smoke tests (mcp/kuberly-platform)
 mcp/kuberly-platform/.venv-mcp/
 
+# Consumer workspace venv (scripts/ensure_mcp_venv.sh); do not commit.
+.venv-mcp/
+
 # If `apm install` is run from this repo root, APM copies skills into consumer
 # layouts — canonical authored skills live under `.apm/skills/`.
 .agents/
