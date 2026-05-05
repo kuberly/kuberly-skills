@@ -4,14 +4,14 @@ description: >-
   Interview-style plan revision for kuberly-stack infra work. Resolves the design tree branch by
   branch — target envs, clouds, OpenSpec change, IAM, shared-infra blast — explores the codebase or
   graph before asking, and keeps the plan document internally consistent. Sub-flow of
-  infra-orchestrator; can also be invoked directly to harden a draft infra plan.
+  agent-orchestrator; can also be invoked directly to harden a draft infra plan.
 ---
 
 # Revise infra plan — interview workflow
 
 Use this skill to **interview the user relentlessly** about every aspect of an infra plan until both of you reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one.
 
-This is a **sub-flow of `infra-orchestrator`**. It can also stand alone when a user hands you a half-baked infra plan and says "tighten this up before we touch any module".
+This is a **sub-flow of `agent-orchestrator`**. It can also stand alone when a user hands you a half-baked infra plan and says "tighten this up before we touch any module".
 
 ## Before asking anything
 
@@ -23,7 +23,7 @@ If a question can be answered by **the kuberly-platform MCP** or by **reading ex
 4. `mcp__kuberly-platform__drift` for "what's different between env A and env B".
 5. `Read` on `AGENTS.md`, `INFRASTRUCTURE_CONFIGURATION_GUIDE.md`, `MODULE_CONVENTIONS.md`, `ARCHITECTURE.md`, the OpenSpec change folder, and the specific module / component JSON in scope.
 
-If invoked from `infra-orchestrator`, delegate the lookup to an **Explore subagent** — do not run greps yourself.
+If invoked from `agent-orchestrator`, delegate the lookup to an **Explore subagent** — do not run greps yourself.
 
 ## How to ask
 
@@ -78,7 +78,7 @@ Then return control to the orchestrator (or, if invoked directly, summarize the 
 
 ## Related
 
-- **`infra-orchestrator`** — parent flow.
+- **`agent-orchestrator`** — parent flow.
 - **`infra-self-review`** — sibling flow that runs after implementation.
 - **`kuberly-gitops-execution-model`** — branch ↔ many-clusters mental model that shapes "target environments" answers.
 - **`detect-runtime-from-shared-infra`** — for the EKS / ECS / Lambda branch of the tree.

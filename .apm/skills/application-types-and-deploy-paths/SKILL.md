@@ -183,6 +183,6 @@ explicitly asks for a different shape.
 
 For "add new application" the orchestrator's `plan_persona_fanout`
 returns `task_kind = "new-application"`, DAG: scope-planner ->
-iac-developer -> review/reconcile. The `iac-developer` should load this
+agent-infra-ops -> review/reconcile. The `agent-infra-ops` should load this
 skill and consult the graph (`runtime` field on existing apps in the
 target env) before deciding which shape to author.

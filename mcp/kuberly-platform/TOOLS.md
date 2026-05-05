@@ -11,8 +11,8 @@ tools they will not use.
 | tool | answers | typical out | who uses |
 |---|---|---|---|
 | `query_nodes` | "list nodes by type/env/name-substring" | dozens of rows | every persona |
-| `get_node` | "metadata for one node id" | one row | iac-developer, plan-reviewer |
-| `get_neighbors` | "what does X depend on / what depends on X" | dozens of rows | scope-planner, troubleshooter |
+| `get_node` | "metadata for one node id" | one row | agent-infra-ops, plan-reviewer |
+| `get_neighbors` | "what does X depend on / what depends on X" | dozens of rows | scope-planner, agent-sre |
 | `blast_radius` | "what breaks if I change X" | <100 rows + summary | scope-planner, plan-reviewer |
 | `shortest_path` | "how is A connected to B" | <20 rows | rarely; surface from Explore |
 | `stats` | "graph counts + critical nodes" | <50 rows | rarely; debugging only |
@@ -22,15 +22,15 @@ tools they will not use.
 | tool | answers | typical out | who uses |
 |---|---|---|---|
 | `drift` | "what's missing/extra between envs" | <100 rows | scope-planner (drift-fix) |
-| `apps_for_env` | "applications deployed to env X" | <50 rows | iac-developer (new-application) |
+| `apps_for_env` | "applications deployed to env X" | <50 rows | agent-infra-ops (new-application) |
 
 ## Module/component internals (medium)
 
 | tool | answers | typical out | who uses |
 |---|---|---|---|
 | `module_resources` | "resources a module declares" | dozens of rows | plan-reviewer |
-| `module_variables` | "variables a module accepts" | dozens of rows | iac-developer |
-| `component_inputs` | "inputs a component sets" | dozens of rows | iac-developer |
+| `module_variables` | "variables a module accepts" | dozens of rows | agent-infra-ops |
+| `component_inputs` | "inputs a component sets" | dozens of rows | agent-infra-ops |
 | `find_inputs` | "components matching an input filter" | <50 rows | rarely |
 | `list_overrides` | "where input X is overridden" | <50 rows | rarely |
 

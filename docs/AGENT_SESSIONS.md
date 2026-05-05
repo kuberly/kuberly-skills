@@ -27,17 +27,17 @@ python3 apm_modules/kuberly/kuberly-skills/scripts/init_agent_session.py init my
 
 | Persona | Defined in | Writes |
 |---------|------------|--------|
-| **infra-scope-planner** | `.claude/agents/infra-scope-planner.md` | `scope.md` |
-| **iac-developer** | `.claude/agents/iac-developer.md` | repo files (no markdown write) |
-| **troubleshooter** | `.claude/agents/troubleshooter.md` | `diagnosis.md` |
-| **app-cicd-engineer** | `.claude/agents/app-cicd-engineer.md` | repo files in infra repo or customer app repo (no markdown write) |
+| **agent-planner** | `.claude/agents/agent-planner.md` | `scope.md` |
+| **agent-infra-ops** | `.claude/agents/agent-infra-ops.md` | repo files (no markdown write) |
+| **agent-sre** | `.claude/agents/agent-sre.md` | `diagnosis.md` |
+| **agent-cicd** | `.claude/agents/agent-cicd.md` | repo files in infra repo or customer app repo (no markdown write) |
 | **pr-reviewer-in-context** | `.claude/agents/pr-reviewer-in-context.md` | `findings/in-context.md` |
 | **pr-reviewer-cold** | `.claude/agents/pr-reviewer-cold.md` | `findings/cold.md` |
 | **findings-reconciler** | `.claude/agents/findings-reconciler.md` | `findings/reconciled.md` |
-| **orchestrator (you)** | `infra-orchestrator` skill | `context.md`, `decisions.md`, `tasks/<NN>-<slug>.md` |
+| **orchestrator (you)** | `agent-orchestrator` skill | `context.md`, `decisions.md`, `tasks/<NN>-<slug>.md` |
 
 **Read rule:** every persona reads every file in the session dir.
-**Write rule:** every persona writes only its own assigned file (or, for `iac-developer` / `app-cicd-engineer`, repo files).
+**Write rule:** every persona writes only its own assigned file (or, for `agent-infra-ops` / `agent-cicd`, repo files).
 **Exception:** `pr-reviewer-cold` deliberately does **not** read `context.md`, `scope.md`, `decisions.md`, `plan.md`, or sibling findings — it must look at the diff cold.
 
 ## Standard files
@@ -48,13 +48,13 @@ python3 apm_modules/kuberly/kuberly-skills/scripts/init_agent_session.py init my
 ├── scope.md             planner output
 ├── decisions.md         orchestrator's irreversible calls + reasons
 ├── plan.md              revise-infra-plan output (optional)
-├── diagnosis.md         troubleshooter output (optional)
+├── diagnosis.md         agent-sre output (optional)
 ├── findings/
 │   ├── in-context.md
 │   ├── cold.md
 │   └── reconciled.md
 └── tasks/
-    ├── 01-<slug>.md     orchestrator-prepared prompts for iac-developer
+    ├── 01-<slug>.md     orchestrator-prepared prompts for agent-infra-ops
     └── 02-<slug>.md
 ```
 
@@ -79,4 +79,4 @@ The kuberly-stack `ensure-apm-skills` pre-commit hook calls `sync_agents.sh` aut
 - Orchestrator reads outputs, writes `decisions.md`, dispatches the next round.
 - `init_agent_session.py cleanup <name>` once the PR is open and the session is complete.
 
-The `.agents/` directory is **gitignored**; sessions are ephemeral. The protocol is documented here and in the `infra-orchestrator` skill.
+The `.agents/` directory is **gitignored**; sessions are ephemeral. The protocol is documented here and in the `agent-orchestrator` skill.

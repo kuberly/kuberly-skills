@@ -5,14 +5,14 @@ description: >-
   hclfmt + tflint via a Verify subagent (NO plan/init — CI runs those against
   the PR), then launches in-context and out-of-context Review subagents in
   parallel, fixes valid findings, and repeats until clean. Sub-flow of
-  infra-orchestrator; can also be invoked directly after a manual edit.
+  agent-orchestrator; can also be invoked directly after a manual edit.
 ---
 
 # Infra self-review loop
 
 Run this after every implementation pass — your own or a subagent's — so the change is fmt+lint clean and reviewed before push. **CI runs `terragrunt plan` against every PR** — the self-review loop does NOT.
 
-This is a **sub-flow of `infra-orchestrator`**. Can also be invoked standalone after a manual edit.
+This is a **sub-flow of `agent-orchestrator`**. Can also be invoked standalone after a manual edit.
 
 ## Hard rules
 
@@ -106,7 +106,7 @@ Once reviewers are clean, report:
 
 ## Related
 
-- **`infra-orchestrator`** — parent flow.
+- **`agent-orchestrator`** — parent flow.
 - **`revise-infra-plan`** — sibling flow that runs before implementation.
 - **`pre-commit-infra-mandatory`** — Verify subagent uses this for the hooks loop.
 - **`terragrunt-local-workflow`** — exact `CLUSTER_NAME` / `KUBERLY_ROLE` invocation.

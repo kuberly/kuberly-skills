@@ -69,8 +69,8 @@ Skills follow the [Agent Skills](https://agentskills.io) layout: each skill is a
 | **`application-env-and-secrets`** | `env_vars`, `env.secrets`, and `components/.../secrets.json` + empty SM secrets |
 | **`apm-skills-bootstrap`** | Clone → `apm install` (default **Caveman** + add org **skills**), hooks, which skills to use for infra work |
 | **`git-pr-templates`** | Paste-ready PR bodies for **skills** repo vs **infra fork** (pairs with **`infra-change-git-pr-workflow`**) |
-| **`infra-orchestrator`** | Top-level Orchestrator mode for non-trivial infra work — delegates Explore / Implement / Review / Verify subagents, manages shared `.agents/prompts/` context, enforces plan-only and OpenSpec gates |
-| **`revise-infra-plan`** | Interview-style plan revision (sub-flow of **`infra-orchestrator`** or standalone) — walks the design tree env-by-env, OpenSpec, IAM, shared-infra blast |
+| **`agent-orchestrator`** | Top-level Orchestrator mode for non-trivial infra work — delegates Explore / Implement / Review / Verify subagents, manages shared `.agents/prompts/` context, enforces plan-only and OpenSpec gates |
+| **`revise-infra-plan`** | Interview-style plan revision (sub-flow of **`agent-orchestrator`** or standalone) — walks the design tree env-by-env, OpenSpec, IAM, shared-infra blast |
 | **`infra-self-review`** | Post-change review loop — Verify (pre-commit + plan) then in-context + out-of-context Review subagents in parallel, fix and repeat until clean |
 
 ## Index (runtime)

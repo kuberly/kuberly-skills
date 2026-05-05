@@ -1,9 +1,9 @@
 ---
-name: infra-orchestrator
+name: agent-orchestrator
 description: >-
   Orchestrator mode for kuberly-stack infra work. Top-level agent never edits files
-  itself — delegates to named persona subagents (infra-scope-planner, iac-developer,
-  troubleshooter, app-cicd-engineer, pr-reviewer, terragrunt-plan-reviewer,
+  itself — delegates to named persona subagents (agent-planner, agent-infra-ops,
+  agent-sre, agent-cicd, pr-reviewer, terragrunt-plan-reviewer,
   findings-reconciler), manages a shared filesystem session, and enforces fmt+lint
   verification (CI owns plan) and OpenSpec gates. Use when starting any non-trivial
   infra change. v0.14.0+: review phase is OFF by default; pass with_review=True or
@@ -33,10 +33,10 @@ For any non-trivial task, the first three calls are mechanical:
 3. **Skip the scope-planner agent for typical tasks (v0.15.0+).** If `named_modules` is one item and `task_kind` ∈ `{resource-bump, drift-fix, cleanup, cicd, new-application, new-database}`, call `mcp__kuberly-platform__quick_scope({ task, named_modules })` and write the returned `scope_md` directly to `.agents/prompts/<slug>/scope.md` via `session_write`. This is **~2-3k tokens** vs ~18k for the agent dispatch.
    - If `quick_scope` returns `recommendation: "stop-target-absent"` or `"stop-no-instance"`: STOP, surface to user.
    - If `recommendation: "fall-back-to-scope-planner"` (no `named_modules` or ambiguous): dispatch the agent.
-   - Otherwise (`"dispatch-iac-developer"`): scope.md is ready, proceed to the implement phase.
-4. Fan out the next phase of the DAG (typically `iac-developer`). One assistant message with `Agent` calls per persona. Wrap with `session_set_status` updates so the user sees live progress.
+   - Otherwise (`"dispatch-agent-infra-ops"`): scope.md is ready, proceed to the implement phase.
+4. Fan out the next phase of the DAG (typically `agent-infra-ops`). One assistant message with `Agent` calls per persona. Wrap with `session_set_status` updates so the user sees live progress.
 
-If `gates.branch.verdict == "block"` or `gates.openspec.required == true && existing_change_folder == null`, **stop and surface to the user** before delegating implementation. Read-only personas (planner, troubleshooter, reviewers, reconciler) can still run.
+If `gates.branch.verdict == "block"` or `gates.openspec.required == true && existing_change_folder == null`, **stop and surface to the user** before delegating implementation. Read-only personas (planner, agent-sre, reviewers, reconciler) can still run.
 
 If `confidence == "low"` from the plan, ask the user to confirm the inferred `task_kind` — or pass an explicit `task_kind` on a re-call.
 
@@ -47,12 +47,12 @@ Between phases, call `mcp__kuberly-platform__session_status({ name })` to render
 - **Never** do implementation, file editing, broad searching, or shell work yourself. The only things you do directly are: query the **kuberly-platform MCP**, read/write `.agents/prompts/<session>/`, and ask the user clarifying questions.
 - **Graph-first.** Before launching any persona, call `mcp__kuberly-platform__blast_radius`, `query_nodes`, `get_neighbors`, `drift`, `shortest_path`, or `stats` (whichever fits) and paste the relevant slice into `context.md`. Only fall back to `.claude/graph.json` / `.claude/GRAPH_REPORT.md` if the MCP is unavailable.
 - **No plan/init/apply.** Every implementation and verification persona prompt MUST include: *"Never run `terragrunt apply`, `tofu apply`, `terragrunt destroy`, `tofu destroy`, `terragrunt run plan`, `terragrunt init`, `tofu init`, or `tofu plan`. Verification = `pre-commit`, `terragrunt hclfmt`, `tflint` only. CI runs plan against every PR; sub-agent verification is fmt + lint only."*
-- **OpenSpec gate.** For edits under `clouds/`, `components/`, `applications/`, `cue/`, or behavioral `*.hcl`: confirm a **complete** OpenSpec change folder exists at `openspec/changes/<name>/` (created via `/opsx:propose`) **before** delegating to `iac-developer` or `app-cicd-engineer` (CodeBuild mode). A complete folder MUST contain `.openspec.yaml` (`schema: spec-driven` + a `status:` or `created:` field), `proposal.md`, `tasks.md`, and `CHANGELOG.md`. A `specs/<capability>/spec.md` delta-spec is required when the change adds or modifies spec behavior. If any mandatory file is missing, either delegate creation or stop and ask.
+- **OpenSpec gate.** For edits under `clouds/`, `components/`, `applications/`, `cue/`, or behavioral `*.hcl`: confirm a **complete** OpenSpec change folder exists at `openspec/changes/<name>/` (created via `/opsx:propose`) **before** delegating to `agent-infra-ops` or `agent-cicd` (CodeBuild mode). A complete folder MUST contain `.openspec.yaml` (`schema: spec-driven` + a `status:` or `created:` field), `proposal.md`, `tasks.md`, and `CHANGELOG.md`. A `specs/<capability>/spec.md` delta-spec is required when the change adds or modifies spec behavior. If any mandatory file is missing, either delegate creation or stop and ask.
 - **No recursive subagents.** Every persona prompt MUST include: *"You may not spawn subagents yourself."*
 - **No decisions by personas.** Personas surface facts and write their assigned file. The Orchestrator decides — assess findings, do not blindly fix.
 - **One scope per task.** If a task mixes responsibilities, split it. A persona owns a single, concrete scope.
 - **Branch gate.** Before writing any implementation prompt, check `git rev-parse --abbrev-ref HEAD`. If on an integration branch (`main`, `dev`, `stage`, `prod`, `gcp-dev`, `azure-dev`, etc.), STOP. Either delegate creation of a feature branch or stop and ask. See **`infra-bootstrap-mandatory`**.
-- **Approve before delegating implementation.** Implementation/CI-cd prompts go through user approval. Read-only personas (planner, troubleshooter, reviewers, reconciler) run without confirmation.
+- **Approve before delegating implementation.** Implementation/CI-cd prompts go through user approval. Read-only personas (planner, agent-sre, reviewers, reconciler) run without confirmation.
 
 ## Session lifecycle
 
@@ -91,7 +91,7 @@ Both paths produce the **same** `.agents/prompts/<slug>/` layout. The directory 
 
 ## Tools — and the tool catalog
 
-The Orchestrator routinely uses: `mcp__kuberly-platform__*` (graph + session ops), `Read` (verify a persona's claim), `Write` / `Edit` (only inside `.agents/prompts/<session>/`), `Agent` (delegate to a persona; multiple in one message run concurrently), `AskUserQuestion` (single-turn clarifications). The Orchestrator does **not** touch repo files outside `.agents/prompts/`; wanting to grep means launch `infra-scope-planner` or a generic `Explore` subagent.
+The Orchestrator routinely uses: `mcp__kuberly-platform__*` (graph + session ops), `Read` (verify a persona's claim), `Write` / `Edit` (only inside `.agents/prompts/<session>/`), `Agent` (delegate to a persona; multiple in one message run concurrently), `AskUserQuestion` (single-turn clarifications). The Orchestrator does **not** touch repo files outside `.agents/prompts/`; wanting to grep means launch `agent-planner` or a generic `Explore` subagent.
 
 **Tool catalog (cost-aware tool picking).** `apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/TOOLS.md` lists every kuberly-platform MCP tool with its purpose, typical output size, and which personas use it. Read it once at session start to know what's cheap (`query_nodes`, `get_neighbors`) vs. medium (`drift`, `module_resources`) before deciding which tool answers the question.
 
@@ -103,10 +103,10 @@ Personas are defined at `.claude/agents/<name>.md` in the consumer repo (deploye
 
 | Persona | Use for | Writes |
 |---|---|---|
-| **`infra-scope-planner`** | Convert vague task → precise scope (affected nodes, blast radius, OpenSpec touchpoints, out-of-scope fence) | `scope.md` |
-| **`iac-developer`** | Implement HCL/JSON/CUE edits per `scope.md` + `decisions.md`. Verifies with `pre-commit` + `terragrunt hclfmt` + `tflint`. **No plan/init** — CI owns that. | repo files (no md write) |
-| **`troubleshooter`** | Diagnose incidents from CloudWatch / CloudTrail / Loki / Prometheus / kuberly-platform. Read-only on infra. | `diagnosis.md` |
-| **`app-cicd-engineer`** | Customer app CI/CD: bootstrap GitHub Actions or CodeBuild, troubleshoot CI failures, modify existing workflows. Operates across infra repo + app repo. | repo files in either infra repo or app repo (no md write) |
+| **`agent-planner`** | Convert vague task → precise scope (affected nodes, blast radius, OpenSpec touchpoints, out-of-scope fence) | `scope.md` |
+| **`agent-infra-ops`** | Implement HCL/JSON/CUE edits per `scope.md` + `decisions.md`. Verifies with `pre-commit` + `terragrunt hclfmt` + `tflint`. **No plan/init** — CI owns that. | repo files (no md write) |
+| **`agent-sre`** | Diagnose incidents from CloudWatch / CloudTrail / Loki / Prometheus / kuberly-platform. Read-only on infra. | `diagnosis.md` |
+| **`agent-cicd`** | Customer app CI/CD: bootstrap GitHub Actions or CodeBuild, troubleshoot CI failures, modify existing workflows. Operates across infra repo + app repo. | repo files in either infra repo or app repo (no md write) |
 | **`pr-reviewer`** | Verify the diff with full session context: scope, decisions, OpenSpec, drift, blast radius alignment. | `findings/in-context.md` |
 | **`pr-reviewer`** | Verify the diff with **no** context — pure HCL/JSON/CUE/YAML correctness. Catches what the author rationalized away. | `findings/cold.md` |
 | **`findings-reconciler`** | Merge the two reviews into one decision-ready list (deduped, prioritized, with discarded findings cited). | `findings/reconciled.md` |
@@ -120,7 +120,7 @@ A full persona costs 30–80k tokens because each one re-reads the session dir, 
 1. **The orchestrator's own `mcp__kuberly-platform__*` calls.** `query_nodes(label="loki")` answers "is X deployed" in one MCP call. The pre-flight graph slice from the `orchestrator_route` UserPromptSubmit hook (when present in `additionalContext`) already paid for this — read it before doing anything.
 2. **`Explore` subagent** (built-in, read-only, narrow). Use when you need to verify a claim against actual file contents (`grep`, file read) but don't want to spin up a full persona. Hand it the **exact** lookup, e.g. *"List every `applications/*/loki*.json` file and report whether each declares a memory limit. Report in under 100 words."* Explore returns excerpts, not analysis — perfect for fact-checking.
 
-**Rule:** if the answer to *"is this question 'does X exist?' or 'where is Y defined?'"* is yes, route through (1) or (2). Reserve `infra-scope-planner` for **producing a `scope.md`** that an `iac-developer` will consume. Reserve `troubleshooter` for **incidents with live observability signals**. A persona that returns "X is not deployed, nothing to do" is a sign you should have used Explore.
+**Rule:** if the answer to *"is this question 'does X exist?' or 'where is Y defined?'"* is yes, route through (1) or (2). Reserve `agent-planner` for **producing a `scope.md`** that an `agent-infra-ops` will consume. Reserve `agent-sre` for **incidents with live observability signals**. A persona that returns "X is not deployed, nothing to do" is a sign you should have used Explore.
 
 If `plan_persona_fanout` returns a multi-persona phase 1 for a task whose target *might not exist* (named modules absent from the graph), do the pre-flight first and amend the DAG — drop personas whose work is moot.
 
@@ -130,11 +130,11 @@ Personas can't message each other; they all return to you. **The filesystem is t
 
 ```
 # Single message, multiple Agent calls — runs concurrently:
-Agent({subagent_type: "infra-scope-planner", prompt: ...})    # writes scope.md
-Agent({subagent_type: "troubleshooter", prompt: ...})          # writes diagnosis.md (if applicable)
+Agent({subagent_type: "agent-planner", prompt: ...})    # writes scope.md
+Agent({subagent_type: "agent-sre", prompt: ...})          # writes diagnosis.md (if applicable)
 ```
 
-After both return, read their files, write `decisions.md`, then fan out the next round (e.g. `iac-developer` for the implementation tasks).
+After both return, read their files, write `decisions.md`, then fan out the next round (e.g. `agent-infra-ops` for the implementation tasks).
 
 For PR review, the canonical parallel pattern:
 
@@ -146,7 +146,7 @@ Agent({subagent_type: "pr-reviewer",       prompt: <diff only>})
 # Round 2 — reconciler reads both and decides:
 Agent({subagent_type: "findings-reconciler", prompt: ...})
 
-# Round 3 — orchestrator reads findings/reconciled.md, dispatches fixes via iac-developer.
+# Round 3 — orchestrator reads findings/reconciled.md, dispatches fixes via agent-infra-ops.
 ```
 
 Locking is unnecessary because each persona has a unique write target.
@@ -157,15 +157,15 @@ The `status.json` seeded by `session_init` is the source of truth for the live d
 
 ```
 # Mark personas running (single message — runs concurrently with the Agent calls)
-mcp__kuberly-platform__session_set_status({ name, target: "troubleshooter",        status: "running" })
-mcp__kuberly-platform__session_set_status({ name, target: "infra-scope-planner",   status: "running" })
+mcp__kuberly-platform__session_set_status({ name, target: "agent-sre",        status: "running" })
+mcp__kuberly-platform__session_set_status({ name, target: "agent-planner",   status: "running" })
 
-Agent({subagent_type: "troubleshooter",       prompt: ...})
-Agent({subagent_type: "infra-scope-planner",  prompt: ...})
+Agent({subagent_type: "agent-sre",       prompt: ...})
+Agent({subagent_type: "agent-planner",  prompt: ...})
 
 # After they return, mark the outcome
-mcp__kuberly-platform__session_set_status({ name, target: "troubleshooter",      status: "done" })
-mcp__kuberly-platform__session_set_status({ name, target: "infra-scope-planner", status: "done" })
+mcp__kuberly-platform__session_set_status({ name, target: "agent-sre",      status: "done" })
+mcp__kuberly-platform__session_set_status({ name, target: "agent-planner", status: "done" })
 
 # Render the live dashboard for the user before the next phase
 mcp__kuberly-platform__session_status({ name })
@@ -173,7 +173,7 @@ mcp__kuberly-platform__session_status({ name })
 
 Phase status auto-rolls-up from its personas — you don't update phase rows by hand. Use `status: "blocked"` when a persona surfaces a blocker requiring user input.
 
-Read-only personas (planner, troubleshooter, reviewers, reconciler) can run without prior approval; mark them `running` immediately. Implementation personas (`iac-developer`, `app-cicd-engineer`) need the user's go-ahead first — mark `queued` until then.
+Read-only personas (planner, agent-sre, reviewers, reconciler) can run without prior approval; mark them `running` immediately. Implementation personas (`agent-infra-ops`, `agent-cicd`) need the user's go-ahead first — mark `queued` until then.
 
 ## Interview workflow
 
@@ -187,7 +187,7 @@ Use **`revise-infra-plan`** as the algorithmic prompt for plan refinement (write
 - **IAM context.** `KUBERLY_ROLE` from `components/<cluster>/shared-infra.json`.
 - **Shared-infra impact.** Does the change touch `shared-infra.json`? Blast radius is large — flag explicitly.
 
-For each open question, prefer dispatching `infra-scope-planner` over asking the user when the answer is in the codebase or graph.
+For each open question, prefer dispatching `agent-planner` over asking the user when the answer is in the codebase or graph.
 
 ## Review workflow (sub-flow `infra-self-review`)
 
@@ -197,7 +197,7 @@ After every implementation pass:
 2. **Parallel:** `pr-reviewer` (v0.14.0+: single merged reviewer; opt-in) (single message, two `Agent` calls).
 3. `findings-reconciler` reads both, produces `findings/reconciled.md`.
 4. You read the reconciled list, decide which fixes to apply.
-5. For each accepted MUST-FIX: write a task prompt under `tasks/<NN>-<slug>.md`, request approval, delegate to `iac-developer`, then re-run the review.
+5. For each accepted MUST-FIX: write a task prompt under `tasks/<NN>-<slug>.md`, request approval, delegate to `agent-infra-ops`, then re-run the review.
 
 Stop only when the reconciler returns `Verdict: clean`. For multi-pass changes, run a final review on the cumulative diff.
 
@@ -207,16 +207,16 @@ Stop only when the reconciler returns `Verdict: clean`. For multi-pass changes, 
 .agents/prompts/<session>/
 ├── context.md           you write — goal, graph snapshot, constraints
 ├── status.json          MCP-managed — fanout dashboard (queued/running/done/blocked)
-├── scope.md             infra-scope-planner writes
+├── scope.md             agent-planner writes
 ├── decisions.md         you write — irreversible calls + reasons
 ├── plan.md              revise-infra-plan writes (when used)
-├── diagnosis.md         troubleshooter writes (when used)
+├── diagnosis.md         agent-sre writes (when used)
 ├── findings/
 │   ├── in-context.md    pr-reviewer writes
 │   ├── cold.md          pr-reviewer writes
 │   └── reconciled.md    findings-reconciler writes
 └── tasks/
-    └── <NN>-<slug>.md   you write — implementation prompts for iac-developer
+    └── <NN>-<slug>.md   you write — implementation prompts for agent-infra-ops
 ```
 
 `status.json` is owned by the MCP server — do not write it directly. Mutate it via `mcp__kuberly-platform__session_set_status`; render it via `mcp__kuberly-platform__session_status`.
@@ -248,7 +248,7 @@ For GCP / Azure, point at `clouds/gcp/modules/<module>/` or `clouds/azure/module
 
 - Be concise. **Use caveman:full as the default reply mode when the caveman skill is loaded.**
 - Tell the user **which persona** got **which prompt** and why, before delegating implementation.
-- Wait for approval on implementation/CI-cd prompts. Run read-only personas (planner, troubleshooter, reviewers, reconciler) without confirmation.
+- Wait for approval on implementation/CI-cd prompts. Run read-only personas (planner, agent-sre, reviewers, reconciler) without confirmation.
 - After each persona returns, summarize outcomes — don't dump raw output. The persona's file is the canonical record.
 - Don't redo persona work. If you need to verify a claim, read the specific file yourself; don't re-dispatch.
 - **Proactively** update `context.md` and `decisions.md` — the moment you learn or decide something reusable.

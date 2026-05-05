@@ -40,7 +40,7 @@ Customer developers should get **skills** and **agent config** from the public *
 
 - Read **`CLAUDE.md`** at the infra repo root, then **`AGENTS.md`** for full rules.
 - After **`apm install`** + **`sync_agents.sh`**, use skills from **`.claude/skills/<name>/`** and persona subagents from **`.claude/agents/<name>.md`**.
-- Persona subagents (`infra-scope-planner`, `iac-developer`, `troubleshooter`, `app-cicd-engineer`, `pr-reviewer-in-context`, `pr-reviewer-cold`, `findings-reconciler`) are invoked via the `Agent` tool with `subagent_type: "<name>"`. Orchestrator workflow lives in **`infra-orchestrator`** skill; protocol in **`docs/AGENT_SESSIONS.md`**.
+- Persona subagents (`agent-planner`, `agent-infra-ops`, `agent-sre`, `agent-k8s-ops`, `agent-cicd`, `pr-reviewer`, `findings-reconciler`, `terragrunt-plan-reviewer`) are invoked via the `Agent` tool with `subagent_type: "<name>"`. Orchestrator workflow lives in **`agent-orchestrator`** skill; protocol in **`docs/AGENT_SESSIONS.md`**.
 - Install the **Caveman** plugin for shorter replies.
 
 ## Which skills to use for “normal” infra edits

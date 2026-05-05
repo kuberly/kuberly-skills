@@ -12,7 +12,7 @@ implemented" response with hooks for the consumer's observability stack
 the stubs with real backends as they become available.
 
 Why a stub ships now:
-- Personas (especially `troubleshooter`) can declare it in their `tools:`
+- Personas (especially `agent-sre`) can declare it in their `tools:`
   list today, then take advantage automatically when implementations land.
 - The contract is fixed in source — customer dev fills in the body.
 - One MCP server per concern (graph vs runtime) keeps each focused;

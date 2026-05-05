@@ -89,4 +89,4 @@ gh pr create --base "${MERGE_BASE}" --head "$(git branch --show-current)" \
 - **`apm-skills-bootstrap`** — first-time `apm install` + hook installation; the hook detail behind Step 1.
 - **`infra-change-git-pr-workflow`** — full branch/commit/PR mechanics for Steps 2–4.
 - **`pre-commit-infra-mandatory`** — the hooks loop in Step 3.
-- **`infra-self-review`** / **`infra-orchestrator`** — for non-trivial changes that warrant a parallel review pass before the PR.
+- **`infra-self-review`** / **`agent-orchestrator`** — for non-trivial changes that warrant a parallel review pass before the PR.

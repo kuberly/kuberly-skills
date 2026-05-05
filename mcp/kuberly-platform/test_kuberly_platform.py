@@ -148,15 +148,15 @@ class PersonaDAGTests(unittest.TestCase):
     def test_cicd_uses_app_cicd_engineer_not_iac_developer(self) -> None:
         dag = PERSONA_DAGS["cicd"]
         impl = next(p for p in dag if p["id"] == "implement")
-        self.assertEqual(impl["personas"], ["app-cicd-engineer"])
-        self.assertNotIn("iac-developer", impl["personas"])
+        self.assertEqual(impl["personas"], ["agent-cicd"])
+        self.assertNotIn("agent-infra-ops", impl["personas"])
 
     def test_incident_diagnose_phase_is_parallel(self) -> None:
         dag = PERSONA_DAGS["incident"]
         diag = next(p for p in dag if p["id"] == "diagnose")
         self.assertTrue(diag["parallel"])
         self.assertCountEqual(diag["personas"],
-                              ["troubleshooter", "infra-scope-planner"])
+                              ["agent-sre", "agent-k8s-ops", "agent-planner"])
 
     def test_v0_11_new_task_kinds_present(self) -> None:
         for kind in ("new-application", "new-database", "plan-review"):
@@ -197,7 +197,7 @@ class QuickScopeTests(unittest.TestCase):
     def test_actionable_loki_returns_dispatch_recommendation(self) -> None:
         # _fake_repo now wires components/prod/loki.json -> loki module.
         r = self.g.quick_scope(task="bump loki memory", named_modules=["loki"])
-        self.assertEqual(r["recommendation"], "dispatch-iac-developer")
+        self.assertEqual(r["recommendation"], "dispatch-agent-infra-ops")
         self.assertTrue(r["actionable"])
         self.assertIn("module:aws/loki", r["modules"])
         self.assertIn("# Scope:", r["scope_md"])
@@ -341,7 +341,7 @@ class PlanPersonaFanoutTests(unittest.TestCase):
         )
         self.assertEqual(plan["task_kind"], "cicd")
         impl = next(p for p in plan["phases"] if p["id"] == "implement")
-        self.assertEqual(impl["personas"], ["app-cicd-engineer"])
+        self.assertEqual(impl["personas"], ["agent-cicd"])
 
     def test_personas_synced_reports_ok_with_full_roster(self) -> None:
         plan = self.g.plan_persona_fanout(task="x", named_modules=["loki"])
@@ -608,36 +608,39 @@ class SessionStatusTests(unittest.TestCase):
             self.assertEqual(info["status"], "queued")
 
     def test_set_persona_running_then_done_flows(self) -> None:
-        out = self.g.session_set_status("bump", "infra-scope-planner", "running")
+        out = self.g.session_set_status("bump", "agent-planner", "running")
         self.assertEqual(out["status"], "running")
         st = self.g.session_status("bump")
-        self.assertEqual(st["personas"]["infra-scope-planner"]["status"], "running")
+        self.assertEqual(st["personas"]["agent-planner"]["status"], "running")
         # Phase rolls up to running
         scope_ph = next(p for p in st["phases"] if p["id"] == "scope")
         self.assertEqual(scope_ph["status"], "running")
         # Mark done
-        self.g.session_set_status("bump", "infra-scope-planner", "done")
+        self.g.session_set_status("bump", "agent-planner", "done")
         st = self.g.session_status("bump")
         scope_ph = next(p for p in st["phases"] if p["id"] == "scope")
         self.assertEqual(scope_ph["status"], "done")
         # Timestamps written
-        self.assertIn("started_at", st["personas"]["infra-scope-planner"])
-        self.assertIn("ended_at",   st["personas"]["infra-scope-planner"])
+        self.assertIn("started_at", st["personas"]["agent-planner"])
+        self.assertIn("ended_at",   st["personas"]["agent-planner"])
 
     def test_phase_roll_up_with_two_personas(self) -> None:
         # Diagnose phase doesn't exist for resource-bump; switch to incident
         self.g.session_init.__self__  # noqa: keep ref to silence linters
-        # Use an incident-kind session for two-persona phase
+        # Use an incident-kind session for multi-persona phase. v0.22.0+:
+        # diagnose phase has three personas (agent-sre, agent-k8s-ops,
+        # agent-planner).
         self.g.session_init(name="oom", task="loki ingester OOM",
                             modules=["loki"], current_branch="feat/y")
         # When only one is running, phase should be running
-        self.g.session_set_status("oom", "troubleshooter", "running")
+        self.g.session_set_status("oom", "agent-sre", "running")
         st = self.g.session_status("oom")
         diag = next(p for p in st["phases"] if p["id"] == "diagnose")
         self.assertEqual(diag["status"], "running")
-        # Both done → phase done
-        self.g.session_set_status("oom", "troubleshooter", "done")
-        self.g.session_set_status("oom", "infra-scope-planner", "done")
+        # All three done → phase done
+        self.g.session_set_status("oom", "agent-sre", "done")
+        self.g.session_set_status("oom", "agent-k8s-ops", "done")
+        self.g.session_set_status("oom", "agent-planner", "done")
         st = self.g.session_status("oom")
         diag = next(p for p in st["phases"] if p["id"] == "diagnose")
         self.assertEqual(diag["status"], "done")
@@ -645,14 +648,14 @@ class SessionStatusTests(unittest.TestCase):
     def test_blocked_overrides_running_in_phase_rollup(self) -> None:
         self.g.session_init(name="blk", task="loki ingester OOM",
                             modules=["loki"], current_branch="feat/z")
-        self.g.session_set_status("blk", "troubleshooter", "running")
-        self.g.session_set_status("blk", "infra-scope-planner", "blocked")
+        self.g.session_set_status("blk", "agent-sre", "running")
+        self.g.session_set_status("blk", "agent-planner", "blocked")
         st = self.g.session_status("blk")
         diag = next(p for p in st["phases"] if p["id"] == "diagnose")
         self.assertEqual(diag["status"], "blocked")
 
     def test_invalid_status_rejected(self) -> None:
-        out = self.g.session_set_status("bump", "iac-developer", "frobnicated")
+        out = self.g.session_set_status("bump", "agent-infra-ops", "frobnicated")
         self.assertIn("error", out)
 
     def test_unknown_target_rejected(self) -> None:
@@ -722,7 +725,7 @@ class StateOverlayTests(unittest.TestCase):
         # Before overlay: grafana would have been stop-no-instance.
         self.assertTrue(self.g._has_json_sidecar("prod", "grafana"))
         res = self.g.quick_scope("bump grafana memory", named_modules=["grafana"])
-        self.assertEqual(res["recommendation"], "dispatch-iac-developer")
+        self.assertEqual(res["recommendation"], "dispatch-agent-infra-ops")
         self.assertTrue(res["actionable"])
         self.assertEqual(res["unactionable"], [])
 
@@ -752,6 +755,89 @@ class StateOverlayTests(unittest.TestCase):
             self.assertNotIn("component:prod/x", g.nodes)
         finally:
             tmp2.cleanup()
+
+
+class StateOnlyActionabilityTests(unittest.TestCase):
+    """v0.22.0: a module deployed via terragrunt apply (state_overlay-only,
+    NO components/<env>/<x>.json) should be reported actionable. Before
+    v0.22.0 the actionability predicate only walked component/application
+    edges and missed source="state" component nodes synthesized by the
+    state overlay when link_components_to_modules failed to bridge them.
+    """
+
+    def _build_state_only_repo(self) -> tempfile.TemporaryDirectory:
+        # No components/<env>/loki.json. State overlay declares loki deployed.
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / "root.hcl").write_text("# fake\n")
+        m = root / "clouds" / "aws" / "modules" / "loki"
+        m.mkdir(parents=True)
+        (m / "terragrunt.hcl").write_text("\n")
+        (m / "kuberly.json").write_text('{"description":"loki"}\n')
+        agents = root / ".claude" / "agents"
+        agents.mkdir(parents=True)
+        for p in EXPECTED_PERSONAS:
+            (agents / f"{p}.md").write_text(f"# {p}\n")
+        # State overlay: declares loki deployed under env=prod, but with a
+        # mismatched-name component synthesis so link_components_to_modules
+        # cannot auto-bridge it. The patched actionability predicate must
+        # still recognize source="state" as a valid invoker.
+        overlay = root / ".claude" / "state_overlay_prod.json"
+        overlay.write_text(
+            '{\n'
+            '  "schema_version": 1,\n'
+            '  "generated_at": "2026-05-05T00:00:00Z",\n'
+            '  "generator": "test",\n'
+            '  "cluster": {"env": "prod", "name": "prod", "region": "us-east-1",\n'
+            '              "account_id": "111111111111",\n'
+            '              "state_bucket": "111111111111-us-east-1-prod-tf-states"},\n'
+            '  "deployed_modules": [\n'
+            '    {"name": "loki", "state_key": "aws/loki/terraform.tfstate"}\n'
+            '  ],\n'
+            '  "deployed_applications": []\n'
+            '}\n'
+        )
+        return tmp
+
+    @staticmethod
+    def _strip_link_edges(g: KuberlyPlatform) -> None:
+        """Drop the `configures_module` edges link_components_to_modules
+        adds. Simulates the failure mode where label-matching can't bridge
+        a state-overlay-synthesized component to its module (e.g., when
+        state name and module label differ in casing/punctuation). After
+        stripping, only source="state" recognition can save actionability.
+        """
+        g.edges = [e for e in g.edges if e.get("relation") != "configures_module"]
+
+    def test_quick_scope_recognizes_state_only_component(self) -> None:
+        with self._build_state_only_repo() as repo:
+            g = KuberlyPlatform(repo)
+            g.build()
+            # Sanity: the synthesized component node has source="state"
+            comp = g.nodes.get("component:prod/loki")
+            self.assertIsNotNone(comp)
+            self.assertEqual(comp.get("source"), "state")
+            # Force the failure mode: drop bridge edges so only the v0.22.0
+            # source="state" check can save actionability.
+            self._strip_link_edges(g)
+            res = g.quick_scope(task="bump loki memory",
+                                named_modules=["loki"])
+            self.assertEqual(res["recommendation"], "dispatch-agent-infra-ops")
+            self.assertTrue(res["actionable"])
+            self.assertEqual(res["unactionable"], [])
+
+    def test_plan_persona_fanout_no_stop_no_instance_for_state_only(self) -> None:
+        with self._build_state_only_repo() as repo:
+            g = KuberlyPlatform(repo)
+            g.build()
+            self._strip_link_edges(g)
+            plan = g.plan_persona_fanout(
+                task="bump loki memory",
+                named_modules=["loki"],
+                current_branch="agrishko/feature",
+            )
+            self.assertNotEqual(plan["task_kind"], "stop-no-instance")
+            self.assertEqual(plan["unactionable_modules"], [])
 
 
 class StateGraphParseTests(unittest.TestCase):
@@ -1578,7 +1664,7 @@ class DocsGraphProducerTests(unittest.TestCase):
 
     def test_classify_recognises_skill(self) -> None:
         self.assertEqual(self.dg._classify(".apm/skills/foo/SKILL.md"), "skill")
-        self.assertEqual(self.dg._classify("agents/troubleshooter.md"), "agent")
+        self.assertEqual(self.dg._classify("agents/agent-sre.md"), "agent")
         self.assertEqual(self.dg._classify("docs/AGENT_SESSIONS.md"), "doc")
         self.assertIsNone(self.dg._classify("apm_modules/x/y.md"))
         self.assertIsNone(self.dg._classify("random/file.txt"))
@@ -1586,8 +1672,8 @@ class DocsGraphProducerTests(unittest.TestCase):
     def test_doc_id_stable_human(self) -> None:
         self.assertEqual(self.dg._doc_id(".apm/skills/foo/SKILL.md", "skill"),
                          "skill/foo")
-        self.assertEqual(self.dg._doc_id("agents/troubleshooter.md", "agent"),
-                         "agent/troubleshooter")
+        self.assertEqual(self.dg._doc_id("agents/agent-sre.md", "agent"),
+                         "agent/agent-sre")
 
     def test_frontmatter_parses_inline_list(self) -> None:
         text = (

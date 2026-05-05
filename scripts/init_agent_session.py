@@ -17,14 +17,14 @@ Usage:
 
 File layout (session dir):
     context.md                 orchestrator: goal, graph snapshot, constraints
-    scope.md                   infra-scope-planner output
+    scope.md                   agent-planner output
     decisions.md               orchestrator: irreversible calls + reasons
     plan.md                    revise-infra-plan output (if used)
-    diagnosis.md               troubleshooter output (if used)
+    diagnosis.md               agent-sre output (if used)
     findings/in-context.md     pr-reviewer-in-context output
     findings/cold.md           pr-reviewer-cold output
     findings/reconciled.md     findings-reconciler output
-    tasks/<NN>-<slug>.md       implementation prompts the orchestrator hands to iac-developer
+    tasks/<NN>-<slug>.md       implementation prompts the orchestrator hands to agent-infra-ops
 """
 from __future__ import annotations
 
@@ -82,10 +82,10 @@ orchestrator (you, top level) owns `context.md` and `decisions.md`.
 """
 
 PERSONA_NOTE = """subagents read every file in this dir; each writes only its own:
-  infra-scope-planner    -> scope.md
-  troubleshooter         -> diagnosis.md
-  iac-developer          -> repo files (no md write)
-  app-cicd-engineer      -> repo files in infra repo or app repo (no md write)
+  agent-planner    -> scope.md
+  agent-sre         -> diagnosis.md
+  agent-infra-ops          -> repo files (no md write)
+  agent-cicd      -> repo files in infra repo or app repo (no md write)
   pr-reviewer-in-context -> findings/in-context.md
   pr-reviewer-cold       -> findings/cold.md
   findings-reconciler    -> findings/reconciled.md

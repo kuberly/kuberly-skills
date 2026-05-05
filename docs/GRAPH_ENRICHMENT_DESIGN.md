@@ -20,7 +20,7 @@ Personas currently re-derive these by reading `shared-infra.json`, JSON sidecars
 ## 2. Goals
 
 - **G1.** Eliminate "is X deployed in env Y?" / "what region is the prod cluster in?" file reads — answer from one MCP call.
-- **G2.** Enable scope.md to cite **resource-level** facts ("aurora-prod has 2 instances, instance_class db.r6g.large") so iac-developer doesn't need to grep state.
+- **G2.** Enable scope.md to cite **resource-level** facts ("aurora-prod has 2 instances, instance_class db.r6g.large") so agent-infra-ops doesn't need to grep state.
 - **G3.** Resource-level blast radius for high-value AWS types (RDS, EKS, Lambda, ECS, IAM roles, SQS, secrets) — much sharper than the current module-level radius.
 - **G4.** Travel with the package — every customer fork gets the same enriched graph after `apm install`, no extra installation step.
 

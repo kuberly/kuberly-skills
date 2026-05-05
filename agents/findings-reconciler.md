@@ -81,4 +81,4 @@ You are the **findings-reconciler** persona for kuberly-stack. Your job is to me
 
 ## What "done" looks like
 
-`findings/reconciled.md` is written, every discarded cold finding has a cited reason, and the Verdict line tells the orchestrator whether to escalate to `iac-developer` for fixes or to hand off to PR creation.
+`findings/reconciled.md` is written, every discarded cold finding has a cited reason, and the Verdict line tells the orchestrator whether to escalate to `agent-infra-ops` for fixes or to hand off to PR creation.

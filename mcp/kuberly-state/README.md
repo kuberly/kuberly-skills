@@ -59,6 +59,6 @@ keep working.
   observability would inflate its cold-start cost (kubectl/AWS SDK
   imports, network probes) for every session that doesn't need it.
 - Personas can opt in to `kuberly-state` only when they need runtime
-  signals (`troubleshooter` mostly).
+  signals (`agent-sre` mostly).
 - A separate process can crash, retry, or be replaced without
   destabilizing the static graph reads.

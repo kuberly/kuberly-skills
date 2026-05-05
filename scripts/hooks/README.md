@@ -7,7 +7,7 @@ no copy step needed. Versioning is automatic: an `apm install` of a new
 
 ## `orchestrator_route.py` — UserPromptSubmit hook
 
-Pre-flight router for the `infra-orchestrator` flow. Reads the user prompt,
+Pre-flight router for the `agent-orchestrator` flow. Reads the user prompt,
 classifies it as trivial vs. infra-relevant, and looks up named entities
 (`loki`, `eks`, `aurora`, ...) in `.claude/graph.json` *before* the
 orchestrator spawns any subagent. Two outputs:

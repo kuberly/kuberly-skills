@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook: nudge the main agent toward `infra-orchestrator`.
+"""UserPromptSubmit hook: nudge the main agent toward `agent-orchestrator`.
 
 Reads the hook payload from stdin, classifies the prompt as trivial vs.
 non-trivial infra work, performs a pre-flight graph existence check, and
@@ -87,8 +87,8 @@ STRONG_INFRA_VERBS = (
     "bump", "upgrade", "downgrade", "refactor", "rename",
 )
 
-NUDGE_BASE = """[infra-orchestrator] non-trivial infra task. Routing:
-1. Invoke `infra-orchestrator` skill before editing.
+NUDGE_BASE = """[agent-orchestrator] non-trivial infra task. Routing:
+1. Invoke `agent-orchestrator` skill before editing.
 2. Graph-first: call `mcp__kuberly-platform__plan_persona_fanout` then `session_init`.
 3. Sequential: scope-planner alone first; fan out only after scope confirms target exists.
 4. New feature branch before any edit (see infra-bootstrap-mandatory).

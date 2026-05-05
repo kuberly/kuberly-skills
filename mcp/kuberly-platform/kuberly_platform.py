@@ -61,10 +61,11 @@ INTEGRATION_BRANCH_RE = re.compile(r"^\d{6,}-[a-z0-9-]+-prod$")
 OPENSPEC_PATHS = ("clouds/", "components/", "applications/", "cue/")
 
 EXPECTED_PERSONAS = {
-    "infra-scope-planner",
-    "iac-developer",
-    "troubleshooter",
-    "app-cicd-engineer",
+    "agent-planner",
+    "agent-infra-ops",
+    "agent-sre",
+    "agent-cicd",
+    "agent-k8s-ops",
     # v0.14.0: cold + in-context reviewers merged into a single
     # diff-only pr-reviewer; legacy names removed.
     "pr-reviewer",
@@ -113,43 +114,44 @@ _REVIEW_PHASE = [
 
 PERSONA_DAGS = {
     "resource-bump": [
-        {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
-        {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
+        {"id": "scope",     "personas": ["agent-planner"], "parallel": False, "needs_approval": False},
+        {"id": "implement", "personas": ["agent-infra-ops"],       "parallel": False, "needs_approval": True},
     ],
     "incident": [
-        # Diagnose + scope in parallel: troubleshooter looks at observability,
-        # planner pins the codebase scope. Both feed decisions.md.
-        {"id": "diagnose",  "personas": ["troubleshooter", "infra-scope-planner"],
+        # Diagnose + scope in parallel: agent-sre looks at observability,
+        # agent-k8s-ops looks at live cluster state, planner pins the
+        # codebase scope. All three feed decisions.md.
+        {"id": "diagnose",  "personas": ["agent-sre", "agent-k8s-ops", "agent-planner"],
          "parallel": True,  "needs_approval": False},
-        {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
+        {"id": "implement", "personas": ["agent-infra-ops"],       "parallel": False, "needs_approval": True},
     ],
     "new-application": [
         # Adding a new application is a CUE / applications/ JSON change
         # against existing cluster modules. Same shape as new-module but
         # the implementer touches applications/, not clouds/.
-        {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
-        {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
+        {"id": "scope",     "personas": ["agent-planner"], "parallel": False, "needs_approval": False},
+        {"id": "implement", "personas": ["agent-infra-ops"],       "parallel": False, "needs_approval": True},
     ],
     "new-database": [
         # New DB is usually a new components/<env>/<db>.json + module reference.
-        {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
-        {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
+        {"id": "scope",     "personas": ["agent-planner"], "parallel": False, "needs_approval": False},
+        {"id": "implement", "personas": ["agent-infra-ops"],       "parallel": False, "needs_approval": True},
     ],
     "new-module": [
-        {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
-        {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
+        {"id": "scope",     "personas": ["agent-planner"], "parallel": False, "needs_approval": False},
+        {"id": "implement", "personas": ["agent-infra-ops"],       "parallel": False, "needs_approval": True},
     ],
     "drift-fix": [
-        {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
-        {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
+        {"id": "scope",     "personas": ["agent-planner"], "parallel": False, "needs_approval": False},
+        {"id": "implement", "personas": ["agent-infra-ops"],       "parallel": False, "needs_approval": True},
     ],
     "cicd": [
-        {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
-        {"id": "implement", "personas": ["app-cicd-engineer"],   "parallel": False, "needs_approval": True},
+        {"id": "scope",     "personas": ["agent-planner"], "parallel": False, "needs_approval": False},
+        {"id": "implement", "personas": ["agent-cicd"],   "parallel": False, "needs_approval": True},
     ],
     "cleanup": [
-        {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
-        {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
+        {"id": "scope",     "personas": ["agent-planner"], "parallel": False, "needs_approval": False},
+        {"id": "implement", "personas": ["agent-infra-ops"],       "parallel": False, "needs_approval": True},
     ],
     # Plan review: kuberly platform posts `terragrunt run plan` output as PR /
     # commit comments. The plan-reviewer reads those, checks against scope.md,
@@ -160,7 +162,7 @@ PERSONA_DAGS = {
     ],
     # Fallback: dispatch the planner alone, replan once scope.md exists.
     "unknown": [
-        {"id": "scope", "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
+        {"id": "scope", "personas": ["agent-planner"], "parallel": False, "needs_approval": False},
     ],
     # Pre-flight halt: caller named modules that don't exist as graph nodes.
     "stop-target-absent": [
@@ -1666,7 +1668,7 @@ class KuberlyPlatform:
                     target_envs:   list[str] | None = None) -> dict:
         """Server-side scope.md generation. v0.15.0.
 
-        Replaces the `infra-scope-planner` agent for typical tasks
+        Replaces the `agent-planner` agent for typical tasks
         ('bump X memory', 'add Y database', 'increase Z replicas'). The
         orchestrator calls this, gets a fully-formed scope.md body back,
         writes it directly to `.agents/prompts/<session>/scope.md` — no
@@ -1677,7 +1679,7 @@ class KuberlyPlatform:
             modules: resolved module ids
             actionable: bool — True if at least one module has a component
                 invoker (and is therefore tune-able)
-            recommendation: 'dispatch-iac-developer' | 'stop-target-absent'
+            recommendation: 'dispatch-agent-infra-ops' | 'stop-target-absent'
                 | 'stop-no-instance' | 'fall-back-to-scope-planner'
             blast_summary: one-line summary of impact
             unactionable: list of unactionable module labels
@@ -1704,6 +1706,19 @@ class KuberlyPlatform:
                 if src_node.get("type") in {"component", "application"}:
                     has_consumer = True
                     break
+            # v0.22.0: a module deployed directly via terragrunt apply
+            # (state_overlay-only, no components/<env>/<x>.json invoker) has
+            # no component edge but DOES have a synthetic source="state"
+            # component node — recognize it as actionable.
+            if not has_consumer:
+                for cnid, cnode in self.nodes.items():
+                    if cnode.get("type") != "component":
+                        continue
+                    if cnode.get("source") != "state":
+                        continue
+                    if cnode.get("label") == self.nodes.get(nid, {}).get("label"):
+                        has_consumer = True
+                        break
             if not has_consumer:
                 label = self.nodes.get(nid, {}).get("label", nid)
                 unactionable.append(label)
@@ -1745,7 +1760,7 @@ class KuberlyPlatform:
         elif unactionable and len(unactionable) == len(modules):
             recommendation = "stop-no-instance"
         else:
-            recommendation = "dispatch-iac-developer"
+            recommendation = "dispatch-agent-infra-ops"
 
         # Build scope.md body
         lines = [f"# Scope: {task or 'unspecified'}", ""]
@@ -1837,13 +1852,13 @@ class KuberlyPlatform:
             if scope.get("openspec_paths_touched"):
                 paths = ", ".join(scope["openspec_paths_touched"])
                 lines += ["## OpenSpec",
-                          f"required (paths under {paths}); confirm change folder exists before iac-developer",
+                          f"required (paths under {paths}); confirm change folder exists before agent-infra-ops",
                           ""]
 
         return {
             "scope_md":        "\n".join(lines).rstrip() + "\n",
             "modules":         modules,
-            "actionable":      bool(modules) and recommendation == "dispatch-iac-developer",
+            "actionable":      bool(modules) and recommendation == "dispatch-agent-infra-ops",
             "recommendation":  recommendation,
             "blast_summary":   blast_summary,
             "downstream_ids":  downstream_ids[:10],
@@ -1899,7 +1914,7 @@ class KuberlyPlatform:
         # resolve to a graph node, override the DAG to a no-persona halt so
         # the orchestrator can't fan out personas that would just re-discover
         # the absence. This is the v0.10.2 root-cause guard for the "Loki
-        # not deployed but planner+troubleshooter both spawned" pattern.
+        # not deployed but planner+agent-sre both spawned" pattern.
         unresolved_modules: list[str] = []
         unactionable_modules: list[str] = []
         if named_modules:
@@ -1934,6 +1949,21 @@ class KuberlyPlatform:
                             if src_node.get("type") in {"component", "application"}:
                                 has_consumer = True
                                 break
+                        # v0.22.0: a module deployed directly via terragrunt
+                        # apply (state_overlay-only, no components/<env>/<x>.json
+                        # invoker) has no edge but DOES have a synthetic
+                        # source="state" component node — recognize it as
+                        # actionable.
+                        if not has_consumer:
+                            mod_label = self.nodes.get(nid, {}).get("label")
+                            for cnode in self.nodes.values():
+                                if cnode.get("type") != "component":
+                                    continue
+                                if cnode.get("source") != "state":
+                                    continue
+                                if cnode.get("label") == mod_label:
+                                    has_consumer = True
+                                    break
                         if not has_consumer:
                             label = self.nodes.get(nid, {}).get("label", nid)
                             unactionable_modules.append(label)
@@ -2032,7 +2062,7 @@ class KuberlyPlatform:
             else:
                 os_block = (f"\n## OpenSpec\nRequired (paths under "
                             f"{', '.join(OPENSPEC_PATHS)}). Create folder before "
-                            f"delegating to `iac-developer`.\n")
+                            f"delegating to `agent-infra-ops`.\n")
 
         # Branch note
         br_block = ""
@@ -2194,7 +2224,7 @@ class KuberlyPlatform:
                            kind: str | None = None) -> dict:
         """Update status of a persona or a phase.
 
-        target: persona name (e.g. 'iac-developer') or phase id (e.g. 'implement')
+        target: persona name (e.g. 'agent-infra-ops') or phase id (e.g. 'implement')
         kind:   'persona' | 'phase' — auto-detected when None.
         status: queued|running|done|blocked|skipped
         """
@@ -3956,7 +3986,7 @@ def run_mcp_server(graph: KuberlyPlatform):
         },
         {
             "name": "plan_persona_fanout",
-            "description": "Orchestration plan for a kuberly-stack infra task. Classifies task_kind, computes blast-radius/drift scope, runs branch + OpenSpec + personas-synced gates, returns a persona DAG (with per-phase parallel/needs_approval flags) and a ready-to-paste context.md body. Call this first in infra-orchestrator mode; then use session_init to materialize a session dir.",
+            "description": "Orchestration plan for a kuberly-stack infra task. Classifies task_kind, computes blast-radius/drift scope, runs branch + OpenSpec + personas-synced gates, returns a persona DAG (with per-phase parallel/needs_approval flags) and a ready-to-paste context.md body. Call this first in agent-orchestrator mode; then use session_init to materialize a session dir.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -3974,7 +4004,7 @@ def run_mcp_server(graph: KuberlyPlatform):
         },
         {
             "name": "quick_scope",
-            "description": "Server-side scope.md generation. v0.15.0+: replaces the `infra-scope-planner` agent for typical 'bump X', 'add Y', 'increase Z' tasks. The orchestrator calls this and writes the returned `scope_md` directly to `.agents/prompts/<session>/scope.md` — no agent dispatch, no 18k-token round-trip. Includes the v0.15.0 actionability check: returns `recommendation: 'stop-no-instance'` when a named module exists but has no component invoker. Fall back to dispatching `infra-scope-planner` only when this returns `recommendation: 'fall-back-to-scope-planner'`.",
+            "description": "Server-side scope.md generation. v0.15.0+: replaces the `agent-planner` agent for typical 'bump X', 'add Y', 'increase Z' tasks. The orchestrator calls this and writes the returned `scope_md` directly to `.agents/prompts/<session>/scope.md` — no agent dispatch, no 18k-token round-trip. Includes the v0.15.0 actionability check: returns `recommendation: 'stop-no-instance'` when a named module exists but has no component invoker. Fall back to dispatching `agent-planner` only when this returns `recommendation: 'fall-back-to-scope-planner'`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -4060,7 +4090,7 @@ def run_mcp_server(graph: KuberlyPlatform):
                 "type": "object",
                 "properties": {
                     "name":   {"type": "string", "description": "Session name."},
-                    "target": {"type": "string", "description": "Persona name (e.g. 'iac-developer') or phase id (e.g. 'implement')."},
+                    "target": {"type": "string", "description": "Persona name (e.g. 'agent-infra-ops') or phase id (e.g. 'implement')."},
                     "status": {"type": "string", "enum": ["queued", "running", "done", "blocked", "skipped"]},
                     "kind":   {"type": "string", "enum": ["persona", "phase"], "description": "Optional override; auto-detected from `target`."},
                     "format": _FORMAT_PROP,
