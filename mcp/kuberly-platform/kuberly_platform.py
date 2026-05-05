@@ -3156,7 +3156,17 @@ def write_mermaid_dag(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = 
         if verbose:
             print(f"wrote {env_path} ({env} environment)")
 
+    def _mermaid_blast_label(text: object, *, max_len: int = 44) -> str:
+        """Single-line label safe inside Mermaid ``[\"…\"]``."""
+        s = str(text).replace('"', "'").replace("\n", " ").replace("[", "(").replace("]", ")")
+        if len(s) > max_len:
+            return s[: max_len - 1] + "…"
+        return s
+
     # --- 3. Blast radius diagram for shared-infra ---
+    # Cap nodes: huge downstream sets exceed Mermaid's maxTextSize and make
+    # the dashboard unusable; prefer shallow nodes, stable order, one edge each.
+    BLAST_MMD_MAX_NODES = 96
     for nid, node in graph.nodes.items():
         if node["type"] != "shared-infra":
             continue
@@ -3164,6 +3174,20 @@ def write_mermaid_dag(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = 
         br = graph.blast_radius(nid, direction="downstream", max_depth=3)
         if "error" in br:
             continue
+        downstream = br.get("downstream", {}) or {}
+        ranked = sorted(
+            downstream.items(),
+            key=lambda kv: (kv[1].get("depth", 99), kv[0]),
+        )
+        omitted = 0
+        if len(ranked) > BLAST_MMD_MAX_NODES:
+            omitted = len(ranked) - BLAST_MMD_MAX_NODES
+            ranked = ranked[:BLAST_MMD_MAX_NODES]
+        ds_ids = {nid, *(dnid for dnid, _ in ranked)}
+        depth_of = {nid: 0}
+        for dnid, info in ranked:
+            depth_of[dnid] = int(info.get("depth", 1))
+
         blines = ["graph TD"]
         blines.append("    classDef root fill:#F44336,stroke:#B71C1C,color:#fff")
         blines.append("    classDef d1 fill:#FF9800,stroke:#E65100,color:#000")
@@ -3172,26 +3196,57 @@ def write_mermaid_dag(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = 
         blines.append("")
 
         root_sid = sanitize(nid)
-        blines.append(f'    {root_sid}[["shared-infra ({env})"]]')
+        blines.append(f'    {root_sid}[["shared-infra ({_mermaid_blast_label(env, max_len=24)})"]]')
         blines.append(f"class {root_sid} root")
 
-        for dnid, info in br.get("downstream", {}).items():
+        for dnid, info in ranked:
             dsid = sanitize(dnid)
-            dlabel = graph.nodes.get(dnid, {}).get("label", dnid)
-            depth = info["depth"]
-            blines.append(f'    {dsid}[{dlabel}]')
+            raw_lbl = graph.nodes.get(dnid, {}).get("label", dnid)
+            depth = int(info.get("depth", 1))
+            lbl = _mermaid_blast_label(raw_lbl)
+            blines.append(f'    {dsid}["{lbl}"]')
             blines.append(f"class {dsid} d{min(depth, 3)}")
-            # Connect to parent (find edge)
+
+        def _best_pred(tgt):
+            best = None
+            best_d = 9999
             for e in graph.edges:
-                if e["target"] == dnid and (e["source"] == nid or e["source"] in br.get("downstream", {})):
-                    ps = sanitize(e["source"])
-                    blines.append(f"{ps} --> {dsid}")
-                    break
+                if e["target"] != tgt:
+                    continue
+                src = e["source"]
+                if src not in ds_ids:
+                    continue
+                d_src = depth_of.get(src, 999)
+                if d_src < best_d or (d_src == best_d and best is not None and src < best):
+                    best_d = d_src
+                    best = src
+            return best
+
+        edge_seen = set()
+        for dnid, _ in ranked:
+            if dnid == nid:
+                continue
+            src = _best_pred(dnid)
+            if src is None:
+                continue
+            a, b = sanitize(src), sanitize(dnid)
+            key = (a, b)
+            if key in edge_seen:
+                continue
+            edge_seen.add(key)
+            blines.append(f"{a} --> {b}")
+
+        if omitted:
+            trunc_sid = sanitize(f"blast_trunc_{env}")
+            note = _mermaid_blast_label(f"+{omitted} more (open blast_{env}.mmd or MCP blast_radius)", max_len=60)
+            blines.append(f'    {trunc_sid}["{note}"]')
+            blines.append(f"class {trunc_sid} d3")
+            blines.append(f"{root_sid} -.-> {trunc_sid}")
 
         br_path = out_dir / f"blast_{env}.mmd"
         br_path.write_text("\n".join(blines) + "\n")
         if verbose:
-            print(f"wrote {br_path} (blast radius: {env})")
+            print(f"wrote {br_path} (blast radius: {env}, shown={len(ranked)}, omitted={omitted})")
 
 
 def format_blast_radius(result: dict) -> str:
@@ -4275,7 +4330,7 @@ def run_mcp_server(graph: KuberlyPlatform):
             "Install with: pip install 'mcp>=1.10'\n"
         )
         raise SystemExit(2) from exc
-    ver = _read_kuberly_skills_version(graph.repo) or "0.32.2"
+    ver = _read_kuberly_skills_version(graph.repo) or "0.32.3"
     if ver.startswith("v"):
         ver = ver[1:]
     run_stdio_server_blocking(

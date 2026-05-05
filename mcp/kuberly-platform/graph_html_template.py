@@ -363,6 +363,20 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     border-radius: var(--radius);
     margin: 8px 0;
   }
+  /* Mermaid dark theme still paints a white SVG rect on some builds — keep on-brand. */
+  .mermaid-wrap svg { background: transparent !important; max-width: 100%; height: auto; }
+  .mermaid-fallback {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-mute);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 280px;
+    overflow: auto;
+    padding: 8px;
+    border: 1px dashed var(--ink-line);
+    border-radius: var(--radius);
+  }
 
   .table-wrap {
     overflow-x: auto;
@@ -446,6 +460,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     position: fixed;
     top: 56px;
     left: 0; right: 0; bottom: 0;
+    background: var(--bg);
   }
   body.view-graph #graph-shell { display: block; }
   #cy {
@@ -577,6 +592,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     </div>
     <select id="layout-select" title="Layout algorithm">
       <option value="fcose" selected>fcose (compound force)</option>
+      <option value="cose">cose (classic force)</option>
       <option value="dagre">dagre (hierarchy)</option>
       <option value="concentric">concentric</option>
     </select>
@@ -850,7 +866,7 @@ function renderDashboard() {
   if (blastRoot && blasts.length) {
     blasts.forEach(b => {
       const det = document.createElement("details");
-      det.open = true;
+      det.open = false;
       const sum = document.createElement("summary");
       sum.textContent = "shared-infra blast · " + b.env;
       det.appendChild(sum);
@@ -866,10 +882,22 @@ function renderDashboard() {
   }
 
   try {
-    mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose",
-      themeVariables: { primaryColor: "#161b22", primaryTextColor: "#fff", lineColor: "#1677ff" } });
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "dark",
+      securityLevel: "loose",
+      maxTextSize: 900000,
+      themeVariables: { primaryColor: "#161b22", primaryTextColor: "#fff", lineColor: "#1677ff" },
+    });
     if (blastRoot && blastRoot.querySelector(".mermaid")) {
-      mermaid.run({ querySelector: "#blast-acc-root .mermaid" });
+      try {
+        const p = mermaid.run({ querySelector: "#blast-acc-root .mermaid" });
+        if (p && typeof p.then === "function") {
+          p.catch((e) => console.warn("mermaid", e));
+        }
+      } catch (e2) {
+        console.warn("mermaid run", e2);
+      }
     }
   } catch (e) { console.warn("mermaid", e); }
 
@@ -941,12 +969,33 @@ function buildCy() {
     static: BRAND.blue, state: BRAND.aws, k8s: BRAND.amber, docs: BRAND.inkMute,
   };
 
+  /* fcose + compound parents degrades badly past ~500 leaves (huge boxes, line collapse). */
+  const leafNodes = NODES.filter(n => n.data && !n.data.compound);
+  const leafCount = leafNodes.length;
+  const STRIP_COMPOUND_THRESHOLD = 500;
+  let graphNodes = NODES;
+  let stripCompound = false;
+  if (leafCount >= STRIP_COMPOUND_THRESHOLD) {
+    stripCompound = true;
+    graphNodes = leafNodes.map((n) => {
+      const data = Object.assign({}, n.data);
+      delete data.parent;
+      return Object.assign({}, n, { data });
+    });
+  }
+  const initialLayout = stripCompound ? "cose" : "fcose";
+  const cyLayoutOpts = stripCompound
+    ? { name: "cose", animate: false, padding: 12 }
+    : { name: "fcose", quality: "default", animate: false, randomize: true,
+        nodeSeparation: 80, idealEdgeLength: 80, packComponents: true };
+
   document.getElementById("stats").textContent =
-    NODES.filter(n => !n.data.compound).length + " nodes · " + EDGES.length + " edges";
+    graphNodes.filter(n => !n.data.compound).length + " nodes · " + EDGES.length + " edges"
+    + (stripCompound ? " · layout: flat" : "");
 
   cy = cytoscape({
     container: document.getElementById("cy"),
-    elements: { nodes: NODES, edges: EDGES },
+    elements: { nodes: graphNodes, edges: EDGES },
     wheelSensitivity: 0.2,
     style: [
       { selector: "node", style: {
@@ -987,8 +1036,7 @@ function buildCy() {
       { selector: "node.downstream", style: { "border-width": 3, "border-color": BRAND.blue } },
       { selector: "edge.highlight", style: { "line-color": BRAND.blue, "target-arrow-color": BRAND.blue, "opacity": 1, "width": 2 } },
     ],
-    layout: { name: "fcose", quality: "default", animate: false, randomize: true,
-              nodeSeparation: 80, idealEdgeLength: 80, packComponents: true },
+    layout: cyLayoutOpts,
   });
 
   function applyLayerVisibility(layer, on) {
@@ -1013,10 +1061,16 @@ function buildCy() {
   });
 
   function runLayout(name) {
+    if (stripCompound && name === "fcose") {
+      layoutSelect.value = "cose";
+      name = "cose";
+    }
     let opts = { name, animate: false, fit: true };
     if (name === "fcose") {
-      opts = { ...opts, quality: "default", randomize: true,
+      opts = { ...opts, quality: leafCount > 800 ? "draft" : "default", randomize: true,
                nodeSeparation: 80, idealEdgeLength: 80, packComponents: true };
+    } else if (name === "cose") {
+      opts = { ...opts, padding: 12 };
     } else if (name === "dagre") {
       opts = { ...opts, rankDir: "TB", nodeSep: 30, rankSep: 60 };
     } else if (name === "concentric") {
@@ -1024,8 +1078,10 @@ function buildCy() {
     }
     cy.layout(opts).run();
   }
-  document.getElementById("layout-select").addEventListener("change", e => runLayout(e.target.value));
-  runLayout("fcose");
+  const layoutSelect = document.getElementById("layout-select");
+  layoutSelect.addEventListener("change", e => runLayout(e.target.value));
+  layoutSelect.value = initialLayout;
+  runLayout(initialLayout);
 
   const searchEl = document.getElementById("search");
   searchEl.addEventListener("input", () => {

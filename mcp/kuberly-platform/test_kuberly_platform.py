@@ -1858,11 +1858,11 @@ class GraphHtmlVizTests(unittest.TestCase):
             tmp.cleanup()
 
     def test_graph_html_has_initial_layout_call(self):
-        """v0.25.0 / v0.29.0: fcose must run once cytoscape is constructed.
+        """v0.25.0 / v0.29.0: a layout must run once cytoscape is constructed.
 
-        v0.29 lazily builds the graph on the Graph tab; `runLayout("fcose")`
-        still runs immediately inside `buildCy()` so nodes are not stacked at
-        (0,0) when the canvas first appears.
+        v0.29 lazily builds the graph on the Graph tab; `runLayout(initialLayout)`
+        runs immediately inside `buildCy()` so nodes are not stacked at
+        (0,0) when the canvas first appears. Large graphs use cose; small use fcose.
         """
         from kuberly_platform import write_graph_html
 
@@ -1873,9 +1873,10 @@ class GraphHtmlVizTests(unittest.TestCase):
                 write_graph_html(g, out_path)
                 html = (out_path / "graph.html").read_text(encoding="utf-8")
                 self.assertIn("function buildCy", html)
+                self.assertIn("initialLayout", html)
                 self.assertTrue(
-                    'runLayout("fcose")' in html or "runLayout('fcose')" in html,
-                    "expected runLayout(fcose) after cytoscape init",
+                    "runLayout(initialLayout)" in html,
+                    "expected runLayout(initialLayout) after cytoscape init",
                 )
         finally:
             tmp.cleanup()

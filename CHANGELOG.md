@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.32.3 — 2026-05-06
+
+- **FIX:** `.kuberly/graph.html` **Graph** tab — for large stacks (≥500 leaf
+  nodes), **strip compound parents** and run **cose** instead of **fcose** so
+  layouts are not collapsed into unusable white boxes / diagonal lines.
+  **fcose** uses **draft** quality when there are many nodes; added **cose**
+  as an explicit layout option.
+- **FIX:** **Dashboard** shared-infra **Mermaid** blast — cap diagram size,
+  sanitize labels, higher **`maxTextSize`**, collapsed blast **`<details>`**
+  by default, and safer **`mermaid.run`** error handling.
+- **BUMP:** apm.yml 0.32.2 → 0.32.3.
+
 ## v0.32.2 — 2026-05-06
 
 - **FIX:** MCP stdio failed when the host used a system **``python3``** without
