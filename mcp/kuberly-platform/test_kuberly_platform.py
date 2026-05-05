@@ -1862,7 +1862,7 @@ class GraphHtmlVizTests(unittest.TestCase):
     def test_graph_html_has_initial_layout_call(self):
         """v0.25.0 / v0.29.0: a layout must run once cytoscape is constructed.
 
-        v0.29 lazily builds the graph on the Graph tab; `runLayout(initialLayout)`
+        v0.29 lazily builds the graph on the Graph tab; `runLayoutImpl(initialLayout)`
         runs immediately inside `buildCy()` so nodes are not stacked at
         (0,0) when the canvas first appears. Large graphs use cose; small use fcose.
         """
@@ -1877,8 +1877,8 @@ class GraphHtmlVizTests(unittest.TestCase):
                 self.assertIn("function buildCy", html)
                 self.assertIn("initialLayout", html)
                 self.assertTrue(
-                    "runLayout(initialLayout)" in html,
-                    "expected runLayout(initialLayout) after cytoscape init",
+                    "runLayoutImpl(initialLayout)" in html,
+                    "expected runLayoutImpl(initialLayout) after cytoscape init",
                 )
         finally:
             tmp.cleanup()

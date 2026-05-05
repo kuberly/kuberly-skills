@@ -83,20 +83,16 @@ def _hooks_block_cursor() -> dict[str, list[dict[str, Any]]]:
     """Hooks owned for Cursor (`.cursor/hooks.json`).
 
     Cursor 0.4x+ expects ``beforeSubmitPrompt`` (``UserPromptSubmit`` is rejected).
-    Command uses a repo-relative script path; hooks run with cwd = workspace root.
+    Each list entry must be a **flat** object with string ``command`` (not a
+    nested ``hooks`` array — Cursor validates ``beforeSubmitPrompt[0].command``).
     """
     return {
         "beforeSubmitPrompt": [
             {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": (
-                            f"python3 {APM_CACHE_PATH}/scripts/hooks/orchestrator_route.py"
-                        ),
-                        "timeout": 5,
-                    }
-                ]
+                "command": (
+                    f"python3 {APM_CACHE_PATH}/scripts/hooks/orchestrator_route.py"
+                ),
+                "timeout": 5,
             }
         ],
     }
@@ -190,6 +186,9 @@ def _is_kuberly_owned_command(cmd: str, status: str = "") -> bool:
 def _matcher_is_kuberly_owned(matcher: Any) -> bool:
     """A matcher is owned if every command it contains is recognizably ours.
 
+    Supports (1) Claude-style nested ``{ "hooks": [ { "command": ... } ] }``
+    matchers and (2) Cursor flat entries ``{ "command": "...", "timeout": … }``.
+
     Catches the current apm-cache layout AND legacy hand-wired layouts
     (vendored scripts/kuberly_graph.py, scripts/mcp/kuberly-graph/, ...).
     Mixed matchers (some kuberly, some user) are left alone — safer to
@@ -198,18 +197,25 @@ def _matcher_is_kuberly_owned(matcher: Any) -> bool:
     if not isinstance(matcher, dict):
         return False
     hooks = matcher.get("hooks")
-    if not isinstance(hooks, list) or not hooks:
-        return False
-    for hook in hooks:
-        if not isinstance(hook, dict):
-            return False
-        cmd = hook.get("command", "")
-        status = hook.get("statusMessage", "")
-        if not isinstance(cmd, str):
-            return False
-        if not _is_kuberly_owned_command(cmd, status):
-            return False
-    return True
+    if isinstance(hooks, list) and hooks:
+        for hook in hooks:
+            if not isinstance(hook, dict):
+                return False
+            cmd = hook.get("command", "")
+            status = hook.get("statusMessage", "")
+            if not isinstance(cmd, str):
+                return False
+            if not _is_kuberly_owned_command(cmd, status):
+                return False
+        return True
+    # Cursor flat hook entry (beforeSubmitPrompt / sessionStart style)
+    cmd = matcher.get("command", "")
+    if isinstance(cmd, str) and cmd:
+        status = matcher.get("statusMessage", "")
+        if not isinstance(status, str):
+            status = ""
+        return _is_kuberly_owned_command(cmd, status)
+    return False
 
 
 def _merge_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:

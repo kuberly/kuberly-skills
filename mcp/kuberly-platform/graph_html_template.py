@@ -149,7 +149,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .layer-toggle[data-layer=state]  .dot { background: var(--aws); }
   .layer-toggle[data-layer=k8s]    .dot { background: var(--amber); }
   .layer-toggle[data-layer=docs]   .dot { background: var(--ink-mute); }
-  #layout-select {
+  #layout-select, #graph-view-mode {
     background: rgba(255,255,255,0.04);
     color: var(--ink);
     border: 1px solid var(--ink-line);
@@ -157,6 +157,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     border-radius: var(--radius);
     font-size: 13px;
     cursor: pointer;
+    max-width: min(280px, 42vw);
   }
   #stats { color: var(--ink-mute); font-size: 12px; font-family: var(--font-mono); }
 
@@ -590,6 +591,10 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
       <label class="layer-toggle inactive" data-layer="k8s"><input type="checkbox" data-layer="k8s"><span class="dot"></span>k8s</label>
       <label class="layer-toggle active" data-layer="docs"><input type="checkbox" data-layer="docs" checked><span class="dot"></span>docs</label>
     </div>
+    <select id="graph-view-mode" title="Graph scope — start with overview on large stacks">
+      <option value="overview">Overview (module deps)</option>
+      <option value="full" selected>Full graph</option>
+    </select>
     <select id="layout-select" title="Layout algorithm">
       <option value="fcose" selected>fcose (compound force)</option>
       <option value="cose">cose (classic force)</option>
@@ -1016,23 +1021,59 @@ function buildCy() {
       return Object.assign({}, n, { data });
     });
   }
-  const initialLayout = stripCompound ? "cose" : "fcose";
-  const cyLayoutOpts = stripCompound
+
+  function pickElementsForView(mode, nodes, edges) {
+    if (mode !== "overview") return { nodes, edges };
+    const mods = nodes.filter(n => n.data && !n.data.compound && n.data.type === "module");
+    if (mods.length < 2) return { nodes, edges };
+    const ids = new Set(mods.map(n => n.data.id));
+    const outEdges = edges.filter(e => {
+      const d = e.data || {};
+      return d.relation === "depends_on" && ids.has(d.source) && ids.has(d.target);
+    });
+    return { nodes: mods, edges: outEdges };
+  }
+
+  const viewSel = document.getElementById("graph-view-mode");
+  let viewMode = "full";
+  if (viewSel) {
+    try {
+      const saved = sessionStorage.getItem("kuberlyGraphView");
+      if (saved === "overview" || saved === "full") viewSel.value = saved;
+      else if (leafCount >= 280) viewSel.value = "overview";
+    } catch (e) { /* private mode */ }
+    viewMode = viewSel.value || "full";
+  }
+  const picked = pickElementsForView(viewMode, graphNodes, EDGES);
+  const elemsNodes = picked.nodes;
+  const elemsEdges = picked.edges;
+  const isOverview = viewMode === "overview" && elemsNodes.length < graphNodes.length;
+
+  let initialLayout = stripCompound ? "cose" : "fcose";
+  let cyLayoutOpts = stripCompound
     ? { name: "cose", animate: false, padding: 12 }
     : { name: "fcose", quality: "default", animate: false, randomize: true,
         nodeSeparation: 80, idealEdgeLength: 80, packComponents: true };
+  if (isOverview) {
+    initialLayout = "dagre";
+    cyLayoutOpts = { name: "dagre", animate: false, padding: 28, rankDir: "LR",
+                     nodeSep: 44, rankSep: 52, fit: true };
+  }
 
+  const stParts = [];
+  if (isOverview) stParts.push("overview");
+  if (stripCompound && !isOverview) stParts.push("layout: flat");
   document.getElementById("stats").textContent =
-    graphNodes.filter(n => !n.data.compound).length + " nodes · " + EDGES.length + " edges"
-    + (stripCompound ? " · layout: flat" : "");
+    elemsNodes.filter(n => !n.data.compound).length + " nodes · " + elemsEdges.length + " edges"
+    + (stParts.length ? " · " + stParts.join(" · ") : "");
 
   cy = cytoscape({
     container: document.getElementById("cy"),
-    elements: { nodes: graphNodes, edges: EDGES },
+    elements: { nodes: elemsNodes, edges: elemsEdges },
     wheelSensitivity: 0.2,
     style: [
       { selector: "node", style: {
-        "label": "data(label)", "font-size": 9,
+        "label": "data(label)", "font-size": isOverview ? 11 : 9,
         "font-family": "Geist, -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
         "color": BRAND.ink, "text-valign": "center", "text-halign": "center",
         "text-outline-color": BRAND.bg, "text-outline-width": 2,
@@ -1082,18 +1123,7 @@ function buildCy() {
   }
   applyLayerVisibility("k8s", false);
 
-  document.querySelectorAll("#graph-controls .layer-toggles input").forEach(cb => {
-    cb.addEventListener("change", () => {
-      applyLayerVisibility(cb.dataset.layer, cb.checked);
-      const pill = cb.closest(".layer-toggle");
-      if (pill) {
-        pill.classList.toggle("active", cb.checked);
-        pill.classList.toggle("inactive", !cb.checked);
-      }
-    });
-  });
-
-  function runLayout(name) {
+  const runLayoutImpl = (name) => {
     if (stripCompound && name === "fcose") {
       layoutSelect.value = "cose";
       name = "cose";
@@ -1105,37 +1135,78 @@ function buildCy() {
     } else if (name === "cose") {
       opts = { ...opts, padding: 12 };
     } else if (name === "dagre") {
-      opts = { ...opts, rankDir: "TB", nodeSep: 30, rankSep: 60 };
+      opts = { ...opts, rankDir: isOverview ? "LR" : "TB",
+               nodeSep: isOverview ? 40 : 30, rankSep: isOverview ? 52 : 60 };
     } else if (name === "concentric") {
       opts = { ...opts, concentric: n => n.degree(), levelWidth: () => 1 };
     }
     cy.layout(opts).run();
-  }
+  };
+  window.__kuberlyRunLayout = runLayoutImpl;
   const layoutSelect = document.getElementById("layout-select");
-  layoutSelect.addEventListener("change", e => runLayout(e.target.value));
-  layoutSelect.value = initialLayout;
-  runLayout(initialLayout);
-
   const searchEl = document.getElementById("search");
-  searchEl.addEventListener("input", () => {
-    const q = searchEl.value.trim().toLowerCase();
-    cy.nodes().removeClass("match pulse");
-    if (!q) return;
-    cy.nodes().filter(n => {
-      if (n.data("compound")) return false;
-      const id = (n.id() || "").toLowerCase();
-      const lbl = (n.data("label") || "").toLowerCase();
-      return id.includes(q) || lbl.includes(q);
-    }).addClass("match pulse");
-  });
-  searchEl.addEventListener("keydown", e => {
-    if (e.key !== "Enter") return;
-    const first = cy.nodes(".match").first();
-    if (first && first.length) cy.animate({ center: { eles: first }, zoom: 1.3 }, { duration: 250 });
-  });
-
   const sidebar = document.getElementById("sidebar");
   const sidebarBody = document.getElementById("sidebar-body");
+
+  if (!window.__kuberlyGraphUiWired) {
+    window.__kuberlyGraphUiWired = true;
+    document.querySelectorAll("#graph-controls .layer-toggles input").forEach(cb => {
+      cb.addEventListener("change", () => {
+        applyLayerVisibility(cb.dataset.layer, cb.checked);
+        const pill = cb.closest(".layer-toggle");
+        if (pill) {
+          pill.classList.toggle("active", cb.checked);
+          pill.classList.toggle("inactive", !cb.checked);
+        }
+      });
+    });
+    layoutSelect.addEventListener("change", e => {
+      const fn = window.__kuberlyRunLayout;
+      if (typeof fn === "function") fn(e.target.value);
+    });
+    if (viewSel) {
+      viewSel.addEventListener("change", () => {
+        try { sessionStorage.setItem("kuberlyGraphView", viewSel.value); } catch (e) {}
+        if (cy) { cy.destroy(); cy = null; }
+        buildCy();
+        requestAnimationFrame(() => { if (cy) { cy.resize(); cy.fit(undefined, 24); } });
+      });
+    }
+    searchEl.addEventListener("input", () => {
+      const q = searchEl.value.trim().toLowerCase();
+      cy.nodes().removeClass("match pulse");
+      if (!q) return;
+      cy.nodes().filter(n => {
+        if (n.data("compound")) return false;
+        const id = (n.id() || "").toLowerCase();
+        const lbl = (n.data("label") || "").toLowerCase();
+        return id.includes(q) || lbl.includes(q);
+      }).addClass("match pulse");
+    });
+    searchEl.addEventListener("keydown", e => {
+      if (e.key !== "Enter") return;
+      const first = cy.nodes(".match").first();
+      if (first && first.length) cy.animate({ center: { eles: first }, zoom: 1.3 }, { duration: 250 });
+    });
+    document.getElementById("close-btn").addEventListener("click", () => {
+      if (!cy) return;
+      sidebar.classList.remove("open");
+      cy.nodes().unselect();
+      clearBlast();
+    });
+    document.addEventListener("keydown", e => {
+      if (e.key !== "Escape") return;
+      if (!document.body.classList.contains("view-graph")) return;
+      if (!cy) return;
+      sidebar.classList.remove("open");
+      cy.nodes().unselect();
+      clearBlast();
+      cy.nodes().removeClass("match pulse");
+      searchEl.value = "";
+    });
+  }
+  layoutSelect.value = initialLayout;
+  runLayoutImpl(initialLayout);
 
   function renderSidebar(node) {
     const data = node.data();
@@ -1233,20 +1304,6 @@ function buildCy() {
       cy.nodes().unselect();
       clearBlast();
     }
-  });
-  document.getElementById("close-btn").addEventListener("click", () => {
-    sidebar.classList.remove("open");
-    cy.nodes().unselect();
-    clearBlast();
-  });
-  document.addEventListener("keydown", e => {
-    if (e.key !== "Escape") return;
-    if (!document.body.classList.contains("view-graph")) return;
-    sidebar.classList.remove("open");
-    cy.nodes().unselect();
-    clearBlast();
-    cy.nodes().removeClass("match pulse");
-    searchEl.value = "";
   });
 }
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.32.6 — 2026-05-06
+
+- **FIX:** Cursor **`.cursor/hooks.json`** — **`beforeSubmitPrompt`** entries must be
+  **flat** ``{ "command": "...", "timeout": … }`` (not a nested ``hooks`` array);
+  Cursor validates ``beforeSubmitPrompt[0].command`` as a string. Matcher cleanup
+  in **`sync_claude_config.py`** now recognizes both flat and nested kuberly-owned
+  hooks.
+- **FEATURE:** **`graph.html`** — **Overview** mode: Terragrunt **module** nodes and
+  **depends_on** edges only (default when ≥280 leaf nodes; persisted in
+  **sessionStorage**). **Full graph** still available from the scope dropdown;
+  overview uses **dagre** (LR) for a readable “constellation” layout. UI listeners
+  wire once so view switching rebuilds Cytoscape without duplicate handlers.
+- **BUMP:** apm.yml 0.32.5 → 0.32.6.
+
 ## v0.32.5 — 2026-05-06
 
 - **FIX:** **`ensure_apm_skills.sh`** snapshots **`apm.lock.yaml`** via a temp

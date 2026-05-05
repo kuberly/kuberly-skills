@@ -4375,7 +4375,7 @@ def run_mcp_server(graph: KuberlyPlatform):
             "Install with: pip install 'mcp>=1.10'\n"
         )
         raise SystemExit(2) from exc
-    ver = _read_kuberly_skills_version(graph.repo) or "0.32.5"
+    ver = _read_kuberly_skills_version(graph.repo) or "0.32.6"
     if ver.startswith("v"):
         ver = ver[1:]
     run_stdio_server_blocking(
