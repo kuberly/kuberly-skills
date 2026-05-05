@@ -12,6 +12,7 @@ The path-resolution shim below makes this script runnable in two layouts:
 """
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -848,6 +849,216 @@ class StateGraphParseTests(unittest.TestCase):
         }
         out = self.sg._validate_overlay(good)
         self.assertEqual(len(out["deployed_modules"]), 1)
+
+
+class StateGraphResourceExtractTests(unittest.TestCase):
+    """Schema 2 (resource graph) — pure-function extractor tests. No AWS."""
+
+    def setUp(self) -> None:
+        sg_path = _pkg if (_pkg / "state_graph.py").is_file() else _script_dir
+        if str(sg_path) not in sys.path:
+            sys.path.insert(0, str(sg_path))
+        import state_graph
+        self.sg = state_graph
+
+    def _state(self, resources, outputs=None):
+        return {"version": 4, "resources": resources, "outputs": outputs or {}}
+
+    def test_extract_skips_data_sources(self) -> None:
+        state = self._state([
+            {"mode": "managed", "type": "aws_iam_role", "name": "loki",
+             "provider": 'provider["registry.terraform.io/hashicorp/aws"]',
+             "instances": [{"attributes": {"arn": "arn:secret"}}]},
+            {"mode": "data", "type": "aws_caller_identity", "name": "current",
+             "instances": [{"attributes": {"account_id": "123"}}]},
+        ])
+        out = self.sg._extract_module_resources(state)
+        self.assertEqual(out["resource_count"], 1)
+        self.assertEqual(out["resources"][0]["type"], "aws_iam_role")
+
+    def test_extract_drops_all_attribute_values(self) -> None:
+        state = self._state([
+            {"mode": "managed", "type": "kubernetes_secret", "name": "creds",
+             "provider": 'provider["registry.terraform.io/hashicorp/kubernetes"]',
+             "instances": [{"attributes": {"data": {"password": "VEhJU0lTU0VDUkVU"},
+                                            "metadata": [{"name": "loki-creds"}]}}]},
+        ], outputs={"endpoint": {"value": "http://internal-uri", "sensitive": True}})
+        out = self.sg._extract_module_resources(state)
+        blob = json.dumps(out)  # full serialized output
+        # No attribute or output VALUE may appear in serialized output.
+        for forbidden in ("VEhJU0lTU0VDUkVU", "http://internal-uri", "loki-creds"):
+            self.assertNotIn(forbidden, blob,
+                             f"leaked attribute/output value: {forbidden!r}")
+        # But the resource itself IS visible (existence preserved).
+        self.assertEqual(out["resource_count"], 1)
+        self.assertEqual(out["resources"][0]["type"], "kubernetes_secret")
+        # Output NAME is kept; output value is not.
+        self.assertEqual(out["output_names"], ["endpoint"])
+
+    def test_extract_captures_dependencies(self) -> None:
+        state = self._state([
+            {"mode": "managed", "type": "helm_release", "name": "loki",
+             "provider": 'provider["registry.terraform.io/hashicorp/helm"]',
+             "instances": [{"dependencies": ["module.iam.aws_iam_role.loki",
+                                              "kubernetes_namespace.monitoring"]}]},
+        ])
+        out = self.sg._extract_module_resources(state)
+        self.assertEqual(out["resources"][0]["depends_on"],
+                         ["kubernetes_namespace.monitoring",
+                          "module.iam.aws_iam_role.loki"])
+
+    def test_extract_provider_cleaning(self) -> None:
+        cases = [
+            ('provider["registry.terraform.io/hashicorp/aws"]', "hashicorp/aws"),
+            ('provider["registry.terraform.io/hashicorp/kubernetes"]', "hashicorp/kubernetes"),
+            ('provider["registry.terraform.io/grafana/grafana"]', "grafana/grafana"),
+            ("", ""),
+            ("garbage", ""),
+        ]
+        for raw, expected in cases:
+            self.assertEqual(self.sg._clean_provider(raw), expected, raw)
+
+    def test_validator_accepts_schema_2(self) -> None:
+        doc = {
+            "schema_version": 2,
+            "generated_at": "2026-05-05T00:00:00Z",
+            "cluster": {
+                "env": "prod", "name": "prod",
+                "region": "us-east-1", "account_id": "111111111111",
+                "state_bucket": "111111111111-us-east-1-prod-tf-states",
+            },
+            "deployed_modules": [{"name": "loki", "state_key": "aws/loki/terraform.tfstate"}],
+            "deployed_applications": [],
+            "modules": {
+                "loki": {
+                    "resource_count": 1,
+                    "resources": [
+                        {"address": "module.helm.helm_release.loki",
+                         "type": "helm_release", "name": "loki",
+                         "provider": "hashicorp/helm", "instance_count": 1,
+                         "depends_on": []}
+                    ],
+                    "output_names": ["loki_endpoint"],
+                }
+            },
+        }
+        out = self.sg._validate_overlay(doc)
+        self.assertEqual(out["schema_version"], 2)
+        self.assertIn("modules", out)
+        self.assertEqual(len(out["modules"]["loki"]["resources"]), 1)
+
+    def test_validator_rejects_resource_address_with_injection(self) -> None:
+        bad = {
+            "schema_version": 2,
+            "generated_at": "2026-05-05T00:00:00Z",
+            "cluster": {
+                "env": "prod", "name": "prod",
+                "region": "us-east-1", "account_id": "111111111111",
+                "state_bucket": "111111111111-us-east-1-prod-tf-states",
+            },
+            "deployed_modules": [],
+            "deployed_applications": [],
+            "modules": {
+                "loki": {
+                    "resource_count": 1,
+                    "resources": [
+                        {"address": "$(rm -rf /)", "type": "helm_release",
+                         "name": "loki", "instance_count": 1, "depends_on": []}
+                    ],
+                    "output_names": [],
+                }
+            },
+        }
+        with self.assertRaises(ValueError):
+            self.sg._validate_overlay(bad)
+
+
+class StateOverlaySchema2Tests(unittest.TestCase):
+    """End-to-end: overlay file with schema 2 -> resource nodes + edges + redaction."""
+
+    def setUp(self) -> None:
+        self.tmp = _fake_repo()
+        overlay = Path(self.tmp.name) / ".claude" / "state_overlay_prod.json"
+        overlay.parent.mkdir(parents=True, exist_ok=True)
+        overlay.write_text(json.dumps({
+            "schema_version": 2,
+            "generated_at": "2026-05-05T00:00:00Z",
+            "generator": "test",
+            "cluster": {"env": "prod", "name": "prod", "region": "us-east-1",
+                        "account_id": "111111111111",
+                        "state_bucket": "111111111111-us-east-1-prod-tf-states"},
+            "deployed_modules": [{"name": "loki", "state_key": "aws/loki/terraform.tfstate"}],
+            "deployed_applications": [],
+            "modules": {
+                "loki": {
+                    "resource_count": 3,
+                    "resources": [
+                        {"address": "module.helm.helm_release.loki",
+                         "type": "helm_release", "name": "loki",
+                         "provider": "hashicorp/helm", "instance_count": 1,
+                         "depends_on": ["module.iam.aws_iam_role.loki"]},
+                        {"address": "module.iam.aws_iam_role.loki",
+                         "type": "aws_iam_role", "name": "loki",
+                         "provider": "hashicorp/aws", "instance_count": 1,
+                         "depends_on": []},
+                        {"address": "kubernetes_secret.creds",
+                         "type": "kubernetes_secret", "name": "creds",
+                         "provider": "hashicorp/kubernetes", "instance_count": 1,
+                         "depends_on": []},
+                    ],
+                    "output_names": ["loki_endpoint"],
+                }
+            },
+        }) + "\n")
+        self.g = KuberlyPlatform(self.tmp.name)
+        self.g.build()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_resource_nodes_synthesized(self) -> None:
+        rids = [n["id"] for n in self.g.nodes.values() if n.get("type") == "resource"]
+        self.assertEqual(len(rids), 3)
+        self.assertIn("resource:prod/loki/module.helm.helm_release.loki", rids)
+        self.assertIn("resource:prod/loki/module.iam.aws_iam_role.loki", rids)
+        self.assertIn("resource:prod/loki/kubernetes_secret.creds", rids)
+
+    def test_sensitive_resources_tagged_redacted(self) -> None:
+        helm = self.g.nodes["resource:prod/loki/module.helm.helm_release.loki"]
+        secret = self.g.nodes["resource:prod/loki/kubernetes_secret.creds"]
+        iam = self.g.nodes["resource:prod/loki/module.iam.aws_iam_role.loki"]
+        self.assertTrue(helm.get("redacted"))
+        self.assertTrue(secret.get("redacted"))
+        self.assertFalse(iam.get("redacted", False))
+
+    def test_depends_on_edges_emitted(self) -> None:
+        deps = [(e["source"], e["target"]) for e in self.g.edges
+                if e.get("relation") == "depends_on"]
+        self.assertIn(
+            ("resource:prod/loki/module.helm.helm_release.loki",
+             "resource:prod/loki/module.iam.aws_iam_role.loki"),
+            deps,
+        )
+
+    def test_component_enriched_with_resource_count(self) -> None:
+        comp = self.g.nodes["component:prod/loki"]
+        self.assertEqual(comp.get("resource_count"), 3)
+        self.assertEqual(comp.get("output_names"), ["loki_endpoint"])
+
+    def test_query_resources_filter_by_type(self) -> None:
+        out = self.g.query_resources(resource_type="helm_release")
+        self.assertEqual(out["count"], 1)
+        self.assertEqual(out["matches"][0]["resource_type"], "helm_release")
+        self.assertTrue(out["matches"][0]["redacted"])
+
+    def test_query_resources_exclude_redacted(self) -> None:
+        out = self.g.query_resources(include_redacted=False)
+        types = {m["resource_type"] for m in out["matches"]}
+        self.assertEqual(types, {"aws_iam_role"})
+
+    def test_query_resources_filter_by_module(self) -> None:
+        out = self.g.query_resources(module="loki", environment="prod")
+        self.assertEqual(out["count"], 3)
 
 
 if __name__ == "__main__":
