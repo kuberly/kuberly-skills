@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.40.0 — 2026-05-06
+
+Make MCP + skills aware of the new graph types (CUE / CI/CD /
+Applications) so AI agents proactively query them.
+
+### MCP manifest (`kuberly_mcp/manifest.py`)
+
+- **`query_nodes`** description now lists every recognized node type:
+  `environment`, `shared-infra`, `cloud_provider`, `module`,
+  `component`, `application`, `resource`, `k8s_resource`, `doc`,
+  `cue_schema`, `workflow`, `app_render`, `rendered_resource`. Plus
+  the `source_layer` axis ∈ {static, state, k8s, docs, schema, ci_cd,
+  rendered} so LLMs see the connection between node types and the
+  graph-view layer pills.
+- **`get_neighbors`** description gains the new edge relations
+  (`references`, `renders`, `rendered_into`) with concrete answer-path
+  examples ("which workflow deploys module X", "what does this app
+  render into", "which SA assumes this IAM role").
+- **`graph_index`** description now mentions all 7 layers and the new
+  cross-layer bridges.
+
+### Skills
+
+- **`kuberly-stack-context`** — graph-layers section rewritten from
+  "three layers" to **seven layers** with the new
+  `cue_schema` / `workflow` / `app_render` / `rendered_resource`
+  rows, common answer patterns, and the manual-only renderer block
+  describing `scripts/render_apps.py` + `scripts/diff_apps.py`.
+- **`agent-orchestrator`** — new "Graph layers covered (v0.36+)"
+  paragraph after the tool-catalog section. Tells the orchestrator
+  to answer app-deploy questions via `rendered_into` → `renders`
+  walks, and to surface "manual run required" instead of concluding
+  no deploy when the rendered layer is empty.
+- **`/kub-graph-refresh`** — Step 3 now mentions the v0.34/v0.36/
+  v0.38 layer pills (`IaC files / TG state / K8s / Docs / CUE /
+  CI/CD / Applications`) and adds an optional block on populating
+  the *Applications* (rendered) layer via the manual scripts.
+- **`/kub-stack-context`** — Step 5 lists the three new graph types.
+- **`/kub-repo-locate`** — classification step gains "CUE schema" and
+  "CI/CD job" categories with the matching `query_nodes` queries.
+
+- **BUMP:** apm.yml 0.39.1 → 0.40.0.
+
 ## v0.39.1 — 2026-05-06
 
 - **MOVE:** the Stats & overlays section becomes the **dashboard

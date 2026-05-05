@@ -95,6 +95,12 @@ The Orchestrator routinely uses: `mcp__kuberly-platform__*` (graph + session ops
 
 **Tool catalog (cost-aware tool picking).** `apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/TOOLS.md` lists every kuberly-platform MCP tool with its purpose, typical output size, and which personas use it. Read it once at session start to know what's cheap (`query_nodes`, `get_neighbors`) vs. medium (`drift`, `module_resources`) before deciding which tool answers the question.
 
+**Graph layers covered (v0.36+).** Beyond the classic four (`static`, `state`, `k8s`, `docs`), the graph also indexes:
+
+- **`schema`** — `cue_schema` nodes for every `cue/**/*.cue`. Use `query_nodes(node_type="cue_schema")` to enumerate.
+- **`ci_cd`** — `workflow` nodes for every `.github/workflows/*.yml`, plus `references` edges to the `module:` / `component:` ids each workflow deploys. Answer "which workflow deploys this module" with `get_neighbors("module:aws/<m>")` and walk inbound `references`.
+- **`rendered`** (v0.38+, manual) — `app_render:<env>/<app>` umbrellas + `rendered_resource:<env>/<app>/<Kind>/<name>` leaves. Populated only after the operator runs `scripts/render_apps.py` (and optionally `scripts/diff_apps.py`); answer "what does this app actually deploy" with `get_neighbors("app:<env>/<app>")` and follow `rendered_into` → `renders`. If the rendered layer is empty, surface "manual run required" rather than concluding the app deploys nothing.
+
 Personas declare a minimal `tools:` subset in their frontmatter — they pay schema-load cost only for the tools they will actually invoke. If a persona needs a tool outside its curated set for a one-off (rare), spawn an `Explore` subagent for that single query rather than widening the persona's tools list.
 
 ## Persona roster

@@ -22,9 +22,23 @@ _RAW_TOOLS: list[dict[str, Any]] = [
     {
         "name": "query_nodes",
         "description": (
-            "Filter graph nodes by type (environment, component, shared-infra, "
-            "application, module, cloud_provider, resource), environment name, "
-            "and/or name substring."
+            "Filter graph nodes by type, environment, and/or name substring. "
+            "Recognized node types (v0.40.0):\n"
+            "  - environment, shared-infra, cloud_provider — cluster spine\n"
+            "  - module, component, application — IaC + app catalog\n"
+            "  - resource — Terraform-state vertex (schema 2/3, see query_resources)\n"
+            "  - k8s_resource — live cluster vertex (see query_k8s)\n"
+            "  - doc — README / runbook / ADR / OpenSpec entry\n"
+            "  - cue_schema — `cue/**/*.cue` schema file (v0.36.0+)\n"
+            "  - workflow — `.github/workflows/*.yml` CI/CD job (v0.36.0+)\n"
+            "  - app_render — per-application umbrella for CUE-rendered manifests "
+            "(v0.38.0+; populated by `scripts/render_apps.py` → "
+            "`.kuberly/rendered_apps_<env>.json`)\n"
+            "  - rendered_resource — leaf rendered k8s manifest under an app_render "
+            "(Deployment, Service, ExternalSecret, VirtualService, ...)\n"
+            "Each node carries `source_layer` ∈ {static, state, k8s, docs, schema, "
+            "ci_cd, rendered}; that's the same axis as the layer-toggle pills in the "
+            "graph view."
         ),
         "inputSchema": {
             "type": "object",
@@ -104,10 +118,13 @@ _RAW_TOOLS: list[dict[str, Any]] = [
         "name": "graph_index",
         "defer_loading": True,
         "description": (
-            "Meta-tool. Returns a summary of every graph layer that's loaded (static, state, "
-            "k8s, docs), node counts by type, edge counts by relation, cross-layer bridges that "
-            "fired (IRSA, configures_module, depends_on, mentions), and overlay file freshness "
-            "timestamps. Use at the start of a session to know what data you have."
+            "Meta-tool. Returns a summary of every graph layer that's loaded "
+            "(static, state, k8s, docs, schema, ci_cd, rendered), node counts "
+            "by type, edge counts by relation, cross-layer bridges that fired "
+            "(IRSA `irsa_bound`, `configures_module`, `depends_on`, `mentions`, "
+            "and v0.36+ `references` / v0.38+ `renders` / `rendered_into`), and "
+            "overlay file freshness timestamps. Use at the start of a session "
+            "to know what data you have."
         ),
         "inputSchema": {"type": "object", "properties": {"format": _FORMAT_PROP}},
     },
@@ -157,7 +174,18 @@ _RAW_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "get_neighbors",
-        "description": "Get immediate incoming and outgoing neighbors of a node.",
+        "description": (
+            "Get immediate incoming and outgoing neighbors of a node, with the "
+            "edge `relation` for each. Common relations: `depends_on`, `contains`, "
+            "`configures`, `configures_module`, `mentions`, `irsa_bound`, "
+            "`reads_configmap`, `reads_secret`, `uses_sa`, `selects`, `provides`, "
+            "`references` (v0.36+ workflow→module/component), `renders` / "
+            "`rendered_into` (v0.38+ app_render → rendered_resource and "
+            "application → app_render). Useful answer paths: 'which workflow "
+            "deploys module X' (inbound `references`), 'what does this app render "
+            "into' (outbound `renders`), 'which SA assumes this IAM role' (inbound "
+            "`irsa_bound`)."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
