@@ -2497,49 +2497,122 @@ def _card_session_list(result: dict, args: dict, graph: KuberlyPlatform) -> str:
 
 # Compact one-line summaries for chained calls (`format=compact`).
 def _compact_summary(name: str, result, args: dict) -> str:
+    """Compact: structured-but-decoration-free output for sub-agents.
+
+    Trades the rich Markdown card for the actual data the caller will use
+    next: node IDs, neighbor lists, drift envelopes — at roughly 1/10 the
+    tokens. Default for MCP `tools/call` since v0.13.4. Pass `format: card`
+    explicitly when the orchestrator wants human-readable Markdown.
+    """
     if isinstance(result, dict) and "error" in result:
         return f"err {name}: {result['error']}"
+
     if name == "query_nodes":
-        return f" query_nodes: {len(result)} matches"
+        if not result:
+            return "query_nodes: 0"
+        # One id per line; preserve order. ~10 tok per id beats ~50 tok per row.
+        ids = [n.get("id") or n.get("name") or "?" for n in result]
+        return f"query_nodes: {len(result)}\n" + "\n".join(ids)
+
     if name in ("get_node", "get_neighbors"):
-        return (f" {name}: `{result.get('node','?')}` "
-                f"· in={len(result.get('incoming',[]))} "
-                f"· out={len(result.get('outgoing',[]))}")
+        info = result.get("node_info") or {}
+        node = result.get("node") or "?"
+        ntype = info.get("type") or "?"
+        nlabel = info.get("label") or ""
+        head = f"node: {node} ({ntype}{', '+nlabel if nlabel and nlabel!=node else ''})"
+        # Edge entries: incoming uses 'source', outgoing uses 'target'.
+        def _fmt(edges, peer_key, label):
+            if not edges:
+                return f"{label}: -"
+            parts = []
+            for e in edges[:30]:
+                rel = e.get("relation") or ""
+                peer = e.get(peer_key) or "?"
+                parts.append(f"{peer}{f'({rel})' if rel else ''}")
+            extra = "" if len(edges) <= 30 else f" +{len(edges)-30}"
+            return f"{label}: " + ", ".join(parts) + extra
+        return "\n".join([
+            head,
+            _fmt(result.get("incoming") or [], "source", "incoming"),
+            _fmt(result.get("outgoing") or [], "target", "outgoing"),
+        ])
+
     if name == "blast_radius":
-        return (f" blast_radius `{result.get('node','?')}`: "
+        node = result.get("node", "?")
+        head = (f"blast_radius: {node} "
                 f"down={result.get('downstream_count',0)} "
                 f"up={result.get('upstream_count',0)}")
+        # downstream/upstream are usually dicts {id: {...}}; flatten to ids.
+        def _ids(block):
+            if not block: return ""
+            if isinstance(block, dict):
+                return ", ".join(list(block.keys())[:30])
+            return ", ".join(str(x) for x in block[:30])
+        ds = _ids(result.get("downstream"))
+        us = _ids(result.get("upstream"))
+        return head + (f"\ndownstream: {ds}" if ds else "") + (f"\nupstream: {us}" if us else "")
+
     if name == "shortest_path":
-        return f" shortest_path: length {result.get('length','?')}"
+        path = result.get("path") or []
+        return f"shortest_path: length={result.get('length','?')} via " + " -> ".join(path[:20])
+
     if name == "drift":
-        comps = len(result.get("components", {}))
-        apps = len(result.get("applications", {}))
-        return f" drift: components in {comps} env(s), apps in {apps} env(s)"
+        comps = result.get("components", {}) or {}
+        apps = result.get("applications", {}) or {}
+        out = []
+        for env, missing in comps.items():
+            if missing:
+                out.append(f"comp/{env}: missing {', '.join(missing[:20])}")
+        for env, missing in apps.items():
+            if missing:
+                out.append(f"app/{env}: missing {', '.join(missing[:20])}")
+        return "drift: " + ("none" if not out else "\n" + "\n".join(out))
+
     if name == "stats":
-        return (f" stats: {result.get('node_count',0)} nodes "
-                f"· {result.get('edge_count',0)} edges "
-                f"· {len(result.get('critical_nodes',[]))} critical")
+        crit = result.get("critical_nodes", []) or []
+        crit_ids = ", ".join(c[0] for c in crit[:5] if isinstance(c, (list, tuple))) or ""
+        return (f"stats: nodes={result.get('node_count',0)} edges={result.get('edge_count',0)}"
+                + (f"\ncritical: {crit_ids}" if crit_ids else ""))
+
     if name == "plan_persona_fanout":
-        return (f" plan: kind=`{result.get('task_kind','?')}` "
+        phases = result.get("phases", []) or []
+        line = (f"plan: kind={result.get('task_kind','?')} "
                 f"({result.get('confidence','?')}) "
-                f"· {len(result.get('phases',[]))} phases")
+                f"slug={result.get('session_slug','?')}")
+        ph_lines = []
+        for i, ph in enumerate(phases, 1):
+            mode = "par" if ph.get("parallel") else "seq"
+            approval = "yes" if ph.get("needs_approval") else "no"
+            personas = ",".join(ph.get("personas") or []) or "-"
+            ph_lines.append(f"  {i}. {ph.get('id','?')}: [{personas}] mode={mode} approval={approval}")
+        return line + (("\n" + "\n".join(ph_lines)) if ph_lines else "")
+
     if name == "session_init":
-        return (f" session `{result.get('session_slug','?')}` created "
-                f"({result.get('task_kind','?')})")
+        return (f"session_init: slug={result.get('session_slug','?')} "
+                f"kind={result.get('task_kind','?')} "
+                f"dir={result.get('session_dir','?')}")
+
     if name == "session_status":
         if result.get("_no_status_yet"):
-            return f" session `{result.get('session','?')}`: no fanout"
-        ps = result.get("phases", [])
-        done = sum(1 for p in ps if p.get("status") == "done")
-        return f" session `{result.get('session','?')}`: {done}/{len(ps)} phases done"
+            return f"session_status: {result.get('session','?')} no fanout"
+        ps = result.get("phases", []) or []
+        rows = [f"  {p.get('id','?')}: {p.get('status','?')}" for p in ps]
+        return f"session_status: {result.get('session','?')}\n" + "\n".join(rows)
+
     if name == "session_set_status":
-        return f"ok {result.get('kind','?')} `{result.get('target','?')}`: {result.get('status','?')}"
+        return f"ok set_status: {result.get('kind','?')} {result.get('target','?')}={result.get('status','?')}"
+
     if name == "session_read":
-        return f" read `{result.get('file','?')}`: {result.get('bytes',0)} B"
+        # The body is the value the caller actually wants. Return it verbatim.
+        return result.get("content") or f"read {result.get('file','?')}: {result.get('bytes',0)} B (no content)"
+
     if name == "session_write":
-        return f"ok wrote `{result.get('file','?')}`: {result.get('bytes',0)} B"
+        return f"ok write: {result.get('file','?')} {result.get('bytes',0)} B"
+
     if name == "session_list":
-        return f" session `{result.get('session','?')}`: {len(result.get('files',[]))} files"
+        files = result.get("files", []) or []
+        return f"session_list: {result.get('session','?')} {len(files)} files\n" + "\n".join(files)
+
     return f"{name}: ok"
 
 
@@ -2588,14 +2661,16 @@ def run_mcp_server(graph: KuberlyPlatform):
     """Run an MCP server over stdio that exposes graph query tools."""
     import select as _select
 
-    # All tools accept an optional `format` arg: "card" (default — rendered
-    # Markdown with status badges and tables), "json" (raw), or "compact"
-    # (one-line summary for chained calls).
+    # All tools accept an optional `format` arg.
+    # As of v0.13.4 the default is "compact" — structured-but-decoration-free
+    # output (node ids, neighbor lists, drift envelopes) at ~10x lower token
+    # cost than the rich Markdown card. Pass "card" explicitly when the
+    # orchestrator wants human-readable rendering for the user-facing summary.
     _FORMAT_PROP = {
         "type": "string",
-        "enum": ["card", "json", "compact"],
-        "default": "card",
-        "description": "Output format: card (default — rich Markdown with emoji status badges), json (raw JSON), or compact (one-line summary).",
+        "enum": ["compact", "json", "card"],
+        "default": "compact",
+        "description": "Output format. 'compact' (default, v0.13.4+) — structured plain text optimized for sub-agent token cost. 'json' — raw JSON dump. 'card' — rich Markdown for human display.",
     }
 
     TOOLS = [
@@ -2806,7 +2881,7 @@ def run_mcp_server(graph: KuberlyPlatform):
         if method == "tools/call":
             tool_name = params.get("name", "")
             tool_args = params.get("arguments", {})
-            fmt = tool_args.get("format", "card")
+            fmt = tool_args.get("format", "compact")
             try:
                 result = dispatch_tool(graph, tool_name, tool_args)
                 text = render_tool_result(tool_name, result, tool_args, graph, fmt=fmt)
