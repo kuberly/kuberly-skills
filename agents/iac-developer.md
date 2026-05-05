@@ -61,6 +61,30 @@ After fmt auto-fixes, `git add` the changes and re-run pre-commit until green. *
 - **Variables/outputs** — every one has a `description`. snake_case. `for_each` over `count`.
 - **Block ordering** in `.tf` — `count`/`for_each` first, then args, then `tags`, then `depends_on`, then `lifecycle`.
 
+## Module input edit precedence (trace-before-edit)
+
+Before editing **any** value, grep the module's `clouds/<cloud>/modules/<m>/terragrunt.hcl` to see how the input is wired. The wiring dictates the file you edit:
+
+| Wiring pattern in `terragrunt.hcl` | Edit target | Notes |
+|---|---|---|
+| `try(include.root.locals.cluster.<...>, default)` | `components/<env>/shared-infra.json` | **High blast** — affects every module reading `cluster.*`. Record in `decisions.md` why. |
+| `try(include.root.locals.components.<m>.<key>, default)` | `components/<env>/<m>.json` | The standard per-component sidecar. Add the key if absent. |
+| Hardcoded literal in `inputs = { ... }` AND value is env-specific | refactor to JSON-driven, then edit JSON | Add `try(include.root.locals.components.<m>.<key>, <current literal>)`, then put the value in `components/<env>/<m>.json`. |
+| Hardcoded literal AND value is cross-env-constant | edit literal in `terragrunt.hcl` | Only when the value genuinely should not vary per env. |
+| Variable doesn't exist on the module yet | add `variable "x" {}` in `clouds/<cloud>/modules/<m>/variables.tf`, wire in `.tf` source, expose via `inputs` | Last-resort path — extends the module's surface. |
+
+**Default preference order:** JSON sidecar → terragrunt.hcl literal → `variables.tf` extension. Pick the first applicable row top-down.
+
+When `scope.md` lists an "Edit target" line, trust it; the orchestrator already traced the wiring. Only re-derive if `scope.md` is silent on this.
+
+## Shared-infra awareness
+
+`components/<env>/shared-infra.json` is the cluster/runtime-group spine — consumed by `ecs_infra`, `ecs_app`, `lambda_infra`, `lambda_app`, `vpc`, `eks`, and many others via `include.root.locals.cluster.*`. Any edit to it has cluster-wide blast radius. If `scope.md` flags a shared-infra edit:
+
+1. Confirm the change is genuinely a cluster-level concern (region, account, cluster name/version, IAM root).
+2. Do **not** add per-component knobs to `shared-infra.json` — those belong in `components/<env>/<m>.json`.
+3. Surface the edit explicitly in your reply ("touched shared-infra.json: <keys>") so the orchestrator can record it in `decisions.md`.
+
 ## Reporting back
 
 Reply to the orchestrator must include:

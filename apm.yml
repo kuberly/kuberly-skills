@@ -3,7 +3,7 @@
 #   - git@github.com:kuberly/kuberly-skills.git#vX.Y.Z   (SSH)
 #   - github.com/kuberly/kuberly-skills#vX.Y.Z           (HTTPS)
 name: kuberly-skills
-version: 0.15.0
+version: 0.16.0
 description: >-
   Kuberly org agent skills for kuberly-stack and customer forks (Cursor, Claude Code, Codex).
 type: hybrid

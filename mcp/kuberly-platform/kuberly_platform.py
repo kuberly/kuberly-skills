@@ -942,6 +942,95 @@ class KuberlyPlatform:
             },
         }
 
+    # ---- Edit-target precedence helpers (Rule A + Rule B) ----
+
+    # Substring patterns indicating a module reads cluster-spine config from
+    # shared-infra.json. Covers both root-level (include.root.locals.cluster)
+    # and per-env (include.env.locals.cluster_config) wiring patterns observed
+    # across kuberly-stack modules.
+    _CLUSTER_SPINE_PATTERNS = (
+        "include.root.locals.cluster",
+        "include.env.locals.cluster",
+        "local.cluster_config",
+        "locals.cluster_config",
+    )
+
+    def _classify_input_wiring(self, module_node: dict) -> dict:
+        """Classify how a module's terragrunt.hcl sources its inputs.
+
+        Returns dict with:
+            reads_cluster: bool — references the cluster spine
+                (any of _CLUSTER_SPINE_PATTERNS)
+            tg_path:       str — path to the module's terragrunt.hcl, or "" if missing
+
+        Note: JSON-sidecar detection is graph-based, NOT regex-based — the
+        presence of `component:<env>/<label>` in the graph is the canonical
+        signal that `components/<env>/<label>.json` exists. Module terragrunt.hcl
+        wiring uses several conventions (include.root.locals.components,
+        jsondecode(file(...))), so substring matches are unreliable.
+        """
+        path = module_node.get("path", "")
+        tg_path = ""
+        reads_cluster = False
+        if path:
+            tg = self.repo / path / "terragrunt.hcl"
+            if tg.is_file():
+                tg_path = str(tg.relative_to(self.repo))
+                try:
+                    text = tg.read_text(encoding="utf-8", errors="ignore")
+                    reads_cluster = any(p in text for p in self._CLUSTER_SPINE_PATTERNS)
+                except OSError:
+                    pass
+        return {"reads_cluster": reads_cluster, "tg_path": tg_path}
+
+    def _has_json_sidecar(self, env: str, module_label: str) -> bool:
+        """True iff `components/<env>/<module_label>.json` is present in the graph."""
+        return f"component:{env}/{module_label}" in self.nodes
+
+    def _envs_for_module(self, module_id: str) -> list[str]:
+        """List environments where a component invokes the module."""
+        envs: list[str] = []
+        for e in self.edges:
+            if e.get("target") != module_id:
+                continue
+            src = e.get("source", "")
+            src_node = self.nodes.get(src, {})
+            if src_node.get("type") in {"component", "application"} and src.startswith(("component:", "app:")):
+                # source id shape: "component:<env>/<name>" or "app:<env>/<name>"
+                payload = src.split(":", 1)[1]
+                env = payload.split("/", 1)[0] if "/" in payload else ""
+                if env and env not in envs:
+                    envs.append(env)
+        return envs
+
+    def _shared_infra_consumers(self) -> list[str]:
+        """List module ids whose terragrunt.hcl reads cluster-spine config.
+
+        Cached on the graph instance — scans clouds/*/modules/*/terragrunt.hcl
+        once for any of `_CLUSTER_SPINE_PATTERNS`.
+        """
+        if hasattr(self, "_si_consumers_cache"):
+            return self._si_consumers_cache
+        consumers: list[str] = []
+        for nid, node in self.nodes.items():
+            if node.get("type") != "module":
+                continue
+            path = node.get("path", "")
+            if not path:
+                continue
+            tg = self.repo / path / "terragrunt.hcl"
+            if not tg.is_file():
+                continue
+            try:
+                text = tg.read_text(encoding="utf-8", errors="ignore")
+                if any(p in text for p in self._CLUSTER_SPINE_PATTERNS):
+                    consumers.append(nid)
+            except OSError:
+                continue
+        consumers.sort()
+        self._si_consumers_cache = consumers
+        return consumers
+
     def quick_scope(self, task: str,
                     named_modules: list[str] | None = None,
                     target_envs:   list[str] | None = None) -> dict:
@@ -1048,11 +1137,65 @@ class KuberlyPlatform:
         else:
             if affected:
                 lines += ["## Affected"] + affected + [""]
+
+            # Edit-target precedence (Rule A) — graph-based JSON detection +
+            # cluster-spine regex.
+            edit_target_lines: list[str] = []
+            shared_infra_modules: list[str] = []
+            for nid in modules:
+                node = self.nodes.get(nid, {})
+                wiring = self._classify_input_wiring(node)
+                envs = self._envs_for_module(nid)
+                if target_envs:
+                    envs = [e for e in envs if e in target_envs] or envs
+                label = node.get("label", nid.split("/", 1)[-1])
+                tg_path = wiring["tg_path"] or f"clouds/<cloud>/modules/{label}/terragrunt.hcl"
+                if wiring["reads_cluster"]:
+                    shared_infra_modules.append(nid)
+                if envs:
+                    for env in envs:
+                        if self._has_json_sidecar(env, label):
+                            edit_target_lines.append(
+                                f"- components/{env}/{label}.json (json-sidecar) — PREFERRED: per-component knobs go here"
+                            )
+                        else:
+                            edit_target_lines.append(
+                                f"- {tg_path} (hardcoded — no components/{env}/{label}.json sidecar) — refactor to a JSON-driven try() lookup before editing if value is env-specific; otherwise edit the literal"
+                            )
+                        if wiring["reads_cluster"]:
+                            edit_target_lines.append(
+                                f"- components/{env}/shared-infra.json (cluster spine) — ONLY for cluster-level keys (region, account, cluster.*); high blast — see 'Shared-infra blast' below"
+                            )
+                else:
+                    edit_target_lines.append(
+                        f"- {tg_path} — no component invoker found; verify intent before editing"
+                    )
+                edit_target_lines.append(
+                    f"- clouds/<cloud>/modules/{label}/variables.tf — LAST RESORT: only when adding a NEW variable to the module's surface"
+                )
+            if edit_target_lines:
+                lines += ["## Edit target"] + edit_target_lines + [""]
+
             blast_line_down = (f"down={len(downstream_ids)} ids="
                                + (",".join(downstream_ids[:5]) if downstream_ids else "leaf"))
             blast_line_up = (f"up={len(upstream_ids)} ids="
                              + (",".join(upstream_ids[:5]) if upstream_ids else "-"))
             lines += ["## Blast", blast_line_down, blast_line_up, ""]
+
+            # Shared-infra blast warning (Rule B) — only when at least one module
+            # reads include.root.locals.cluster.* and the orchestrator may need
+            # to edit shared-infra.json.
+            if shared_infra_modules:
+                consumers = self._shared_infra_consumers()
+                consumer_labels = [self.nodes.get(c, {}).get("label", c) for c in consumers]
+                lines += [
+                    "## Shared-infra blast",
+                    f"- modules in scope reading cluster spine: {', '.join(self.nodes.get(m, {}).get('label', m) for m in shared_infra_modules)}",
+                    f"- shared-infra.json consumers across stack ({len(consumer_labels)}): {', '.join(consumer_labels[:15])}{' …' if len(consumer_labels) > 15 else ''}",
+                    "- editing components/<env>/shared-infra.json affects ALL listed modules — record reason in decisions.md",
+                    "",
+                ]
+
             if files:
                 lines += ["## Files likely changed"] + [f"- {f}" for f in files[:10]] + [""]
             if unresolved:
