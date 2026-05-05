@@ -3,9 +3,11 @@ name: infra-orchestrator
 description: >-
   Orchestrator mode for kuberly-stack infra work. Top-level agent never edits files
   itself — delegates to named persona subagents (infra-scope-planner, iac-developer,
-  troubleshooter, app-cicd-engineer, pr-reviewer-in-context, pr-reviewer-cold,
-  findings-reconciler), manages a shared filesystem session, and enforces plan-only
-  and OpenSpec gates. Use when starting any non-trivial infra change.
+  troubleshooter, app-cicd-engineer, pr-reviewer, terragrunt-plan-reviewer,
+  findings-reconciler), manages a shared filesystem session, and enforces fmt+lint
+  verification (CI owns plan) and OpenSpec gates. Use when starting any non-trivial
+  infra change. v0.14.0+: review phase is OFF by default; pass with_review=True or
+  include 'review' in the task to opt in.
 ---
 
 # Infra Orchestrator mode
@@ -101,8 +103,8 @@ Personas are defined at `.claude/agents/<name>.md` in the consumer repo (deploye
 | **`iac-developer`** | Implement HCL/JSON/CUE edits per `scope.md` + `decisions.md`. Verifies with `pre-commit` + `terragrunt hclfmt` + `tflint`. **No plan/init** — CI owns that. | repo files (no md write) |
 | **`troubleshooter`** | Diagnose incidents from CloudWatch / CloudTrail / Loki / Prometheus / kuberly-platform. Read-only on infra. | `diagnosis.md` |
 | **`app-cicd-engineer`** | Customer app CI/CD: bootstrap GitHub Actions or CodeBuild, troubleshoot CI failures, modify existing workflows. Operates across infra repo + app repo. | repo files in either infra repo or app repo (no md write) |
-| **`pr-reviewer-in-context`** | Verify the diff with full session context: scope, decisions, OpenSpec, drift, blast radius alignment. | `findings/in-context.md` |
-| **`pr-reviewer-cold`** | Verify the diff with **no** context — pure HCL/JSON/CUE/YAML correctness. Catches what the author rationalized away. | `findings/cold.md` |
+| **`pr-reviewer`** | Verify the diff with full session context: scope, decisions, OpenSpec, drift, blast radius alignment. | `findings/in-context.md` |
+| **`pr-reviewer`** | Verify the diff with **no** context — pure HCL/JSON/CUE/YAML correctness. Catches what the author rationalized away. | `findings/cold.md` |
 | **`findings-reconciler`** | Merge the two reviews into one decision-ready list (deduped, prioritized, with discarded findings cited). | `findings/reconciled.md` |
 
 When a generic role doesn't fit the named personas, fall back to Claude Code's built-in `Explore` (research-only) or `general-purpose` (anything else).
@@ -134,8 +136,8 @@ For PR review, the canonical parallel pattern:
 
 ```
 # Round 1 — three reviews in parallel (single message):
-Agent({subagent_type: "pr-reviewer-in-context", prompt: <diff + context>})
-Agent({subagent_type: "pr-reviewer-cold",       prompt: <diff only>})
+Agent({subagent_type: "pr-reviewer", prompt: <diff + context>})
+Agent({subagent_type: "pr-reviewer",       prompt: <diff only>})
 
 # Round 2 — reconciler reads both and decides:
 Agent({subagent_type: "findings-reconciler", prompt: ...})
@@ -188,7 +190,7 @@ For each open question, prefer dispatching `infra-scope-planner` over asking the
 After every implementation pass:
 
 1. Verify (single subagent runs `pre-commit run --files <changed>` + `terragrunt hclfmt` + `tflint` per module). **No plan/init** — CI runs plan against the PR.
-2. **Parallel:** `pr-reviewer-in-context` + `pr-reviewer-cold` (single message, two `Agent` calls).
+2. **Parallel:** `pr-reviewer` (v0.14.0+: single merged reviewer; opt-in) (single message, two `Agent` calls).
 3. `findings-reconciler` reads both, produces `findings/reconciled.md`.
 4. You read the reconciled list, decide which fixes to apply.
 5. For each accepted MUST-FIX: write a task prompt under `tasks/<NN>-<slug>.md`, request approval, delegate to `iac-developer`, then re-run the review.
@@ -206,8 +208,8 @@ Stop only when the reconciler returns `Verdict: clean`. For multi-pass changes, 
 ├── plan.md              revise-infra-plan writes (when used)
 ├── diagnosis.md         troubleshooter writes (when used)
 ├── findings/
-│   ├── in-context.md    pr-reviewer-in-context writes
-│   ├── cold.md          pr-reviewer-cold writes
+│   ├── in-context.md    pr-reviewer writes
+│   ├── cold.md          pr-reviewer writes
 │   └── reconciled.md    findings-reconciler writes
 └── tasks/
     └── <NN>-<slug>.md   you write — implementation prompts for iac-developer
@@ -217,7 +219,7 @@ Stop only when the reconciler returns `Verdict: clean`. For multi-pass changes, 
 
 **Read rule:** every persona reads every file in the session dir.
 **Write rule:** every persona writes only its own assigned file.
-**Exception:** `pr-reviewer-cold` deliberately does **not** read `context.md` / `scope.md` / `decisions.md` / `plan.md` / `diagnosis.md` / sibling findings — its value is the absence of rationale.
+**Exception:** `pr-reviewer` deliberately does **not** read `context.md` / `scope.md` / `decisions.md` / `plan.md` / `diagnosis.md` / sibling findings — its value is the absence of rationale.
 
 The directory is **gitignored**; sessions are ephemeral.
 

@@ -39,8 +39,9 @@ EXPECTED_PERSONAS = {
     "iac-developer",
     "troubleshooter",
     "app-cicd-engineer",
-    "pr-reviewer-in-context",
-    "pr-reviewer-cold",
+    # v0.14.0: cold + in-context reviewers merged into a single
+    # diff-only pr-reviewer; legacy names removed.
+    "pr-reviewer",
     "findings-reconciler",
     "terragrunt-plan-reviewer",
 }
@@ -71,10 +72,16 @@ KEYWORDS = {
 
 # Persona DAG per task_kind. Each phase: id, personas, parallel, needs_approval.
 # Approval is requested only for phases that mutate the repo.
-_REVIEW_RECONCILE = [
-    {"id": "review",    "personas": ["pr-reviewer-in-context", "pr-reviewer-cold"],
-     "parallel": True,  "needs_approval": False},
-    {"id": "reconcile", "personas": ["findings-reconciler"],
+#
+# v0.14.0: review phase removed from DEFAULT DAGs.
+#   Rationale: cold + in-context parallel review averaged ~43k tokens per
+#   session for marginal additional signal — CI runs terraform_validate +
+#   tflint on the PR and the human reviews the diff in GitHub/Bitbucket.
+#   Pass `with_review=True` to plan_persona_fanout (or include "review"
+#   in the task) to opt in. When opted in, a SINGLE merged pr-reviewer
+#   runs (replaces the old cold + in-context pair).
+_REVIEW_PHASE = [
+    {"id": "review", "personas": ["pr-reviewer"],
      "parallel": False, "needs_approval": False},
 ]
 
@@ -82,7 +89,6 @@ PERSONA_DAGS = {
     "resource-bump": [
         {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
         {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
-        *_REVIEW_RECONCILE,
     ],
     "incident": [
         # Diagnose + scope in parallel: troubleshooter looks at observability,
@@ -90,7 +96,6 @@ PERSONA_DAGS = {
         {"id": "diagnose",  "personas": ["troubleshooter", "infra-scope-planner"],
          "parallel": True,  "needs_approval": False},
         {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
-        *_REVIEW_RECONCILE,
     ],
     "new-application": [
         # Adding a new application is a CUE / applications/ JSON change
@@ -98,33 +103,27 @@ PERSONA_DAGS = {
         # the implementer touches applications/, not clouds/.
         {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
         {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
-        *_REVIEW_RECONCILE,
     ],
     "new-database": [
         # New DB is usually a new components/<env>/<db>.json + module reference.
         {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
         {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
-        *_REVIEW_RECONCILE,
     ],
     "new-module": [
         {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
         {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
-        *_REVIEW_RECONCILE,
     ],
     "drift-fix": [
         {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
         {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
-        *_REVIEW_RECONCILE,
     ],
     "cicd": [
         {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
         {"id": "implement", "personas": ["app-cicd-engineer"],   "parallel": False, "needs_approval": True},
-        *_REVIEW_RECONCILE,
     ],
     "cleanup": [
         {"id": "scope",     "personas": ["infra-scope-planner"], "parallel": False, "needs_approval": False},
         {"id": "implement", "personas": ["iac-developer"],       "parallel": False, "needs_approval": True},
-        *_REVIEW_RECONCILE,
     ],
     # Plan review: kuberly platform posts `terragrunt run plan` output as PR /
     # commit comments. The plan-reviewer reads those, checks against scope.md,
@@ -949,14 +948,30 @@ class KuberlyPlatform:
                             target_envs:   list[str] | None = None,
                             current_branch: str | None = None,
                             session_name:  str | None = None,
-                            task_kind:     str | None = None) -> dict:
+                            task_kind:     str | None = None,
+                            with_review:   bool = False) -> dict:
         """One-shot orchestration plan: classify task, build scope slice, run gates,
         emit persona DAG with parallelism markers, and produce a ready-to-paste
-        context.md body."""
+        context.md body.
+
+        v0.14.0: review phase removed from default DAGs. Pass `with_review=True`
+        (or include the literal word 'review' in the task description) to opt
+        in. When opted in, a single merged `pr-reviewer` runs after implement.
+        """
         if task_kind:
             confidence = "high"  # caller-overridden
         else:
             task_kind, confidence = self.infer_task_kind(task)
+
+        # Auto-detect review opt-in from task text. Avoids forcing the
+        # orchestrator to remember the parameter for "do X and review the
+        # diff" prompts. Disable by passing with_review=False explicitly.
+        if not with_review and task and " review" in (" " + (task or "").lower()):
+            # Cheap heuristic: any unambiguous "review" mention opts in.
+            # Conflicts with task_kind=plan-review (already its own flow);
+            # leave that one alone.
+            if task_kind != "plan-review":
+                with_review = True
 
         scope = self.scope_for_change(named_modules, target_envs)
         gates = self.gate_check(named_modules, current_branch, task)
@@ -984,6 +999,17 @@ class KuberlyPlatform:
                 confidence = "high"
 
         recommended = self.recommend_personas(task_kind)
+        phases = recommended["phases"]
+
+        # Append the optional review phase. Skipped when:
+        #   - the DAG is already a special flow (plan-review, stop-target-absent,
+        #     unknown — these have their own structure)
+        #   - the implement phase doesn't exist (review without code change is moot)
+        if with_review and task_kind not in {"plan-review", "stop-target-absent", "unknown"}:
+            phases = phases + [
+                {"id": "review", "personas": ["pr-reviewer"],
+                 "parallel": False, "needs_approval": False},
+            ]
 
         slug = _slugify(session_name or task)
         context_md = self._build_context_md(
@@ -992,14 +1018,15 @@ class KuberlyPlatform:
         )
 
         return {
-            "task_kind":  task_kind,
-            "confidence": confidence,
-            "scope":      scope,
-            "gates":      gates,
-            "phases":     recommended["phases"],
+            "task_kind":   task_kind,
+            "confidence":  confidence,
+            "scope":       scope,
+            "gates":       gates,
+            "phases":      phases,
             "session_slug": slug,
             "context_md":  context_md,
             "unresolved_modules": unresolved_modules,
+            "with_review": with_review,
         }
 
     def _build_context_md(self, session: str, task: str,
@@ -2766,6 +2793,7 @@ def run_mcp_server(graph: KuberlyPlatform):
                     "current_branch": {"type": "string", "description": "Result of `git rev-parse --abbrev-ref HEAD` — enables the branch gate."},
                     "session_name":   {"type": "string", "description": "Optional override for the session slug; defaults to slugified task."},
                     "task_kind":      {"type": "string", "enum": ["resource-bump", "incident", "new-application", "new-database", "new-module", "drift-fix", "cicd", "cleanup", "plan-review", "unknown", "stop-target-absent"], "description": "Override task_kind inference. Note: `stop-target-absent` is normally set automatically when `named_modules` are supplied but none resolve to graph nodes — the orchestrator should not pass this value, the planner emits it."},
+                    "with_review":    {"type": "boolean", "default": False, "description": "Append a final `review` phase running the merged `pr-reviewer` (single agent, diff-only, ~5-8k tokens). v0.14.0+: review is OFF by default to save tokens — CI runs terraform_validate/tflint and the human PR review covers normal cases. Set true for high-risk changes (shared-infra blast, security/IAM). Auto-enabled when the task description literally contains the word 'review'."},
                     "format":         _FORMAT_PROP,
                 },
                 "required": ["task"],
@@ -2937,6 +2965,7 @@ def run_mcp_server(graph: KuberlyPlatform):
                 current_branch=args.get("current_branch"),
                 session_name=args.get("session_name"),
                 task_kind=args.get("task_kind"),
+                with_review=bool(args.get("with_review", False)),
             )
         elif name == "session_init":
             return g.session_init(

@@ -115,16 +115,25 @@ class TaskKindInferenceTests(unittest.TestCase):
 
 class PersonaDAGTests(unittest.TestCase):
     def test_resource_bump_dag_shape(self) -> None:
+        # v0.14.0: review phase removed from default DAGs.
         dag = PERSONA_DAGS["resource-bump"]
         ids = [p["id"] for p in dag]
-        self.assertEqual(ids, ["scope", "implement", "review", "reconcile"])
-        # Implementation phase requires approval; review is parallel.
+        self.assertEqual(ids, ["scope", "implement"])
         impl = next(p for p in dag if p["id"] == "implement")
-        review = next(p for p in dag if p["id"] == "review")
         self.assertTrue(impl["needs_approval"])
-        self.assertTrue(review["parallel"])
-        self.assertEqual(review["personas"],
-                         ["pr-reviewer-in-context", "pr-reviewer-cold"])
+
+    def test_default_dags_have_no_review_phase(self) -> None:
+        # v0.14.0: every default DAG ends at implement (or has its own
+        # bespoke shape — plan-review, stop-target-absent, unknown).
+        special = {"plan-review", "stop-target-absent", "unknown"}
+        for kind, dag in PERSONA_DAGS.items():
+            if kind in special:
+                continue
+            ids = [p["id"] for p in dag]
+            self.assertNotIn("review", ids,
+                             f"{kind} DAG should NOT include review by default; got {ids}")
+            self.assertNotIn("reconcile", ids,
+                             f"{kind} DAG should NOT include reconcile by default; got {ids}")
 
     def test_cicd_uses_app_cicd_engineer_not_iac_developer(self) -> None:
         dag = PERSONA_DAGS["cicd"]
@@ -153,6 +162,12 @@ class PersonaDAGTests(unittest.TestCase):
         from kuberly_platform import EXPECTED_PERSONAS
         self.assertIn("terragrunt-plan-reviewer", EXPECTED_PERSONAS)
 
+    def test_v0_14_legacy_reviewers_not_in_expected_set(self) -> None:
+        from kuberly_platform import EXPECTED_PERSONAS
+        self.assertNotIn("pr-reviewer-in-context", EXPECTED_PERSONAS)
+        self.assertNotIn("pr-reviewer-cold", EXPECTED_PERSONAS)
+        self.assertIn("pr-reviewer", EXPECTED_PERSONAS)
+
 
 class PlanPersonaFanoutTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -172,8 +187,10 @@ class PlanPersonaFanoutTests(unittest.TestCase):
         self.assertIn(plan["task_kind"], {"incident", "resource-bump"})
         self.assertIn("module:aws/loki", plan["scope"]["modules"])
         ids = [p["id"] for p in plan["phases"]]
-        self.assertIn("review", ids)
-        self.assertIn("reconcile", ids)
+        # v0.14.0: default DAG ends at implement; review is opt-in.
+        self.assertIn("implement", ids)
+        self.assertNotIn("review", ids)
+        self.assertNotIn("reconcile", ids)
         # context.md should mention the module
         self.assertIn("module:aws/loki", plan["context_md"])
 
@@ -223,6 +240,53 @@ class PlanPersonaFanoutTests(unittest.TestCase):
         synced = plan["gates"]["personas_synced"]
         self.assertEqual(synced["verdict"], "ok")
         self.assertEqual(synced["found"], len(EXPECTED_PERSONAS))
+
+    def test_review_opt_out_by_default(self) -> None:
+        # v0.14.0: review phase is OFF by default to save tokens.
+        plan = self.g.plan_persona_fanout(
+            task="bump loki memory",
+            named_modules=["loki"],
+            current_branch="agrishko/feature",
+        )
+        ids = [p["id"] for p in plan["phases"]]
+        self.assertNotIn("review", ids)
+        self.assertFalse(plan["with_review"])
+
+    def test_review_opt_in_via_parameter(self) -> None:
+        plan = self.g.plan_persona_fanout(
+            task="bump loki memory",
+            named_modules=["loki"],
+            current_branch="agrishko/feature",
+            with_review=True,
+        )
+        ids = [p["id"] for p in plan["phases"]]
+        self.assertIn("review", ids)
+        review = next(p for p in plan["phases"] if p["id"] == "review")
+        self.assertEqual(review["personas"], ["pr-reviewer"])
+        self.assertTrue(plan["with_review"])
+
+    def test_review_auto_enabled_when_task_says_review(self) -> None:
+        plan = self.g.plan_persona_fanout(
+            task="bump loki memory and review the diff",
+            named_modules=["loki"],
+            current_branch="agrishko/feature",
+        )
+        # The 'review' word in the task should auto-opt in.
+        ids = [p["id"] for p in plan["phases"]]
+        self.assertIn("review", ids)
+        self.assertTrue(plan["with_review"])
+
+    def test_with_review_no_op_for_plan_review_kind(self) -> None:
+        # plan-review has its own DAG (terragrunt-plan-reviewer); don't
+        # tack a redundant pr-reviewer phase onto it.
+        plan = self.g.plan_persona_fanout(
+            task="review the terragrunt plan output on PR 42",
+            current_branch="agrishko/feature",
+            with_review=True,
+        )
+        self.assertEqual(plan["task_kind"], "plan-review")
+        ids = [p["id"] for p in plan["phases"]]
+        self.assertEqual(ids, ["plan-review"])  # not [plan-review, review]
 
 
 class StopTargetAbsentTests(unittest.TestCase):
@@ -426,10 +490,11 @@ class SessionStatusTests(unittest.TestCase):
         st = self.g.session_status("bump")
         self.assertNotIn("error", st)
         self.assertFalse(st.get("_no_status_yet"))
-        # Phases should match the persona DAG for resource-bump
+        # Phases should match the persona DAG for resource-bump.
+        # v0.14.0: default ends at implement; review is opt-in via with_review.
         ids = [p["id"] for p in st["phases"]]
         self.assertIn("scope", ids)
-        self.assertIn("review", ids)
+        self.assertIn("implement", ids)
         # Every persona starts queued
         for p, info in st["personas"].items():
             self.assertEqual(info["status"], "queued")
