@@ -51,3 +51,14 @@ Thumbs.db
 # Microsoft APM local cache (if you run apm in this repo)
 apm_modules/
 
+# Local venv for MCP SDK smoke tests (mcp/kuberly-platform)
+mcp/kuberly-platform/.venv-mcp/
+
+# If `apm install` is run from this repo root, APM copies skills into consumer
+# layouts — canonical authored skills live under `.apm/skills/`.
+.agents/
+.claude/
+.cursor/skills/
+.github/skills/
+.opencode/
+apm.lock.yaml

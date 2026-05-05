@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.32.0 — 2026-05-06
+
+- **CHORE:** Version bump for APM consumer pins (no MCP behavior change vs v0.31.0).
+- **BUMP:** apm.yml 0.31.0 → 0.32.0.
+
+## v0.31.0 — 2026-05-06
+
+- **CHANGE:** `kuberly_mcp/stdio_app.py` now drives stdio via **FastMCP**
+  (`mcp.server.fastmcp.FastMCP`): `mcp.run(transport="stdio")`, optional
+  `instructions`, and a **lifespan** that yields `AppRuntime` (graph +
+  injected format/telemetry callables). Tool names, JSON Schemas, dispatch,
+  rendering, and telemetry are unchanged (`manifest.py`, `dispatch.py`,
+  `render_tool_result` / `_emit_telemetry` in `kuberly_platform.py`).
+- **DETAIL:** `KuberlyFastMCP` overrides `list_tools` / `call_tool` so
+  `tools/list` still comes verbatim from `mcp_tool_objects()` while the
+  stack benefits from FastMCP’s stdio session wiring and initialization.
+- **BUMP:** apm.yml 0.30.0 → 0.31.0.
+
+## v0.30.0 — 2026-05-06
+
+- **CHANGE:** `kuberly_platform.py mcp` now uses the official PyPI **`mcp`**
+  Python SDK (`mcp.server.stdio` + low-level `Server`) instead of a hand-rolled
+  JSON-RPC readline loop. Tool schemas and dispatch live under
+  `mcp/kuberly-platform/kuberly_mcp/` (`manifest.py`, `dispatch.py`,
+  `stdio_app.py`); `render_tool_result` / `_emit_telemetry` stay in
+  `kuberly_platform.py` and are injected at startup (avoids `__main__`
+  double-import when the script is run as a file).
+- **NEW:** `requirements-mcp.txt` — pin range `mcp>=1.10,<2` for consumers.
+- **BUMP:** apm.yml 0.29.0 → 0.30.0.
+
+## v0.29.0 — 2026-05-06
+
+- **NEW:** `.kuberly/graph.html` opens on an **operator dashboard** by
+  default (KPIs, per-environment cards, cross-env drift, critical
+  hubs, module/component/application tables, IRSA map, node spotlight
+  with neighbor edges, and inline **shared-infra blast** Mermaid from
+  existing `blast_*.mmd`). The full **Cytoscape** compound graph moves
+  to a secondary **Graph** tab (lazy-init so the heavy layout runs only
+  when needed). Reuses `_compute_dashboard_data` projections — no new
+  repo scanners.
+- **NEW:** `graph_html_template.py` holds the HTML template;
+  `generate` runs `write_mermaid_dag` **before** `write_graph_html` so
+  blast diagrams embed.
+- **BUMP:** apm.yml 0.28.0 → 0.29.0.
+
 ## v0.28.0 — 2026-05-06
 
 - **FIX:** generator non-determinism made the pre-commit

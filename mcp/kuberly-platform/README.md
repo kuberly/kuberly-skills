@@ -6,11 +6,17 @@ Python **Model Context Protocol** server and **`generate`** CLI for Terragrunt/O
 
 `python3 scripts/mcp/kuberly-platform/kuberly_platform.py mcp --repo .`
 
+**MCP runtime dependency (v0.30.0+):** the stdio server uses the official PyPI [`mcp`](https://pypi.org/project/mcp/) package (**FastMCP** / `mcp.server.fastmcp` for stdio since v0.31.0; `mcp>=1.10`). Install it into the same interpreter that launches the server, for example:
+
+`pip install -r scripts/mcp/kuberly-platform/requirements-mcp.txt`
+
+(or `pip install 'mcp>=1.10'`). Without it, `kuberly_platform.py mcp` exits with code 2 and a short stderr hint.
+
 Use `${workspaceFolder}` in Cursor for `--repo` when using absolute workspace roots.
 
 Canonical source lives in **kuberly-skills**; do not fork the script inside customer repos — extend here and release a new tag.
 
-**Generated artifacts** (v0.26.0+) land under `.kuberly/` at the repo root: `.kuberly/graph.json`, `.kuberly/graph.html`, `.kuberly/GRAPH_REPORT.md`, `.kuberly/module_dag.mmd`, `.kuberly/env_*.mmd`, plus state/k8s/docs overlays. The pre-commit / SessionStart hook regenerates these on each commit / session start. (v0.25.0 used `kuberly/`; migrate with `git mv kuberly .kuberly`.)
+**Generated artifacts** (v0.26.0+) land under `.kuberly/` at the repo root: `.kuberly/graph.json`, `.kuberly/graph.html` (v0.29.0+: dashboard + Graph tab for Cytoscape; ships `graph_html_template.py` beside `kuberly_platform.py`), `.kuberly/GRAPH_REPORT.md`, `.kuberly/module_dag.mmd`, `.kuberly/env_*.mmd`, `.kuberly/blast_*.mmd`, plus state/k8s/docs overlays. The pre-commit / SessionStart hook regenerates these on each commit / session start. (v0.25.0 used `kuberly/`; migrate with `git mv kuberly .kuberly`.)
 
 ## State-overlay graph (v0.17.0+)
 

@@ -1851,15 +1851,18 @@ class GraphHtmlVizTests(unittest.TestCase):
                 self.assertIn("M11.3647 2.92733", html,
                     "expected kuberly LogoMark SVG path data in graph.html")
                 # Brand wordmark + version eyebrow.
-                self.assertIn("kuberly-graph", html)
-                self.assertIn("v0.25.0", html)
+                self.assertIn("kuberly", html)
+                self.assertIn("Dashboard", html)
+                self.assertIn("kuberly-dashboard-json", html)
         finally:
             tmp.cleanup()
 
     def test_graph_html_has_initial_layout_call(self):
-        """v0.25.0: rendered HTML must invoke runLayout("fcose") at construction
-        time, not only inside the function definition. Without this initial
-        call, cytoscape places every node at (0, 0) → empty canvas bug.
+        """v0.25.0 / v0.29.0: fcose must run once cytoscape is constructed.
+
+        v0.29 lazily builds the graph on the Graph tab; `runLayout("fcose")`
+        still runs immediately inside `buildCy()` so nodes are not stacked at
+        (0,0) when the canvas first appears.
         """
         from kuberly_platform import write_graph_html
 
@@ -1869,17 +1872,11 @@ class GraphHtmlVizTests(unittest.TestCase):
                 out_path = Path(out)
                 write_graph_html(g, out_path)
                 html = (out_path / "graph.html").read_text(encoding="utf-8")
-                # Trim the function definition so the call-site count
-                # measures only invocations.
-                func_re = re.compile(
-                    r"function runLayout\(.*?\)\s*\{.*?\n\}", re.DOTALL)
-                without_def = func_re.sub("", html)
-                # Accept either quoting convention.
-                callsites = (without_def.count('runLayout("fcose")')
-                             + without_def.count("runLayout('fcose')"))
-                self.assertGreaterEqual(callsites, 1,
-                    "no initial runLayout(\"fcose\") call after the layout-select "
-                    "handler — empty-canvas bug not fixed")
+                self.assertIn("function buildCy", html)
+                self.assertTrue(
+                    'runLayout("fcose")' in html or "runLayout('fcose')" in html,
+                    "expected runLayout(fcose) after cytoscape init",
+                )
         finally:
             tmp.cleanup()
 

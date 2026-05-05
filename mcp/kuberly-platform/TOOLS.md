@@ -1,5 +1,10 @@
 # kuberly-platform MCP — tool catalog
 
+Implementation: Python package `kuberly_mcp/` (`manifest.py` = JSON schemas for
+`tools/list`, `dispatch.py` = graph routing, `stdio_app.py` = **FastMCP** stdio
+app on the official `mcp` SDK). The CLI entry remains `kuberly_platform.py mcp`,
+which injects formatting (`render_tool_result`) and telemetry.
+
 A flat metadata table of every tool the `kuberly-platform` MCP server exposes,
 plus a hint at typical token cost. The orchestrator reads this when planning
 ("what's the cheapest way to answer X?"). Personas declare a tools-list

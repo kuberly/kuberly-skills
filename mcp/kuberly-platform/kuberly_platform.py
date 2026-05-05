@@ -4,7 +4,7 @@ kuberly-platform: Knowledge graph generator for kuberly-stack Terragrunt/OpenTof
 
 Parses components, applications, modules, and their dependencies to produce:
   - graph.json  — queryable graph structure
-  - graph.html  — interactive cytoscape.js compound-node visualization
+  - graph.html  — operator dashboard (default) + cytoscape graph tab
   - GRAPH_REPORT.md — summary with critical nodes, dependency chains, and cross-env drift
 """
 
@@ -21,6 +21,10 @@ import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+from graph_html_template import GRAPH_HTML_TEMPLATE_RAW
+
+_GRAPH_HTML_TEMPLATE = string.Template(GRAPH_HTML_TEMPLATE_RAW)
 
 
 def _b64_to_float_list(b64: str) -> list[float]:
@@ -2389,9 +2393,12 @@ def write_graph_json(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = F
 
 
 def _node_source_layer(node: dict) -> str:
-    """Classify a node into one of {static, state, k8s, docs} for the
-    cytoscape viz color encoding. The graph builder doesn't always set
-    a `source` attr explicitly, so we derive it from type / id prefix.
+    """Classify a node into one of {static, state, k8s, docs}.
+
+    The graph builder doesn't always set a `source` attr explicitly, so
+    we derive it from type / id prefix. Used by the dashboard for the
+    layer-distribution chart and previously by the cytoscape viz for
+    color encoding.
     """
     ntype = node.get("type", "") or ""
     nid = node.get("id", "") or ""
@@ -2404,6 +2411,435 @@ def _node_source_layer(node: dict) -> str:
     if (node.get("source") or "") == "state":
         return "state"
     return "static"
+
+
+def _read_kuberly_skills_version(repo: Path) -> str:
+    """Best-effort read of the kuberly-skills version for the dashboard
+    eyebrow chip.
+
+    Two cases: (a) generating against a consumer repo — version lives at
+    `apm_modules/kuberly/kuberly-skills/apm.yml`; (b) generating against
+    the kuberly-skills repo itself — version lives at the repo's own
+    `apm.yml`. Returns "" if neither is found / parseable.
+    """
+    candidates = [
+        repo / "apm_modules" / "kuberly" / "kuberly-skills" / "apm.yml",
+        repo / "apm.yml",
+    ]
+    for p in candidates:
+        if not p.is_file():
+            continue
+        try:
+            for line in p.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("version:"):
+                    v = line.split(":", 1)[1].strip().strip('"').strip("'")
+                    if v and v[0].isdigit():
+                        return f"v{v}"
+        except OSError:
+            continue
+    return ""
+
+
+def _read_state_overlay_snapshot_times(repo: Path) -> dict[str, str]:
+    """Map environment name -> `generated_at` from `.kuberly/state_overlay_*.json`."""
+    out: dict[str, str] = {}
+    kd = repo / ".kuberly"
+    if not kd.is_dir():
+        return out
+    for p in sorted(kd.glob("state_overlay_*.json")):
+        if not p.stem.startswith("state_overlay_"):
+            continue
+        env = p.stem[len("state_overlay_") :]
+        data = load_json_safe(p)
+        ga = (data or {}).get("generated_at")
+        if isinstance(ga, str) and ga:
+            out[env] = ga
+    return out
+
+
+def _collect_blast_mermaid_files(out_dir: Path) -> list[dict[str, str]]:
+    """Load `blast_<env>.mmd` written by `write_mermaid_dag` (shared-infra blast)."""
+    diagrams: list[dict[str, str]] = []
+    for p in sorted(out_dir.glob("blast_*.mmd")):
+        env = p.stem.replace("blast_", "", 1)
+        try:
+            src = p.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if src:
+            diagrams.append({"env": env, "source": src})
+    return diagrams
+
+
+def _openspec_change_folder_count(repo: Path) -> int:
+    changes = repo / "openspec" / "changes"
+    if not changes.is_dir():
+        return 0
+    return sum(1 for e in changes.iterdir() if e.is_dir() and not e.name.startswith("."))
+
+
+def _json_for_inline_script(obj: object) -> str:
+    """Serialize JSON for embedding inside `<script type=\"application/json\">`."""
+    return (
+        json.dumps(obj, default=str, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def _compute_dashboard_data(
+    graph: KuberlyPlatform, out_dir: Path | None = None
+) -> dict:
+    """Build the dashboard JSON payload — read-only against the graph.
+
+    Reuses `compute_stats`, `cross_env_drift`, and `_node_source_layer`.
+    No new scanners; everything here is a projection over already-loaded
+    nodes / edges / overlay metadata.
+    """
+    nodes = graph.nodes
+    edges = graph.edges
+    stats = graph.compute_stats()
+    drift = graph.cross_env_drift()
+
+    # In/out degree (re-computed from edges to avoid recomputing in
+    # `compute_stats` and to give all nodes a degree even if they're
+    # outside the top-10 critical list).
+    in_deg: dict[str, int] = defaultdict(int)
+    out_deg: dict[str, int] = defaultdict(int)
+    for e in edges:
+        out_deg[e["source"]] += 1
+        in_deg[e["target"]] += 1
+
+    by_type: dict[str, list] = defaultdict(list)
+    for n in nodes.values():
+        by_type[n.get("type", "")].append(n)
+
+    envs = sorted(by_type.get("environment", []), key=lambda x: x.get("label", ""))
+    modules = by_type.get("module", [])
+    components = by_type.get("component", [])
+    apps = by_type.get("application", [])
+    shared_infras = by_type.get("shared-infra", [])
+    docs_nodes = by_type.get("doc", [])
+    k8s_nodes = by_type.get("k8s_resource", [])
+
+    # Per-env summaries.
+    env_data = []
+    for env in envs:
+        ename = env["label"]
+        si = next((s for s in shared_infras if s.get("environment") == ename), {})
+        env_components = [c for c in components if c.get("environment") == ename]
+        env_apps = [a for a in apps if a.get("environment") == ename]
+        env_k8s = [k for k in k8s_nodes if k.get("environment") == ename]
+        env_namespaces = sorted({k.get("k8s_namespace", "") for k in env_k8s
+                                 if k.get("k8s_namespace")})
+        env_pods = [k for k in env_k8s if k.get("k8s_kind") == "Pod"]
+        env_deployments = [k for k in env_k8s if k.get("k8s_kind") == "Deployment"]
+        env_data.append({
+            "name": ename,
+            "account_id": si.get("account_id", ""),
+            "region": si.get("region", ""),
+            "cluster_name": si.get("cluster_name", ""),
+            "components": len(env_components),
+            "applications": len(env_apps),
+            "k8s_namespaces": len(env_namespaces),
+            "k8s_pods": len(env_pods),
+            "k8s_deployments": len(env_deployments),
+            "drift_components": sorted(drift.get("components", {}).get(ename, [])),
+            "drift_apps": sorted(drift.get("applications", {}).get(ename, [])),
+        })
+
+    # Top critical nodes by in-degree (top 20 — richer than `compute_stats`'s 10).
+    ranked_deg = sorted(
+        ((nid, in_deg.get(nid, 0), out_deg.get(nid, 0)) for nid in nodes),
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    critical = []
+    for nid, ind, outd in ranked_deg[:20]:
+        n = nodes.get(nid, {})
+        critical.append({
+            "id": nid,
+            "label": n.get("label", nid),
+            "type": n.get("type", ""),
+            "provider": n.get("provider", ""),
+            "in_degree": ind,
+            "out_degree": outd,
+        })
+
+    # Provider distribution (modules only).
+    provider_counts: dict[str, int] = defaultdict(int)
+    for m in modules:
+        provider_counts[m.get("provider") or "unknown"] += 1
+    providers = [{"name": p, "modules": c}
+                 for p, c in sorted(provider_counts.items(), key=lambda x: (-x[1], x[0]))]
+
+    # Module catalog: deps / dependents / which envs use it.
+    mod_deps_count: dict[str, int] = defaultdict(int)
+    mod_dependents_count: dict[str, int] = defaultdict(int)
+    for e in edges:
+        if e.get("relation") == "depends_on":
+            if e["source"].startswith("module:"):
+                mod_deps_count[e["source"]] += 1
+            if e["target"].startswith("module:"):
+                mod_dependents_count[e["target"]] += 1
+    mod_envs: dict[str, set] = defaultdict(set)
+    for e in edges:
+        if e.get("relation") == "configures_module":
+            src = nodes.get(e["source"], {})
+            if src.get("environment"):
+                mod_envs[e["target"]].add(src["environment"])
+    module_table = []
+    for m in sorted(modules, key=lambda x: (x.get("provider") or "", x.get("label") or "")):
+        nid = m["id"]
+        desc = (m.get("description") or "").strip()
+        if len(desc) > 140:
+            desc = desc[:137] + "…"
+        module_table.append({
+            "id": nid,
+            "provider": m.get("provider") or "",
+            "name": m.get("label") or "",
+            "description": desc,
+            "deps": mod_deps_count.get(nid, 0),
+            "dependents": mod_dependents_count.get(nid, 0),
+            "envs": sorted(mod_envs.get(nid, set())),
+        })
+
+    doc_mentions_count: dict[str, int] = defaultdict(int)
+    for e in edges:
+        if e.get("relation") == "mentions" and str(e.get("target", "")).startswith(
+            "module:"
+        ):
+            doc_mentions_count[e["target"]] += 1
+    for row in module_table:
+        row["doc_mentions"] = doc_mentions_count.get(row["id"], 0)
+
+    # Applications: env, runtime, modules used.
+    app_uses: dict[str, list] = defaultdict(list)
+    for e in edges:
+        if e.get("relation") == "uses_module":
+            tgt = nodes.get(e["target"], {})
+            if tgt.get("label"):
+                app_uses[e["source"]].append(tgt["label"])
+    app_table = []
+    for a in sorted(apps, key=lambda x: (x.get("environment") or "", x.get("label") or "")):
+        app_table.append({
+            "id": a["id"],
+            "env": a.get("environment") or "",
+            "name": a.get("label") or "",
+            "runtime": a.get("runtime") or "",
+            "namespace": a.get("namespace") or "",
+            "modules_used": sorted(set(app_uses.get(a["id"], []))),
+            "image": a.get("image") or "",
+            "cluster": a.get("cluster") or "",
+        })
+
+    # Source-layer breakdown (over all nodes).
+    layer_counts: dict[str, int] = defaultdict(int)
+    for n in nodes.values():
+        layer_counts[_node_source_layer(n)] += 1
+
+    # Top edge relations.
+    rel_counts: dict[str, int] = defaultdict(int)
+    for e in edges:
+        rel_counts[e.get("relation") or ""] += 1
+    edge_relations = [{"relation": r, "count": c}
+                      for r, c in sorted(rel_counts.items(), key=lambda x: (-x[1], x[0]))[:10]]
+
+    # K8s footprint.
+    k8s_kinds: dict[str, int] = defaultdict(int)
+    for k in k8s_nodes:
+        k8s_kinds[k.get("k8s_kind") or "?"] += 1
+    irsa_bindings = []
+    for e in edges:
+        if e.get("relation") != "irsa_bound":
+            continue
+        sa = nodes.get(e["source"], {})
+        role = nodes.get(e["target"], {})
+        irsa_bindings.append({
+            "sa": sa.get("k8s_name") or sa.get("label") or e["source"],
+            "ns": sa.get("k8s_namespace") or "",
+            "env": sa.get("environment") or "",
+            "role": role.get("label") or e["target"],
+        })
+    irsa_bindings.sort(key=lambda x: (x["env"], x["ns"], x["sa"]))
+
+    # Doc kinds.
+    doc_kinds: dict[str, int] = defaultdict(int)
+    for d in docs_nodes:
+        doc_kinds[d.get("doc_kind") or "?"] += 1
+
+    si_by_env: dict[str, dict] = {}
+    for _nid, sn in nodes.items():
+        if sn.get("type") == "shared-infra" and sn.get("environment"):
+            si_by_env[sn["environment"]] = sn
+
+    comp_to_mods: dict[str, list[str]] = defaultdict(list)
+    for e in edges:
+        if e.get("relation") != "configures_module":
+            continue
+        srcn = nodes.get(e["source"], {})
+        if srcn.get("type") != "component":
+            continue
+        tgtn = nodes.get(e["target"], {})
+        lab = tgtn.get("label") or e["target"]
+        comp_to_mods[e["source"]].append(lab)
+
+    snap_times = _read_state_overlay_snapshot_times(graph.repo)
+
+    components_table = []
+    for nid, cn in sorted(
+        nodes.items(),
+        key=lambda x: (x[1].get("environment") or "", x[1].get("label") or ""),
+    ):
+        if cn.get("type") != "component":
+            continue
+        env_nm = cn.get("environment") or ""
+        si = si_by_env.get(env_nm, {})
+        components_table.append({
+            "id": nid,
+            "env": env_nm,
+            "name": cn.get("label") or "",
+            "modules": sorted(set(comp_to_mods.get(nid, []))),
+            "cluster_target": si.get("cluster_name", ""),
+            "account": si.get("account_id", ""),
+            "region": si.get("region", ""),
+            "in_state": bool(cn.get("also_in_state"))
+            or cn.get("source") == "state",
+            "resource_count": cn.get("resource_count"),
+            "state_snapshot_at": snap_times.get(env_nm, ""),
+        })
+
+    rollup_map: dict[str, dict] = {}
+    for row in app_table:
+        name = row["name"]
+        bucket = rollup_map.setdefault(
+            name,
+            {"envs": [], "runtimes": set(), "modules_used": set(), "images": set()},
+        )
+        bucket["envs"].append(row["env"])
+        if row.get("runtime"):
+            bucket["runtimes"].add(row["runtime"])
+        for m in row.get("modules_used") or []:
+            bucket["modules_used"].add(m)
+        if row.get("image"):
+            bucket["images"].add(row["image"])
+    applications_rollup = []
+    for name in sorted(rollup_map):
+        b = rollup_map[name]
+        applications_rollup.append({
+            "name": name,
+            "envs": sorted(set(b["envs"])),
+            "runtimes": sorted(b["runtimes"]),
+            "modules_used": sorted(b["modules_used"]),
+            "images": sorted(b["images"]),
+        })
+
+    repo = graph.repo
+    coverage = {
+        "openspec_present": (repo / "openspec").is_dir(),
+        "openspec_changes": _openspec_change_folder_count(repo),
+        "modules_with_doc_mentions": sum(
+            1 for row in module_table if row.get("doc_mentions", 0) > 0
+        ),
+        "modules_total": len(module_table),
+        "state_overlay_envs": sorted(snap_times.keys()),
+        "docs_overlay": dict(getattr(graph, "_docs_overlay_meta", {}) or {}),
+    }
+
+    blast_diagrams: list[dict[str, str]] = []
+    if out_dir is not None:
+        blast_diagrams = _collect_blast_mermaid_files(out_dir)
+
+    # Runtime breakdown for the apps KPI subline.
+    runtime_counts: dict[str, int] = defaultdict(int)
+    for a in apps:
+        runtime_counts[a.get("runtime") or "—"] += 1
+    runtime_sub = ", ".join(f"{k}:{v}" for k, v in sorted(runtime_counts.items()))
+
+    drift_comp_total = sum(len(v) for v in drift.get("components", {}).values())
+    drift_app_total = sum(len(v) for v in drift.get("applications", {}).values())
+    top_critical = next((c for c in critical if c["in_degree"] > 0), None) or (
+        critical[0] if critical else None
+    )
+    has_state = layer_counts.get("state", 0) > 0
+    has_k8s = layer_counts.get("k8s", 0) > 0
+    has_docs = layer_counts.get("docs", 0) > 0
+
+    kpis = {
+        "modules": {
+            "value": len(modules),
+            "sub": f"{len(providers)} provider{'s' if len(providers) != 1 else ''}",
+        },
+        "components": {
+            "value": len(components),
+            "sub": f"across {len(envs)} env{'s' if len(envs) != 1 else ''}",
+        },
+        "applications": {
+            "value": len(apps),
+            "sub": runtime_sub or "—",
+        },
+        "k8s_pods": {
+            "value": k8s_kinds.get("Pod", 0),
+            "sub": (f"{len(k8s_nodes)} k8s objects, {len(irsa_bindings)} IRSA"
+                    if has_k8s else "no k8s overlay"),
+        },
+        "drift": {
+            "value": drift_comp_total + drift_app_total,
+            "sub": f"{drift_comp_total} component{'s' if drift_comp_total != 1 else ''}, "
+                   f"{drift_app_total} app{'s' if drift_app_total != 1 else ''}",
+        },
+        "critical": {
+            "value": top_critical["label"] if top_critical else "—",
+            "sub": f"{top_critical['in_degree']} dependents" if top_critical else "",
+        },
+    }
+
+    return {
+        "meta": {
+            "version": _read_kuberly_skills_version(graph.repo),
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "env_count": len(envs),
+            "module_count": len(modules),
+            "component_count": len(components),
+            "shared_infra_count": len(shared_infras),
+            "app_count": len(apps),
+            "doc_count": len(docs_nodes),
+            "has_state": has_state,
+            "has_k8s": has_k8s,
+            "has_docs": has_docs,
+        },
+        "kpis": kpis,
+        "environments": env_data,
+        "critical_nodes": critical,
+        "drift": {
+            "components": {k: sorted(v) for k, v in drift.get("components", {}).items()},
+            "applications": {k: sorted(v) for k, v in drift.get("applications", {}).items()},
+        },
+        "providers": providers,
+        "modules": module_table,
+        "components": components_table,
+        "applications": app_table,
+        "applications_rollup": applications_rollup,
+        "coverage": coverage,
+        "blast_diagrams": blast_diagrams,
+        "source_layers": dict(layer_counts),
+        "edge_relations": edge_relations,
+        "k8s": {
+            "loaded": has_k8s,
+            "kinds": dict(k8s_kinds),
+            "namespaces_total": len({k.get("k8s_namespace") for k in k8s_nodes if k.get("k8s_namespace")}),
+            "irsa_bindings": irsa_bindings[:500],
+        },
+        "docs": {
+            "loaded": has_docs,
+            "kinds": dict(doc_kinds),
+            "total": len(docs_nodes),
+        },
+        "longest_chains": [list(c) for c in stats.get("longest_chains", [])][:5],
+    }
 
 
 def _node_compound_parent(node: dict, layer: str) -> str | None:
@@ -2519,627 +2955,22 @@ def _build_cytoscape_elements(data: dict) -> tuple[list, list]:
     return cy_nodes, cy_edges
 
 
-# String.Template — NOT f-strings. The HTML body has many `$${}` JS
-# template literals that f-strings would mangle. Every JS `$${...}` is
-# escaped as `$$${...}` here (Template treats `$$` as a literal `$`),
-# while `$NODES_JSON` and `$EDGES_JSON` are substituted.
-_GRAPH_HTML_TEMPLATE = string.Template(r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>kuberly-stack Knowledge Graph</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.1/dist/cytoscape.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/layout-base@2.0.1/layout-base.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cose-base@2.2.0/cose-base.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
-<style>
-  :root {
-    /* Surfaces (kuberly-web globals.css) */
-    --bg:        #090b0d;
-    --bg-raised: #11151a;
-    --bg-card:   #161b22;
-    --bg-elev:   #1c222b;
-
-    /* Type */
-    --ink:        #ffffff;
-    --ink-soft:   rgba(255,255,255,0.85);
-    --ink-mute:   rgba(255,255,255,0.65);
-    --ink-faint:  rgba(255,255,255,0.45);
-    --ink-line:   rgba(255,255,255,0.10);
-    --ink-line-soft: rgba(255,255,255,0.06);
-
-    /* Brand accents */
-    --blue:       #1677ff;
-    --blue-soft:  #3c89e8;
-    --blue-deep:  #1554ad;
-    --blue-glow:  rgba(22,119,255,0.22);
-    --aws:        #ff9900;
-    --aws-soft:   #ffb84d;
-    --aws-deep:   #cc7a00;
-    --aws-glow:   rgba(255,153,0,0.22);
-    --amber:      #d89614;
-    --amber-warm: #f5b042;
-
-    --radius:     14px;
-    --radius-lg:  22px;
-
-    /* Lifts */
-    --lift-blue:   0 30px 80px -40px rgba(22,119,255,0.18);
-    --lift-modal:  0 30px 80px -30px rgba(0,0,0,0.6);
-
-    /* Fonts */
-    --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
-    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; }
-  body {
-    font-family: var(--font-sans);
-    background: var(--bg);
-    color: var(--ink);
-    overflow: hidden;
-  }
-  #topbar {
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    height: 56px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 0 20px;
-    background: rgba(15,20,25,0.72);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--ink-line);
-    z-index: 10;
-    font-size: 13px;
-  }
-  #topbar .brand { display: flex; align-items: center; gap: 12px; }
-  #topbar .brand .logo { display: inline-flex; color: var(--ink); }
-  #topbar .brand .wordmark {
-    font-family: var(--font-sans);
-    font-weight: 600; font-size: 15px;
-    letter-spacing: -0.02em; color: var(--ink);
-  }
-  #topbar .eyebrow {
-    font-family: var(--font-mono);
-    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
-    color: var(--ink-faint);
-    padding: 2px 8px; border: 1px solid var(--ink-line); border-radius: 999px;
-  }
-  #topbar .controls { display: flex; align-items: center; gap: 12px; }
-  #topbar .stats { color: var(--ink-mute); font-size: 12px; font-family: var(--font-mono); }
-  #search {
-    background: rgba(255,255,255,0.04);
-    color: var(--ink);
-    border: 1px solid var(--ink-line);
-    padding: 6px 10px;
-    border-radius: var(--radius);
-    font-family: var(--font-sans);
-    font-size: 13px;
-    width: 220px;
-    outline: none;
-  }
-  #search:focus { border-color: var(--blue); }
-  .layer-toggles { display: flex; gap: 6px; align-items: center; }
-  .layer-toggle {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 5px 10px; border-radius: 999px;
-    font-family: var(--font-mono); font-size: 10px;
-    text-transform: uppercase; letter-spacing: 0.16em;
-    color: var(--ink-soft);
-    border: 1px solid var(--ink-line);
-    cursor: pointer; user-select: none;
-    transition: all 0.15s ease;
-  }
-  .layer-toggle.active { background: rgba(255,255,255,0.04); }
-  .layer-toggle.inactive { opacity: 0.45; }
-  .layer-toggle input { display: none; }
-  .layer-toggle .dot { width: 6px; height: 6px; border-radius: 50%; }
-  .layer-toggle[data-layer=static] .dot { background: var(--blue); }
-  .layer-toggle[data-layer=state]  .dot { background: var(--aws); }
-  .layer-toggle[data-layer=k8s]    .dot { background: var(--amber); }
-  .layer-toggle[data-layer=docs]   .dot { background: var(--ink-mute); }
-  #layout-select {
-    background: rgba(255,255,255,0.04);
-    color: var(--ink);
-    border: 1px solid var(--ink-line);
-    padding: 6px 10px;
-    border-radius: var(--radius);
-    font-family: var(--font-sans);
-    font-size: 13px;
-    cursor: pointer;
-  }
-  #cy {
-    position: fixed;
-    top: 56px; left: 0; right: 0; bottom: 0;
-    background-color: var(--bg);
-    background-image: radial-gradient(circle, rgba(255,255,255,0.05) 1px, transparent 1.4px);
-    background-size: 22px 22px;
-  }
-  #sidebar {
-    position: fixed;
-    top: 72px; right: 16px; bottom: 16px;
-    width: 320px;
-    background: var(--bg-card);
-    border: 1px solid var(--ink-line);
-    border-radius: var(--radius-lg);
-    transform: translateX(calc(100% + 32px));
-    transition: transform 180ms ease-out;
-    overflow-y: auto;
-    padding: 24px;
-    font-size: 13px;
-    color: var(--ink);
-    box-shadow: var(--lift-modal);
-    z-index: 9;
-  }
-  #sidebar.open { transform: translateX(0); }
-  #sidebar h2 {
-    font-size: 13px; font-weight: 500; letter-spacing: -0.01em;
-    color: var(--ink); margin-bottom: 12px;
-    word-break: break-all; line-height: 1.3;
-    font-family: var(--font-mono);
-  }
-  #sidebar .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
-  #sidebar .chip {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 3px 8px; border-radius: 999px;
-    font-family: var(--font-mono); font-size: 10px;
-    text-transform: uppercase; letter-spacing: 0.16em;
-    color: var(--ink-mute);
-    border: 1px solid var(--ink-line);
-    background: rgba(255,255,255,0.04);
-  }
-  #sidebar .chip.layer-static { color: var(--blue);       border-color: rgba(22,119,255,0.30); background: rgba(22,119,255,0.08); }
-  #sidebar .chip.layer-state  { color: var(--aws);        border-color: rgba(255,153,0,0.30); background: rgba(255,153,0,0.08); }
-  #sidebar .chip.layer-k8s    { color: var(--amber-warm); border-color: rgba(245,176,66,0.30); background: rgba(245,176,66,0.08); }
-  #sidebar .chip.layer-docs   { color: var(--ink-mute);   border-color: var(--ink-line);      background: rgba(255,255,255,0.04); }
-  #sidebar h3 {
-    font-family: var(--font-mono);
-    font-size: 10px; font-weight: 500;
-    text-transform: uppercase; letter-spacing: 0.18em;
-    color: var(--ink-faint);
-    margin: 14px 0 6px;
-  }
-  #sidebar details {
-    background: rgba(255,255,255,0.02);
-    border: 1px solid var(--ink-line);
-    border-radius: var(--radius);
-    padding: 8px 10px;
-  }
-  #sidebar details summary {
-    cursor: pointer; font-size: 12px; color: var(--ink-mute);
-    font-family: var(--font-mono);
-  }
-  #sidebar .attrs { font-family: var(--font-mono); font-size: 11px; line-height: 1.5; word-break: break-all; }
-  #sidebar .attrs .k { color: var(--ink-faint); }
-  #sidebar .attrs .v { color: var(--ink); }
-  #sidebar .edges a {
-    display: block; padding: 4px 6px; border-radius: 4px;
-    color: var(--ink-soft); text-decoration: none; font-size: 12px;
-    font-family: var(--font-mono);
-    word-break: break-all;
-  }
-  #sidebar .edges a:hover { background: rgba(22,119,255,0.10); color: var(--blue); }
-  #sidebar .edges .rel { color: var(--ink-faint); font-size: 10px; margin-left: 4px; }
-  #sidebar .actions { display: flex; gap: 8px; margin-top: 14px; }
-  #sidebar .btn {
-    flex: 1;
-    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-    padding: 8px 14px; border-radius: var(--radius);
-    background: var(--blue); color: white; border: none;
-    font-family: var(--font-sans); font-weight: 500; font-size: 13px;
-    cursor: pointer; transition: background 0.15s ease;
-  }
-  #sidebar .btn:hover { background: var(--blue-soft); }
-  #sidebar .btn:active { background: var(--blue-deep); }
-  #sidebar .btn.ghost {
-    background: transparent; color: var(--ink-soft);
-    border: 1px solid var(--ink-line);
-  }
-  #sidebar .btn.ghost:hover { background: rgba(255,255,255,0.04); border-color: var(--ink-line-soft); }
-  #sidebar #close-btn {
-    position: absolute; top: 12px; right: 12px;
-    background: transparent; border: none; color: var(--ink-faint);
-    cursor: pointer; font-size: 18px; padding: 4px 8px;
-    flex: none;
-  }
-  #sidebar #close-btn:hover { color: var(--ink); }
-  .pulse { animation: pulse 0.9s ease-in-out 3; }
-  @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(22,119,255,0.6); }
-    50%      { box-shadow: 0 0 0 6px rgba(22,119,255,0.0); }
-  }
-</style>
-</head>
-<body>
-
-<div id="topbar">
-  <div class="brand">
-    <span class="logo">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <path d="M11.3647 2.92733C11.7021 2.73258 12.1173 2.73119 12.4559 2.92369L19.8781 7.14305C20.2213 7.33813 20.4333 7.70247 20.4333 8.09721V16.5758C20.4333 16.9679 20.224 17.3303 19.8844 17.5263L19.5582 17.7146V18.6654C19.5582 19.4476 19.3772 20.2041 19.0449 20.8836L21.1282 19.6809C22.2376 19.0404 22.9211 17.8568 22.9211 16.5758V8.09721C22.9211 6.80772 22.2286 5.61756 21.1076 4.98029L13.6854 0.760927C12.5793 0.132111 11.2228 0.136639 10.1208 0.772828L7.66167 2.19263C6.55236 2.83309 5.86899 4.01672 5.86899 5.29765V13.7891C5.86899 15.07 6.55236 16.2536 7.66167 16.8941L12.2536 19.5452L14.1436 18.4542V17.7638L8.90558 14.7396C8.56599 14.5435 8.3568 14.1812 8.3568 13.7891V5.29765C8.3568 4.90553 8.56599 4.54319 8.90558 4.34713L11.3647 2.92733Z" fill="currentColor"/>
-        <path d="M11.6634 4.44474L9.82021 5.5089V6.25864L15.0519 9.23272C15.395 9.42781 15.607 9.79214 15.607 10.1869V18.6655C15.607 19.0576 15.3978 19.4199 15.0582 19.616L12.5307 21.0751C12.1911 21.2711 11.7727 21.2711 11.4332 21.075L4.07931 16.8293C3.73972 16.6332 3.53053 16.2709 3.53053 15.8788V7.38732C3.53053 6.9952 3.73972 6.63287 4.07931 6.43681L4.40558 6.24844V5.29767C4.40558 4.51538 4.58658 3.75886 4.91902 3.07933L2.83541 4.2823C1.72609 4.92277 1.04272 6.10639 1.04272 7.38732V15.8788C1.04272 17.1597 1.72609 18.3433 2.83541 18.9838L10.1893 23.2295C11.2985 23.87 12.6652 23.87 13.7745 23.2296L16.302 21.7706C17.4114 21.1301 18.0948 19.9464 18.0948 18.6655V10.1869C18.0948 8.8974 17.4023 7.70723 16.2813 7.06996L11.6634 4.44474Z" fill="currentColor"/>
-      </svg>
-    </span>
-    <span class="wordmark">kuberly-graph</span>
-    <span class="eyebrow">v0.25.0</span>
-  </div>
-  <div class="controls">
-    <input id="search" type="text" placeholder="Search nodes..." autocomplete="off" />
-    <div class="layer-toggles">
-      <label class="layer-toggle active" data-layer="static"><input type="checkbox" data-layer="static" checked><span class="dot"></span>static</label>
-      <label class="layer-toggle active" data-layer="state"><input type="checkbox" data-layer="state" checked><span class="dot"></span>state</label>
-      <label class="layer-toggle inactive" data-layer="k8s"><input type="checkbox" data-layer="k8s"><span class="dot"></span>k8s</label>
-      <label class="layer-toggle active" data-layer="docs"><input type="checkbox" data-layer="docs" checked><span class="dot"></span>docs</label>
-    </div>
-    <select id="layout-select" title="Layout algorithm">
-      <option value="fcose" selected>fcose (compound force)</option>
-      <option value="dagre">dagre (hierarchy)</option>
-      <option value="concentric">concentric</option>
-    </select>
-    <span class="stats" id="stats"></span>
-  </div>
-</div>
-
-<div id="cy"></div>
-
-<aside id="sidebar">
-  <button id="close-btn" title="Close (ESC)">&times;</button>
-  <div id="sidebar-body"></div>
-</aside>
-
-<script>
-const NODES = $NODES_JSON;
-const EDGES = $EDGES_JSON;
-
-// Single source of truth: read brand tokens from CSS custom properties at
-// runtime. Cytoscape inline styles can't use var(), so we read once and
-// inject as constants into the cytoscape style array.
-const _root = getComputedStyle(document.documentElement);
-function _v(name) { return _root.getPropertyValue(name).trim(); }
-
-const BRAND = {
-  bg:         _v("--bg"),
-  ink:        _v("--ink"),
-  inkMute:    "rgba(255,255,255,0.65)",  // --ink-mute (computed value)
-  inkFaint:   "rgba(255,255,255,0.45)",
-  inkLine:    "rgba(255,255,255,0.10)",
-  inkLineHi:  "rgba(255,255,255,0.18)",
-  blue:       _v("--blue"),
-  blueSoft:   _v("--blue-soft"),
-  aws:        _v("--aws"),
-  amber:      _v("--amber"),
-  amberWarm:  _v("--amber-warm"),
-};
-
-const LAYER_COLORS = {
-  static: BRAND.blue,       // declared HCL/JSON — brand primary
-  state:  BRAND.aws,        // terraform-managed AWS resources
-  k8s:    BRAND.amber,      // live cluster workloads
-  docs:   BRAND.inkMute,    // metadata — opacity hierarchy
-};
-
-document.getElementById("stats").textContent =
-  NODES.filter(n => !n.data.compound).length + " nodes · " + EDGES.length + " edges";
-
-const cy = cytoscape({
-  container: document.getElementById("cy"),
-  elements: { nodes: NODES, edges: EDGES },
-  wheelSensitivity: 0.2,
-  style: [
-    {
-      selector: "node",
-      style: {
-        "label": "data(label)",
-        "font-size": 9,
-        "font-family": "Geist, -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
-        "color": BRAND.ink,
-        "text-valign": "center",
-        "text-halign": "center",
-        "text-outline-color": BRAND.bg,
-        "text-outline-width": 2,
-        "background-color": "#999",
-        "width": 18,
-        "height": 18,
-        "border-width": 0,
-      },
-    },
-    { selector: "node.static", style: { "background-color": LAYER_COLORS.static } },
-    { selector: "node.state",  style: { "background-color": LAYER_COLORS.state  } },
-    { selector: "node.k8s",    style: { "background-color": LAYER_COLORS.k8s    } },
-    { selector: "node.docs",   style: { "background-color": LAYER_COLORS.docs   } },
-    {
-      selector: "node:parent",
-      style: {
-        "background-color": "rgba(255,255,255,0.04)",
-        "background-opacity": 1,
-        "border-color": BRAND.inkLine,
-        "border-width": 1,
-        "shape": "round-rectangle",
-        "label": "data(label)",
-        "text-valign": "top",
-        "text-halign": "center",
-        "font-size": 10,
-        "font-family": "Geist, -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
-        "color": BRAND.inkFaint,
-        "padding": 14,
-        "min-zoomed-font-size": 8,
-      },
-    },
-    {
-      selector: "node:parent.env",
-      style: {
-        "border-color": BRAND.inkLineHi,
-        "background-color": "rgba(255,255,255,0.02)",
-        "font-size": 12,
-        "color": BRAND.ink,
-      },
-    },
-    // k8s OFF by default — hide both leaf nodes and their compound parents.
-    { selector: "node.k8s.layer-off", style: { "display": "none" } },
-    { selector: "node.static.layer-off", style: { "display": "none" } },
-    { selector: "node.state.layer-off", style: { "display": "none" } },
-    { selector: "node.docs.layer-off", style: { "display": "none" } },
-    {
-      selector: "edge",
-      style: {
-        "width": 1.2,
-        "line-color": BRAND.inkLine,
-        "target-arrow-color": BRAND.inkLine,
-        "target-arrow-shape": "triangle",
-        "curve-style": "bezier",
-        "arrow-scale": 0.7,
-        "opacity": 0.7,
-      },
-    },
-    { selector: "edge.dim", style: { "opacity": 0.08 } },
-    { selector: "node.dim", style: { "opacity": 0.15 } },
-    {
-      selector: "node:selected",
-      style: {
-        "border-width": 3,
-        "border-color": BRAND.blue,
-        "background-color": "data(color)",
-      },
-    },
-    { selector: "node.match", style: { "border-width": 2, "border-color": BRAND.blue } },
-    {
-      selector: "node.upstream",
-      style: { "border-width": 3, "border-color": BRAND.aws, "background-color": BRAND.aws },
-    },
-    {
-      selector: "node.downstream",
-      style: { "border-width": 3, "border-color": BRAND.blue },
-    },
-    {
-      selector: "edge.highlight",
-      style: { "line-color": BRAND.blue, "target-arrow-color": BRAND.blue, "opacity": 1, "width": 2 },
-    },
-  ],
-  layout: { name: "fcose", quality: "default", animate: false, randomize: true,
-            nodeSeparation: 80, idealEdgeLength: 80, packComponents: true },
-});
-
-// Apply default k8s OFF state via `layer-off` class on every k8s node.
-function applyLayerVisibility(layer, on) {
-  cy.batch(() => {
-    cy.nodes("." + layer).forEach(n => {
-      if (on) n.removeClass("layer-off");
-      else    n.addClass("layer-off");
-    });
-  });
-}
-applyLayerVisibility("k8s", false);
-
-document.querySelectorAll(".layer-toggles input").forEach(cb => {
-  cb.addEventListener("change", () => {
-    applyLayerVisibility(cb.dataset.layer, cb.checked);
-    const pill = cb.closest(".layer-toggle");
-    if (pill) {
-      pill.classList.toggle("active", cb.checked);
-      pill.classList.toggle("inactive", !cb.checked);
-    }
-  });
-});
-
-// Layout switcher.
-function runLayout(name) {
-  let opts = { name, animate: false, fit: true };
-  if (name === "fcose") {
-    opts = { ...opts, quality: "default", randomize: true,
-             nodeSeparation: 80, idealEdgeLength: 80, packComponents: true };
-  } else if (name === "dagre") {
-    opts = { ...opts, rankDir: "TB", nodeSep: 30, rankSep: 60 };
-  } else if (name === "concentric") {
-    opts = { ...opts, concentric: n => n.degree(), levelWidth: () => 1 };
-  }
-  cy.layout(opts).run();
-}
-document.getElementById("layout-select").addEventListener("change", e => {
-  runLayout(e.target.value);
-});
-
-// Kick off the initial layout so all 1k+ nodes don't stack at (0,0).
-runLayout("fcose");
-
-// Search — fuzzy substring match on id + label.
-const searchEl = document.getElementById("search");
-searchEl.addEventListener("input", () => {
-  const q = searchEl.value.trim().toLowerCase();
-  cy.nodes().removeClass("match pulse");
-  if (!q) return;
-  const matches = cy.nodes().filter(n => {
-    if (n.data("compound")) return false;
-    const id = (n.id() || "").toLowerCase();
-    const lbl = (n.data("label") || "").toLowerCase();
-    return id.includes(q) || lbl.includes(q);
-  });
-  matches.addClass("match pulse");
-});
-searchEl.addEventListener("keydown", e => {
-  if (e.key !== "Enter") return;
-  const first = cy.nodes(".match").first();
-  if (first && first.length) {
-    cy.animate({ center: { eles: first }, zoom: 1.3 }, { duration: 250 });
-  }
-});
-
-// Sidebar.
-const sidebar = document.getElementById("sidebar");
-const sidebarBody = document.getElementById("sidebar-body");
-
-function renderSidebar(node) {
-  const data = node.data();
-  const layer = data.source_layer || "static";
-  const incoming = cy.edges(`[target = "$${data.id}"]`);
-  const outgoing = cy.edges(`[source = "$${data.id}"]`);
-  const attrs = data.attrs || {};
-  const attrEntries = Object.entries(attrs).filter(([k]) => k !== "label" && k !== "id");
-
-  let attrHtml = "";
-  if (attrEntries.length) {
-    attrHtml = `<details $${attrEntries.length <= 4 ? "open" : ""}><summary>$${attrEntries.length} attribute$${attrEntries.length === 1 ? "" : "s"}</summary><div class="attrs">` +
-      attrEntries.map(([k, v]) => {
-        const vs = typeof v === "object" ? JSON.stringify(v) : String(v);
-        return `<div><span class="k">$${k}:</span> <span class="v">$${escapeHtml(vs)}</span></div>`;
-      }).join("") + `</div></details>`;
-  }
-
-  const inHtml = incoming.map(e => {
-    const src = e.source().id();
-    const rel = e.data("relation") || "";
-    return `<a href="#" data-jump="$${src}">$${escapeHtml(src)}<span class="rel">[$${escapeHtml(rel)}]</span></a>`;
-  }).join("") || `<div class="rel">none</div>`;
-  const outHtml = outgoing.map(e => {
-    const tgt = e.target().id();
-    const rel = e.data("relation") || "";
-    return `<a href="#" data-jump="$${tgt}">$${escapeHtml(tgt)}<span class="rel">[$${escapeHtml(rel)}]</span></a>`;
-  }).join("") || `<div class="rel">none</div>`;
-
-  sidebarBody.innerHTML = `
-    <h2>$${escapeHtml(data.id)}</h2>
-    <div class="chips">
-      $${data.type ? `<span class="chip">$${escapeHtml(data.type)}</span>` : ""}
-      <span class="chip layer-$${layer}">$${layer}</span>
-    </div>
-    $${attrHtml}
-    <h3>Incoming ($${incoming.length})</h3>
-    <div class="edges">$${inHtml}</div>
-    <h3>Outgoing ($${outgoing.length})</h3>
-    <div class="edges">$${outHtml}</div>
-    <div class="actions">
-      <button id="blast-btn" class="btn">Show blast radius</button>
-      <button id="center-btn" class="btn ghost">Center</button>
-    </div>
-  `;
-  sidebar.classList.add("open");
-
-  sidebarBody.querySelectorAll("a[data-jump]").forEach(a => {
-    a.addEventListener("click", ev => {
-      ev.preventDefault();
-      const target = cy.getElementById(a.dataset.jump);
-      if (target && target.length) {
-        cy.nodes().unselect();
-        target.select();
-        cy.animate({ center: { eles: target }, zoom: 1.3 }, { duration: 250 });
-        renderSidebar(target);
-      }
-    });
-  });
-  document.getElementById("blast-btn").addEventListener("click", () => showBlast(node));
-  document.getElementById("center-btn").addEventListener("click", () => {
-    cy.animate({ center: { eles: node }, zoom: 1.3 }, { duration: 250 });
-  });
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-}
-
-function showBlast(node) {
-  cy.elements().addClass("dim");
-  // Walk upstream (sources -> us) and downstream (us -> sinks).
-  const upstream = node.predecessors("node");
-  const downstream = node.successors("node");
-  upstream.removeClass("dim").addClass("upstream");
-  downstream.removeClass("dim").addClass("downstream");
-  node.removeClass("dim");
-  node.predecessors("edge").removeClass("dim").addClass("highlight");
-  node.successors("edge").removeClass("dim").addClass("highlight");
-}
-
-function clearBlast() {
-  cy.elements().removeClass("dim upstream downstream highlight");
-}
-
-cy.on("tap", "node", evt => {
-  const n = evt.target;
-  if (n.data("compound")) {
-    // Click on compound: toggle child visibility (cheap collapse).
-    const kids = n.children();
-    if (kids.first().style("display") === "none") {
-      kids.style("display", "element");
-    } else {
-      kids.style("display", "none");
-    }
-    return;
-  }
-  clearBlast();
-  renderSidebar(n);
-});
-
-cy.on("tap", evt => {
-  if (evt.target === cy) {
-    sidebar.classList.remove("open");
-    cy.nodes().unselect();
-    clearBlast();
-  }
-});
-
-document.getElementById("close-btn").addEventListener("click", () => {
-  sidebar.classList.remove("open");
-  cy.nodes().unselect();
-  clearBlast();
-});
-
-document.addEventListener("keydown", e => {
-  if (e.key === "Escape") {
-    sidebar.classList.remove("open");
-    cy.nodes().unselect();
-    clearBlast();
-    cy.nodes().removeClass("match pulse");
-    searchEl.value = "";
-  }
-});
-</script>
-</body>
-</html>
-""")
-
-
 def write_graph_html(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = False):
-    """Render the cytoscape-based interactive viz to <out_dir>/graph.html.
+    """Render `graph.html`: operator dashboard (default) + cytoscape graph tab.
 
-    Replaces the v0.22 force-graph viz. All four overlays (static,
-    state, k8s, docs) are color-coded and compound-nested by env →
-    namespace / layer. k8s layer is OFF by default (864 nodes is noisy);
-    user toggles it on via the topbar checkbox.
+    Blast-radius Mermaid files (`blast_*.mmd`) must exist before this runs —
+    `generate` calls `write_mermaid_dag` first so diagrams embed on the dashboard.
     """
     data = graph.to_json()
     cy_nodes, cy_edges = _build_cytoscape_elements(data)
+    dash = _compute_dashboard_data(graph, out_dir=out_dir)
+    ver = dash["meta"].get("version") or _read_kuberly_skills_version(graph.repo) or "dev"
     html = _GRAPH_HTML_TEMPLATE.substitute(
         NODES_JSON=json.dumps(cy_nodes),
         EDGES_JSON=json.dumps(cy_edges),
+        VERSION_CHIP=ver,
     )
+    html = html.replace("__DASHBOARD_JSON__", _json_for_inline_script(dash))
     path = out_dir / "graph.html"
     path.write_text(html)
     if verbose:
@@ -3507,9 +3338,9 @@ def main():
 
         # Generate outputs (silent — banner emits the summary)
         write_graph_json(g, out)
+        write_mermaid_dag(g, out)
         write_graph_html(g, out)
         write_graph_report(g, out)
-        write_mermaid_dag(g, out)
 
         # SessionStart banner — terse, no decoration. Single line per fact.
         stats   = g.compute_stats()
@@ -4397,7 +4228,7 @@ def render_tool_result(name: str, result, args: dict, graph: KuberlyPlatform,
 
 
 # ---------------------------------------------------------------------------
-# MCP Server (stdio JSON-RPC)
+# MCP Server (stdio — official `mcp` SDK, see kuberly_mcp/)
 # ---------------------------------------------------------------------------
 
 def _emit_telemetry(graph, tool_name, fmt, tool_args, output_text,
@@ -4431,455 +4262,29 @@ def _emit_telemetry(graph, tool_name, fmt, tool_args, output_text,
 
 
 def run_mcp_server(graph: KuberlyPlatform):
-    """Run an MCP server over stdio that exposes graph query tools."""
-    import select as _select
+    """Run the kuberly-platform MCP server over stdio (FastMCP on the official `mcp` SDK).
 
-    # All tools accept an optional `format` arg.
-    # As of v0.13.4 the default is "compact" — structured-but-decoration-free
-    # output (node ids, neighbor lists, drift envelopes) at ~10x lower token
-    # cost than the rich Markdown card. Pass "card" explicitly when the
-    # orchestrator wants human-readable rendering for the user-facing summary.
-    _FORMAT_PROP = {
-        "type": "string",
-        "enum": ["compact", "json", "card"],
-        "default": "compact",
-        "description": "Output format. 'compact' (default, v0.13.4+) — structured plain text optimized for sub-agent token cost. 'json' — raw JSON dump. 'card' — rich Markdown for human display.",
-    }
+    Requires: ``pip install 'mcp>=1.10'`` in the same Python environment as
+    ``python3 kuberly_platform.py mcp``.
+    """
+    try:
+        from kuberly_mcp.stdio_app import run_stdio_server_blocking
+    except ImportError as exc:
+        sys.stderr.write(
+            "kuberly-platform MCP requires the Python 'mcp' package. "
+            "Install with: pip install 'mcp>=1.10'\n"
+        )
+        raise SystemExit(2) from exc
+    ver = _read_kuberly_skills_version(graph.repo) or "0.32.0"
+    if ver.startswith("v"):
+        ver = ver[1:]
+    run_stdio_server_blocking(
+        graph,
+        render_tool_result=render_tool_result,
+        emit_telemetry=_emit_telemetry,
+        server_version=ver,
+    )
 
-    TOOLS = [
-        {
-            "name": "query_nodes",
-            "description": "Filter graph nodes by type (environment, component, shared-infra, application, module, cloud_provider, resource), environment name, and/or name substring.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "node_type": {"type": "string", "description": "Node type filter"},
-                    "environment": {"type": "string", "description": "Environment name filter"},
-                    "name_contains": {"type": "string", "description": "Substring to match in node name/id"},
-                    "format": _FORMAT_PROP,
-                },
-            },
-        },
-        {
-            "name": "query_resources",
-            "defer_loading": True,
-            "description": "Filter `resource:` nodes synthesized from the schema 2 state overlay (e.g. helm_release, aws_iam_role, kubernetes_namespace). Resource attribute VALUES are never in the graph — sensitive types (secrets, passwords, TLS keys) are tagged `redacted: true` so the existence is visible but the payload was suppressed at producer time.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "environment":   {"type": "string", "description": "env filter, e.g. 'prod'"},
-                    "module":        {"type": "string", "description": "module filter, e.g. 'loki'"},
-                    "resource_type": {"type": "string", "description": "Terraform resource type filter, e.g. 'helm_release', 'aws_iam_role'"},
-                    "name_contains": {"type": "string", "description": "Substring match against resource address / id"},
-                    "include_redacted": {"type": "boolean", "default": True, "description": "Include resources of sensitive types (existence only, never values)"},
-                    "format": _FORMAT_PROP,
-                },
-            },
-        },
-        {
-            "name": "find_docs",
-            "defer_loading": True,
-            "description": "Search the docs overlay (skills, agents, READMEs, OpenSpec changes, prompts). Always does keyword scoring against title/description/headings. If embeddings are present (KUBERLY_DOCS_EMBED was set when the overlay was generated), also computes semantic cosine similarity and combines the two scores 0.4 keyword + 0.6 semantic. Use to answer 'where is the skill that explains X' / 'what skill mentions module Y'.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query":    {"type": "string", "description": "Free-text query (will be tokenized for keyword + embedded for semantic)"},
-                    "kind":     {"type": "string", "description": "Filter: skill / agent / doc / openspec / reference / prompt"},
-                    "semantic": {"type": "boolean", "default": True, "description": "Use embedding similarity if available"},
-                    "limit":    {"type": "integer", "default": 20, "description": "Max results"},
-                    "format":   _FORMAT_PROP,
-                },
-            },
-        },
-        {
-            "name": "graph_index",
-            "defer_loading": True,
-            "description": "Meta-tool. Returns a summary of every graph layer that's loaded (static, state, k8s, docs), node counts by type, edge counts by relation, cross-layer bridges that fired (IRSA, configures_module, depends_on, mentions), and overlay file freshness timestamps. Use at the start of a session to know what data you have.",
-            "inputSchema": {"type": "object", "properties": {"format": _FORMAT_PROP}},
-        },
-        {
-            "name": "query_k8s",
-            "defer_loading": True,
-            "description": "Filter `k8s_resource:` nodes synthesized from the live-cluster overlay (`.kuberly/k8s_overlay_*.json`, produced by `k8s_graph.py`). Knows Deployments, StatefulSets, Services, Ingresses, ConfigMaps, Secrets, ServiceAccounts, HPAs, NetworkPolicies. Secret/ConfigMap nodes carry `redacted: true` and `data_keys[]` only — values are NEVER in the graph. ServiceAccounts with IRSA annotations are bridged (edge `irsa_bound`) to the matching `resource:*/aws_iam_role.<n>` node from the state overlay.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "environment":     {"type": "string", "description": "env filter, e.g. 'prod'"},
-                    "namespace":       {"type": "string", "description": "k8s namespace filter, e.g. 'monitoring'"},
-                    "kind":            {"type": "string", "description": "k8s kind filter, e.g. 'Deployment', 'Service', 'Secret'"},
-                    "name_contains":   {"type": "string", "description": "Substring match against resource name"},
-                    "label_selector":  {"type": "object", "description": "{key: value} pairs that ALL must match the resource's labels"},
-                    "include_redacted": {"type": "boolean", "default": True, "description": "Include Secret / ConfigMap nodes (existence only — `data_keys` shown, never values)"},
-                    "format": _FORMAT_PROP,
-                },
-            },
-        },
-        {
-            "name": "get_node",
-            "description": "Get full details for a specific node by id or name.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "node": {"type": "string", "description": "Node id or name"},
-                    "format": _FORMAT_PROP,
-                },
-                "required": ["node"],
-            },
-        },
-        {
-            "name": "get_neighbors",
-            "description": "Get immediate incoming and outgoing neighbors of a node.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "node": {"type": "string", "description": "Node id or name"},
-                    "format": _FORMAT_PROP,
-                },
-                "required": ["node"],
-            },
-        },
-        {
-            "name": "blast_radius",
-            "description": "Compute the blast radius of a node: what it affects downstream (if changed) and what affects it upstream. Useful for impact analysis.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "node": {"type": "string", "description": "Node id or name (e.g. 'eks', 'module:aws/vpc')"},
-                    "direction": {"type": "string", "enum": ["upstream", "downstream", "both"], "default": "both"},
-                    "max_depth": {"type": "integer", "default": 20},
-                    "format": _FORMAT_PROP,
-                },
-                "required": ["node"],
-            },
-        },
-        {
-            "name": "shortest_path",
-            "defer_loading": True,
-            "description": "Find the shortest path between two nodes in the graph.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "source": {"type": "string", "description": "Source node id or name"},
-                    "target": {"type": "string", "description": "Target node id or name"},
-                    "format": _FORMAT_PROP,
-                },
-                "required": ["source", "target"],
-            },
-        },
-        {
-            "name": "drift",
-            "defer_loading": True,
-            "description": "Show cross-environment drift: components and applications that exist in some environments but not others.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"format": _FORMAT_PROP},
-            },
-        },
-        {
-            "name": "stats",
-            "defer_loading": True,
-            "description": "Get graph statistics: node/edge counts, critical nodes (most depended upon), and longest dependency chains.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"format": _FORMAT_PROP},
-            },
-        },
-        {
-            "name": "plan_persona_fanout",
-            "description": "Orchestration plan for a kuberly-stack infra task. Classifies task_kind, computes blast-radius/drift scope, runs branch + OpenSpec + personas-synced gates, returns a persona DAG (with per-phase parallel/needs_approval flags) and a ready-to-paste context.md body. Call this first in agent-orchestrator mode; then use session_init to materialize a session dir.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "task":           {"type": "string", "description": "Free-form task description from the user."},
-                    "named_modules":  {"type": "array", "items": {"type": "string"}, "description": "Optional: module names hinted by the user (e.g. ['loki'])."},
-                    "target_envs":    {"type": "array", "items": {"type": "string"}, "description": "Optional: target environments. Drift slice is computed only when set."},
-                    "current_branch": {"type": "string", "description": "Result of `git rev-parse --abbrev-ref HEAD` — enables the branch gate."},
-                    "session_name":   {"type": "string", "description": "Optional override for the session slug; defaults to slugified task."},
-                    "task_kind":      {"type": "string", "enum": ["resource-bump", "incident", "new-application", "new-database", "new-module", "drift-fix", "cicd", "cleanup", "plan-review", "unknown", "stop-target-absent", "stop-no-instance"], "description": "Override task_kind inference. Note: `stop-target-absent` and `stop-no-instance` are normally set automatically — the orchestrator should not pass them, the planner emits them."},
-                    "with_review":    {"type": "boolean", "default": False, "description": "Append a final `review` phase running the merged `pr-reviewer` (single agent, diff-only, ~5-8k tokens). v0.14.0+: review is OFF by default to save tokens — CI runs terraform_validate/tflint and the human PR review covers normal cases. Set true for high-risk changes (shared-infra blast, security/IAM). Auto-enabled when the task description literally contains the word 'review'."},
-                    "format":         _FORMAT_PROP,
-                },
-                "required": ["task"],
-            },
-        },
-        {
-            "name": "quick_scope",
-            "description": "Server-side scope.md generation. v0.15.0+: replaces the `agent-planner` agent for typical 'bump X', 'add Y', 'increase Z' tasks. The orchestrator calls this and writes the returned `scope_md` directly to `.agents/prompts/<session>/scope.md` — no agent dispatch, no 18k-token round-trip. Includes the v0.15.0 actionability check: returns `recommendation: 'stop-no-instance'` when a named module exists but has no component invoker. Fall back to dispatching `agent-planner` only when this returns `recommendation: 'fall-back-to-scope-planner'`.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "task":          {"type": "string", "description": "Free-form task description from the user."},
-                    "named_modules": {"type": "array", "items": {"type": "string"}, "description": "Module names hinted by the user (e.g. ['loki']). Without this, returns recommendation='fall-back-to-scope-planner'."},
-                    "target_envs":   {"type": "array", "items": {"type": "string"}, "description": "Optional: target environments. Drift slice computed only when set."},
-                    "format":        _FORMAT_PROP,
-                },
-                "required": ["task"],
-            },
-        },
-        {
-            "name": "session_init",
-            "description": "Create .agents/prompts/<slug>/ with context.md (seeded from plan_persona_fanout), findings/, tasks/, and status.json (fanout dashboard). Mirrors apm_modules' init_agent_session.py layout so MCP and CLI produce identical session dirs.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name":           {"type": "string", "description": "Session name; will be slugified."},
-                    "task":           {"type": "string", "description": "One-line task description for context.md."},
-                    "modules":        {"type": "array", "items": {"type": "string"}, "description": "Optional: module names to prefill into the graph snapshot."},
-                    "current_branch": {"type": "string", "description": "Optional: current branch — recorded in context.md if it triggers the branch gate."},
-                    "format":         _FORMAT_PROP,
-                },
-                "required": ["name"],
-            },
-        },
-        {
-            "name": "session_read",
-            "description": "Read a file from a session dir under .agents/prompts/<slug>/. Path-validated — refuses reads outside the session dir.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Session name."},
-                    "file": {"type": "string", "description": "Relative path within the session dir (e.g. 'scope.md', 'findings/cold.md')."},
-                    "format": _FORMAT_PROP,
-                },
-                "required": ["name", "file"],
-            },
-        },
-        {
-            "name": "session_write",
-            "description": "Write content to a file inside a session dir. Path-validated. Use this for context.md, decisions.md, tasks/<NN>-<slug>.md.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name":    {"type": "string", "description": "Session name."},
-                    "file":    {"type": "string", "description": "Relative path within the session dir."},
-                    "content": {"type": "string", "description": "Full file content."},
-                    "format":  _FORMAT_PROP,
-                },
-                "required": ["name", "file", "content"],
-            },
-        },
-        {
-            "name": "session_list",
-            "description": "List all files in a session dir with their sizes and mtimes.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Session name."},
-                    "format": _FORMAT_PROP,
-                },
-                "required": ["name"],
-            },
-        },
-        {
-            "name": "session_status",
-            "description": "Live fanout dashboard for a session: phase progression with per-persona status badges (queued/running/done/blocked), persona timing, and file listing. Read this between Agent() calls in the orchestrator to render the current state of the fanout.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Session name."},
-                    "format": _FORMAT_PROP,
-                },
-                "required": ["name"],
-            },
-        },
-        {
-            "name": "session_set_status",
-            "defer_loading": True,
-            "description": "Mutate status.json: mark a persona or phase as queued/running/done/blocked/skipped. Auto-detects whether `target` is a persona or phase id; phase status auto-rolls-up from its personas. Call this immediately before launching an Agent() (status='running') and immediately after it returns (status='done' or 'blocked').",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name":   {"type": "string", "description": "Session name."},
-                    "target": {"type": "string", "description": "Persona name (e.g. 'agent-infra-ops') or phase id (e.g. 'implement')."},
-                    "status": {"type": "string", "enum": ["queued", "running", "done", "blocked", "skipped"]},
-                    "kind":   {"type": "string", "enum": ["persona", "phase"], "description": "Optional override; auto-detected from `target`."},
-                    "format": _FORMAT_PROP,
-                },
-                "required": ["name", "target", "status"],
-            },
-        },
-    ]
-
-    def handle_request(req: dict) -> dict:
-        method = req.get("method", "")
-        rid = req.get("id")
-        params = req.get("params", {})
-
-        if method == "initialize":
-            return {
-                "jsonrpc": "2.0", "id": rid,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {
-                        "name": "kuberly-platform",
-                        "version": "1.3.0",
-                    },
-                },
-            }
-
-        if method == "notifications/initialized":
-            return None  # No response for notifications
-
-        if method == "tools/list":
-            return {"jsonrpc": "2.0", "id": rid, "result": {"tools": TOOLS}}
-
-        if method == "tools/call":
-            tool_name = params.get("name", "")
-            tool_args = params.get("arguments", {})
-            fmt = tool_args.get("format", "compact")
-            t0 = time.monotonic()
-            try:
-                result = dispatch_tool(graph, tool_name, tool_args)
-                text = render_tool_result(tool_name, result, tool_args, graph, fmt=fmt)
-                _emit_telemetry(graph, tool_name, fmt, tool_args, text,
-                                duration_ms=int((time.monotonic() - t0) * 1000),
-                                error=None)
-                return {
-                    "jsonrpc": "2.0", "id": rid,
-                    "result": {
-                        "content": [{"type": "text", "text": text}],
-                    },
-                }
-            except Exception as exc:
-                _emit_telemetry(graph, tool_name, fmt, tool_args, "",
-                                duration_ms=int((time.monotonic() - t0) * 1000),
-                                error=f"{type(exc).__name__}: {exc}")
-                return {
-                    "jsonrpc": "2.0", "id": rid,
-                    "result": {
-                        "content": [{"type": "text", "text": f"Error: {exc}"}],
-                        "isError": True,
-                    },
-                }
-
-        # Unknown method
-        return {
-            "jsonrpc": "2.0", "id": rid,
-            "error": {"code": -32601, "message": f"Unknown method: {method}"},
-        }
-
-    def dispatch_tool(g: KuberlyPlatform, name: str, args: dict):
-        if name == "query_nodes":
-            return g.query_nodes(
-                node_type=args.get("node_type"),
-                environment=args.get("environment"),
-                name_contains=args.get("name_contains"),
-            )
-        elif name == "query_resources":
-            return g.query_resources(
-                environment=args.get("environment"),
-                module=args.get("module"),
-                resource_type=args.get("resource_type"),
-                name_contains=args.get("name_contains"),
-                include_redacted=args.get("include_redacted", True),
-            )
-        elif name == "find_docs":
-            return g.find_docs(
-                query=args.get("query", ""),
-                kind=args.get("kind"),
-                semantic=args.get("semantic", True),
-                limit=args.get("limit", 20),
-            )
-        elif name == "graph_index":
-            return g.graph_index()
-        elif name == "query_k8s":
-            return g.query_k8s(
-                environment=args.get("environment"),
-                namespace=args.get("namespace"),
-                kind=args.get("kind"),
-                name_contains=args.get("name_contains"),
-                label_selector=args.get("label_selector"),
-                include_redacted=args.get("include_redacted", True),
-            )
-        elif name == "get_node":
-            return g.get_neighbors(args["node"])  # includes node_info
-        elif name == "get_neighbors":
-            return g.get_neighbors(args["node"])
-        elif name == "blast_radius":
-            return g.blast_radius(
-                args["node"],
-                direction=args.get("direction", "both"),
-                max_depth=args.get("max_depth", 20),
-            )
-        elif name == "shortest_path":
-            return g.shortest_path(args["source"], args["target"])
-        elif name == "drift":
-            return g.cross_env_drift()
-        elif name == "stats":
-            return g.compute_stats()
-        elif name == "plan_persona_fanout":
-            return g.plan_persona_fanout(
-                task=args["task"],
-                named_modules=args.get("named_modules"),
-                target_envs=args.get("target_envs"),
-                current_branch=args.get("current_branch"),
-                session_name=args.get("session_name"),
-                task_kind=args.get("task_kind"),
-                with_review=bool(args.get("with_review", False)),
-            )
-        elif name == "quick_scope":
-            return g.quick_scope(
-                task=args["task"],
-                named_modules=args.get("named_modules"),
-                target_envs=args.get("target_envs"),
-            )
-        elif name == "session_init":
-            return g.session_init(
-                name=args["name"],
-                task=args.get("task"),
-                modules=args.get("modules"),
-                current_branch=args.get("current_branch"),
-            )
-        elif name == "session_read":
-            return g.session_read(args["name"], args["file"])
-        elif name == "session_write":
-            return g.session_write(args["name"], args["file"], args["content"])
-        elif name == "session_list":
-            return g.session_list(args["name"])
-        elif name == "session_status":
-            return g.session_status(args["name"])
-        elif name == "session_set_status":
-            return g.session_set_status(
-                name=args["name"],
-                target=args["target"],
-                status=args["status"],
-                kind=args.get("kind"),
-            )
-        else:
-            raise ValueError(f"Unknown tool: {name}")
-
-    # stdio JSON-RPC loop
-    sys.stderr.write(f"kuberly-platform MCP server started ({len(graph.nodes)} nodes, {len(graph.edges)} edges)\n")
-    sys.stderr.flush()
-
-    buf = ""
-    while True:
-        try:
-            line = sys.stdin.readline()
-            if not line:
-                break
-            buf += line
-            # Try to parse complete JSON messages
-            # MCP uses Content-Length headers or newline-delimited JSON
-            buf = buf.strip()
-            if not buf:
-                continue
-            try:
-                req = json.loads(buf)
-                buf = ""
-                resp = handle_request(req)
-                if resp is not None:
-                    out = json.dumps(resp)
-                    sys.stdout.write(out + "\n")
-                    sys.stdout.flush()
-            except json.JSONDecodeError:
-                continue  # Incomplete message, keep buffering
-        except KeyboardInterrupt:
-            break
-        except Exception as exc:
-            sys.stderr.write(f"Error: {exc}\n")
-            sys.stderr.flush()
 
 
 if __name__ == "__main__":
