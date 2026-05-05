@@ -450,7 +450,23 @@ def build_overlay(repo_root: Path, paths_filter: list[str] | None,
         "embed_provider": provider,
         "docs": sorted(docs, key=lambda d: d["id"]),
     }
-    return _validate_overlay(overlay)
+    validated = _validate_overlay(overlay)
+
+    # Idempotent generated_at: if the validated overlay is byte-identical
+    # to the previous one (excluding the timestamp), preserve the
+    # previous timestamp. Without this, every regeneration writes a new
+    # `generated_at` even when nothing else changed, which makes
+    # pre-commit hooks that re-run the generator on every commit flap
+    # indefinitely. The comparison happens post-validation because the
+    # on-disk file is itself the post-validation form, so the docs key
+    # set and ordering match.
+    if prev_overlay is not None and isinstance(prev_overlay.get("generated_at"), str):
+        prev_sans_ts = {k: v for k, v in prev_overlay.items() if k != "generated_at"}
+        next_sans_ts = {k: v for k, v in validated.items() if k != "generated_at"}
+        if prev_sans_ts == next_sans_ts:
+            validated["generated_at"] = prev_overlay["generated_at"]
+
+    return validated
 
 
 # ----- final validator -----------------------------------------------

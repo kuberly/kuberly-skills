@@ -259,7 +259,14 @@ def parse_hcl_dependencies(hcl_path: Path) -> list[str]:
 
 
 def parse_hcl_component_refs(hcl_path: Path) -> list[str]:
-    """Extract component JSON references like include.root.locals.components.X"""
+    """Extract component JSON references like include.root.locals.components.X.
+
+    Returns refs sorted by name. The sort is load-bearing for output
+    determinism: these refs are added as edges, and the BFS traversal
+    used by `blast_radius` walks adjacency lists in insertion order, so
+    a non-deterministic edge order surfaces as a non-deterministic
+    blast_*.mmd output across regenerations of identical inputs.
+    """
     refs = []
     try:
         text = hcl_path.read_text()
@@ -270,7 +277,7 @@ def parse_hcl_component_refs(hcl_path: Path) -> list[str]:
             refs.append(m.group(1))
     except Exception:
         pass
-    return list(set(refs))
+    return sorted(set(refs))
 
 
 def load_json_safe(path: Path) -> dict | None:
@@ -987,7 +994,11 @@ class KuberlyPlatform:
 
     def link_components_to_modules(self):
         """Link component JSONs to modules they configure."""
-        module_names = {n["label"] for n in self.nodes.values() if n["type"] == "module"}
+        # Sorted so the resulting `configures_module` edges are added in
+        # a stable order across runs. A bare `{...}` set comprehension
+        # iterates in PYTHONHASHSEED-dependent order, which surfaces as
+        # non-deterministic edge ordering in graph.json.
+        module_names = sorted({n["label"] for n in self.nodes.values() if n["type"] == "module"})
         for nid, node in list(self.nodes.items()):
             if node["type"] == "component":
                 comp_name = node["label"]
@@ -3260,7 +3271,7 @@ def write_mermaid_dag(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = 
             lines.append(f"class {sid} k8s")
 
     path = out_dir / "module_dag.mmd"
-    path.write_text("\n".join(lines))
+    path.write_text("\n".join(lines) + "\n")
     if verbose:
         print(f"wrote {path} (module dependency DAG)")
 
@@ -3310,7 +3321,7 @@ def write_mermaid_dag(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = 
                     elines.append(f"{ss} -->|{rel}| {ts}")
 
         env_path = out_dir / f"env_{env}.mmd"
-        env_path.write_text("\n".join(elines))
+        env_path.write_text("\n".join(elines) + "\n")
         if verbose:
             print(f"wrote {env_path} ({env} environment)")
 
@@ -3347,7 +3358,7 @@ def write_mermaid_dag(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = 
                     break
 
         br_path = out_dir / f"blast_{env}.mmd"
-        br_path.write_text("\n".join(blines))
+        br_path.write_text("\n".join(blines) + "\n")
         if verbose:
             print(f"wrote {br_path} (blast radius: {env})")
 

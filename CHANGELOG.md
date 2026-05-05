@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.28.0 — 2026-05-06
+
+- **FIX:** generator non-determinism made the pre-commit
+  `regenerate-docs-overlay` and graph-regen hooks flap indefinitely on
+  consumer repos — every commit attempt rewrote `docs_overlay.json` /
+  `blast_*.mmd` / `graph.json` with different bytes, so the hooks
+  always reported "files were modified" and rolled back the commit.
+  Three independent root causes:
+  1. `parse_hcl_component_refs()` returned `list(set(refs))`. Set
+     iteration order depends on `PYTHONHASHSEED`, so HCL
+     `component_type:*` edges were inserted in different order across
+     runs. Now `sorted(set(refs))`.
+  2. `link_components_to_modules()` built `module_names` as a set
+     comprehension and iterated it. Same hashseed problem; surfaced
+     as `configures_module` edges in different order. Now
+     `sorted({...})`.
+  3. `docs_graph.build_overlay()` always wrote a fresh `generated_at`
+     timestamp. Now compares the validated overlay (sans timestamp)
+     against the previous on-disk overlay and preserves the previous
+     timestamp when content is unchanged. Idempotent regen.
+- **FIX:** mermaid emitters (`module_dag.mmd`, `env_*.mmd`,
+  `blast_*.mmd`) now write a trailing newline. Without it,
+  `pre-commit-hooks` `end-of-file-fixer` would auto-fix on every
+  commit, contributing to the same flap loop.
+- Verified: two consecutive `kuberly_platform.py generate` runs against
+  stage5 (1308 nodes / 1770 edges) produce **byte-identical** outputs.
+  Same for `docs_graph.py generate`.
+- **BUMP:** apm.yml 0.27.0 → 0.28.0.
+
 ## v0.27.0 — 2026-05-05
 
 - **FIX:** empty-canvas regression on graphs with state + k8s overlays.
