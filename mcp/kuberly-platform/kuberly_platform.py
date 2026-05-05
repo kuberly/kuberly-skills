@@ -4,7 +4,7 @@ kuberly-platform: Knowledge graph generator for kuberly-stack Terragrunt/OpenTof
 
 Parses components, applications, modules, and their dependencies to produce:
   - graph.json  — queryable graph structure
-  - graph.html  — interactive vis.js visualization
+  - graph.html  — interactive cytoscape.js compound-node visualization
   - GRAPH_REPORT.md — summary with critical nodes, dependency chains, and cross-env drift
 """
 
@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import string
 import struct
 import sys
 import time
@@ -2357,200 +2358,657 @@ def write_graph_json(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = F
         print(f"wrote {path} ({len(data['nodes'])} nodes, {len(data['edges'])} edges)")
 
 
-def write_graph_html(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = False):
-    data = graph.to_json()
+def _node_source_layer(node: dict) -> str:
+    """Classify a node into one of {static, state, k8s, docs} for the
+    cytoscape viz color encoding. The graph builder doesn't always set
+    a `source` attr explicitly, so we derive it from type / id prefix.
+    """
+    ntype = node.get("type", "") or ""
+    nid = node.get("id", "") or ""
+    if ntype == "k8s_resource" or nid.startswith("k8s:"):
+        return "k8s"
+    if ntype == "doc" or nid.startswith("doc:"):
+        return "docs"
+    if ntype == "resource" or nid.startswith("resource:"):
+        return "state"
+    if (node.get("source") or "") == "state":
+        return "state"
+    return "static"
 
-    # Color scheme by node type
-    type_colors = {
-        "environment": "#4CAF50",
-        "shared-infra": "#FF9800",
-        "component": "#2196F3",
-        "application": "#9C27B0",
-        "module": "#607D8B",
-        "cloud_provider": "#795548",
-    }
-    type_shapes = {
-        "environment": "diamond",
-        "shared-infra": "star",
-        "component": "dot",
-        "application": "square",
-        "module": "triangle",
-        "cloud_provider": "hexagon",
-    }
-    edge_colors = {
-        "depends_on": "#F44336",
-        "contains": "#4CAF50",
-        "configures": "#FF9800",
-        "configures_module": "#2196F3",
-        "deploys": "#9C27B0",
-        "provides": "#795548",
-        "reads_config": "#00BCD4",
-    }
 
-    vis_nodes = []
+def _node_compound_parent(node: dict, layer: str) -> str | None:
+    """Build the cytoscape `parent` id for compound-nesting.
+
+    Hierarchy:
+      compound:env:<env>
+        |- compound:k8s:<env>/<ns>          (k8s layer only)
+        |- compound:layer:<env>/<layer>     (everything else)
+    Nodes with no `environment` attr land under `cross-env` instead of
+    a real env compound. The `environment` node itself is unparented —
+    it's the root the env-compound visually represents.
+    """
+    if node.get("type") == "environment":
+        return None
+    env = node.get("environment") or ""
+    env_key = env or "cross-env"
+    if layer == "k8s":
+        ns = node.get("k8s_namespace") or "_cluster"
+        return f"compound:k8s:{env_key}/{ns}"
+    return f"compound:layer:{env_key}/{layer}"
+
+
+def _build_cytoscape_elements(data: dict) -> tuple[list, list]:
+    """Convert the kuberly-platform graph dump into cytoscape elements.
+
+    Returns (nodes, edges). Compound parents are emitted as nodes
+    themselves (cytoscape requires every `parent` id to be a real node)
+    with a `compound: True` flag and a `kind` of either `env`, `k8s_ns`,
+    or `layer` so the stylesheet can theme them.
+    """
+    cy_nodes: list[dict] = []
+    compound_ids: dict[str, dict] = {}
+    # Track which env-compounds we need to materialize.
+    seen_envs: set[str] = set()
+
     for n in data["nodes"]:
-        ntype = n.get("type", "")
-        title_parts = [f"<b>{n['id']}</b>", f"Type: {ntype}"]
-        for k, v in n.items():
-            if k not in ("id", "type", "label") and v:
-                title_parts.append(f"{k}: {v}")
-        vis_nodes.append({
-            "id": n["id"],
-            "label": n.get("label", n["id"]),
-            "color": type_colors.get(ntype, "#999"),
-            "shape": type_shapes.get(ntype, "dot"),
-            "title": "<br>".join(title_parts),
-            "group": ntype,
-            "size": 20 if ntype in ("environment", "shared-infra", "cloud_provider") else 12,
+        layer = _node_source_layer(n)
+        parent = _node_compound_parent(n, layer)
+        env = n.get("environment") or ""
+        env_key = env or "cross-env"
+        if n.get("type") != "environment":
+            seen_envs.add(env_key)
+        attrs = {k: v for k, v in n.items()
+                 if k not in ("id", "label") and v not in (None, "", [], {})}
+        cy_nodes.append({
+            "data": {
+                "id": n["id"],
+                "label": n.get("label") or n["id"],
+                "type": n.get("type", ""),
+                "source_layer": layer,
+                "parent": parent,
+                "attrs": attrs,
+            },
+            "classes": layer,
+        })
+        # Materialize the layer/k8s-ns compound on first sight.
+        if parent and parent not in compound_ids:
+            if parent.startswith("compound:k8s:"):
+                ns = parent.split("/", 1)[1] if "/" in parent else "_cluster"
+                compound_ids[parent] = {
+                    "data": {
+                        "id": parent,
+                        "label": f"ns: {ns}",
+                        "compound": True,
+                        "kind": "k8s_ns",
+                        "source_layer": "k8s",
+                        "parent": f"compound:env:{env_key}",
+                    },
+                    "classes": "compound k8s",
+                }
+            else:
+                # compound:layer:<env>/<layer>
+                compound_ids[parent] = {
+                    "data": {
+                        "id": parent,
+                        "label": layer,
+                        "compound": True,
+                        "kind": "layer",
+                        "source_layer": layer,
+                        "parent": f"compound:env:{env_key}",
+                    },
+                    "classes": f"compound {layer}",
+                }
+
+    # Materialize env compounds last so they exist as parents.
+    for env_key in sorted(seen_envs):
+        cid = f"compound:env:{env_key}"
+        compound_ids.setdefault(cid, {
+            "data": {
+                "id": cid,
+                "label": f"env: {env_key}",
+                "compound": True,
+                "kind": "env",
+                "source_layer": "static",
+                "parent": None,
+            },
+            "classes": "compound env",
         })
 
-    vis_edges = []
-    for e in data["edges"]:
-        rel = e.get("relation", "")
-        vis_edges.append({
-            "from": e["source"],
-            "to": e["target"],
-            "label": rel,
-            "color": {"color": edge_colors.get(rel, "#999"), "opacity": 0.7},
-            "arrows": "to",
-            "font": {"size": 8, "color": "#666"},
-            "smooth": {"type": "cubicBezier"},
-        })
+    cy_nodes.extend(compound_ids.values())
 
-    html = f"""<!DOCTYPE html>
+    cy_edges: list[dict] = []
+    for i, e in enumerate(data["edges"]):
+        cy_edges.append({
+            "data": {
+                "id": f"e{i}",
+                "source": e["source"],
+                "target": e["target"],
+                "relation": e.get("relation", ""),
+            },
+        })
+    return cy_nodes, cy_edges
+
+
+# String.Template — NOT f-strings. The HTML body has many `$${}` JS
+# template literals that f-strings would mangle. Every JS `$${...}` is
+# escaped as `$$${...}` here (Template treats `$$` as a literal `$`),
+# while `$NODES_JSON` and `$EDGES_JSON` are substituted.
+_GRAPH_HTML_TEMPLATE = string.Template(r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>kuberly-stack Knowledge Graph</title>
-<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.1/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/layout-base@2.0.1/layout-base.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cose-base@2.2.0/cose-base.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
 <style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; }}
-  #controls {{ padding: 12px 16px; background: #16213e; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }}
-  #controls label {{ font-size: 13px; }}
-  #controls select, #controls input {{ background: #0f3460; color: #eee; border: 1px solid #444; padding: 4px 8px; border-radius: 4px; font-size: 13px; }}
-  #controls button {{ background: #e94560; color: #fff; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; }}
-  #controls button:hover {{ background: #c73e54; }}
-  #graph {{ width: 100vw; height: calc(100vh - 100px); }}
-  #legend {{ display: flex; gap: 16px; padding: 8px 16px; background: #16213e; flex-wrap: wrap; }}
-  .legend-item {{ display: flex; align-items: center; gap: 4px; font-size: 12px; }}
-  .legend-dot {{ width: 12px; height: 12px; border-radius: 50%; }}
-  #info {{ position: fixed; bottom: 16px; right: 16px; background: #16213e; padding: 12px; border-radius: 8px; max-width: 350px; font-size: 12px; display: none; border: 1px solid #333; max-height: 50vh; overflow-y: auto; }}
+  :root {
+    --bg: #0f1419;
+    --glass: rgba(15, 20, 25, 0.8);
+    --panel-border: rgba(255, 255, 255, 0.08);
+    --text: #e5e7eb;
+    --muted: #9ca3af;
+    --static: #60a5fa;
+    --state: #34d399;
+    --k8s: #fbbf24;
+    --docs: #c4b5fd;
+    --edge: #374151;
+    --edge-hover: #9ca3af;
+    --selected: #22d3ee;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+  }
+  #topbar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 20px;
+    background: var(--glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--panel-border);
+    z-index: 10;
+    font-size: 13px;
+  }
+  #topbar .brand { font-weight: 600; letter-spacing: 0.2px; }
+  #topbar .stats { color: var(--muted); font-size: 12px; }
+  #search {
+    background: rgba(255,255,255,0.04);
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    width: 220px;
+    outline: none;
+  }
+  #search:focus { border-color: var(--selected); }
+  .layer-toggles { display: flex; gap: 10px; align-items: center; }
+  .layer-toggles label {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; cursor: pointer;
+    padding: 4px 10px; border-radius: 14px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--panel-border);
+    user-select: none;
+  }
+  .layer-toggles input { accent-color: var(--selected); }
+  .swatch {
+    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+  }
+  .swatch.static { background: var(--static); }
+  .swatch.state  { background: var(--state); }
+  .swatch.k8s    { background: var(--k8s); }
+  .swatch.docs   { background: var(--docs); }
+  #layout-select {
+    background: rgba(255,255,255,0.04);
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  #cy {
+    position: fixed;
+    top: 56px; left: 0; right: 0; bottom: 0;
+    background: var(--bg);
+  }
+  #sidebar {
+    position: fixed;
+    top: 56px; right: 0; bottom: 0;
+    width: 320px;
+    background: var(--glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-left: 1px solid var(--panel-border);
+    transform: translateX(100%);
+    transition: transform 180ms ease-out;
+    overflow-y: auto;
+    padding: 18px;
+    font-size: 13px;
+    z-index: 9;
+  }
+  #sidebar.open { transform: translateX(0); }
+  #sidebar h2 {
+    font-size: 14px; font-weight: 600; margin-bottom: 10px;
+    word-break: break-all; line-height: 1.3;
+  }
+  #sidebar .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  #sidebar .chip {
+    font-size: 11px; padding: 3px 9px; border-radius: 10px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--panel-border);
+    color: var(--muted);
+  }
+  #sidebar .chip.layer-static { color: var(--static); border-color: rgba(96,165,250,0.4); }
+  #sidebar .chip.layer-state  { color: var(--state);  border-color: rgba(52,211,153,0.4); }
+  #sidebar .chip.layer-k8s    { color: var(--k8s);    border-color: rgba(251,191,36,0.4); }
+  #sidebar .chip.layer-docs   { color: var(--docs);   border-color: rgba(196,181,253,0.4); }
+  #sidebar h3 {
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--muted);
+    margin: 14px 0 6px;
+  }
+  #sidebar details {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+  #sidebar details summary {
+    cursor: pointer; font-size: 12px; color: var(--muted);
+  }
+  #sidebar .attrs { font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 11px; line-height: 1.5; word-break: break-all; }
+  #sidebar .attrs .k { color: var(--muted); }
+  #sidebar .attrs .v { color: var(--text); }
+  #sidebar .edges a {
+    display: block; padding: 4px 6px; border-radius: 4px;
+    color: var(--text); text-decoration: none; font-size: 12px;
+    word-break: break-all;
+  }
+  #sidebar .edges a:hover { background: rgba(34,211,238,0.08); color: var(--selected); }
+  #sidebar .edges .rel { color: var(--muted); font-size: 10px; margin-left: 4px; }
+  #sidebar .actions { display: flex; gap: 8px; margin-top: 14px; }
+  #sidebar button {
+    flex: 1;
+    background: rgba(34,211,238,0.08);
+    color: var(--selected);
+    border: 1px solid rgba(34,211,238,0.3);
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  #sidebar button:hover { background: rgba(34,211,238,0.15); }
+  #sidebar #close-btn {
+    position: absolute; top: 12px; right: 12px;
+    background: transparent; border: none; color: var(--muted);
+    cursor: pointer; font-size: 18px; padding: 4px 8px;
+    flex: none;
+  }
+  .pulse { animation: pulse 0.9s ease-in-out 3; }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(34,211,238,0.6); }
+    50%      { box-shadow: 0 0 0 6px rgba(34,211,238,0.0); }
+  }
 </style>
 </head>
 <body>
 
-<div id="controls">
-  <label>Filter type:
-    <select id="typeFilter">
-      <option value="all">All</option>
-      {"".join(f'<option value="{t}">{t}</option>' for t in type_colors)}
-    </select>
-  </label>
-  <label>Filter env:
-    <select id="envFilter">
-      <option value="all">All</option>
-    </select>
-  </label>
-  <label>Search: <input id="search" placeholder="node name..." /></label>
-  <button onclick="resetView()">Reset</button>
-  <span style="margin-left:auto;font-size:12px;opacity:0.6">{len(data['nodes'])} nodes &middot; {len(data['edges'])} edges</span>
+<div id="topbar">
+  <div class="brand">kuberly-graph</div>
+  <input id="search" type="text" placeholder="Search nodes..." autocomplete="off" />
+  <div class="layer-toggles">
+    <label><input type="checkbox" data-layer="static" checked><span class="swatch static"></span>static</label>
+    <label><input type="checkbox" data-layer="state" checked><span class="swatch state"></span>state</label>
+    <label><input type="checkbox" data-layer="k8s"><span class="swatch k8s"></span>k8s</label>
+    <label><input type="checkbox" data-layer="docs" checked><span class="swatch docs"></span>docs</label>
+  </div>
+  <select id="layout-select" title="Layout algorithm">
+    <option value="fcose" selected>fcose (compound force)</option>
+    <option value="dagre">dagre (hierarchy)</option>
+    <option value="concentric">concentric</option>
+  </select>
+  <span class="stats" id="stats"></span>
 </div>
 
-<div id="legend">
-  {"".join(f'<div class="legend-item"><div class="legend-dot" style="background:{c}"></div>{t}</div>' for t, c in type_colors.items())}
-</div>
+<div id="cy"></div>
 
-<div id="graph"></div>
-<div id="info"></div>
+<aside id="sidebar">
+  <button id="close-btn" title="Close (ESC)">&times;</button>
+  <div id="sidebar-body"></div>
+</aside>
 
 <script>
-const allNodes = {json.dumps(vis_nodes)};
-const allEdges = {json.dumps(vis_edges)};
+const NODES = $NODES_JSON;
+const EDGES = $EDGES_JSON;
 
-const nodes = new vis.DataSet(allNodes);
-const edges = new vis.DataSet(allEdges);
+const LAYER_COLORS = {
+  static: "#60a5fa",
+  state:  "#34d399",
+  k8s:    "#fbbf24",
+  docs:   "#c4b5fd",
+};
 
-const container = document.getElementById('graph');
-const network = new vis.Network(container, {{ nodes, edges }}, {{
-  physics: {{
-    enabled: true,
-    solver: 'forceAtlas2Based',
-    forceAtlas2Based: {{ gravitationalConstant: -80, centralGravity: 0.01, springLength: 120 }},
-    stabilization: {{ enabled: true, iterations: 600, fit: true, updateInterval: 25 }},
-  }},
-  interaction: {{ hover: true, tooltipDelay: 100, navigationButtons: true, dragNodes: true }},
-  layout: {{ improvedLayout: true }},
-}});
+document.getElementById("stats").textContent =
+  NODES.filter(n => !n.data.compound).length + " nodes · " + EDGES.length + " edges";
 
-// Freeze the layout once initial stabilization is done so the graph stops moving.
-network.once('stabilizationIterationsDone', () => {{
-  network.setOptions({{ physics: {{ enabled: false }} }});
-}});
+const cy = cytoscape({
+  container: document.getElementById("cy"),
+  elements: { nodes: NODES, edges: EDGES },
+  wheelSensitivity: 0.2,
+  style: [
+    {
+      selector: "node",
+      style: {
+        "label": "data(label)",
+        "font-size": 9,
+        "color": "#e5e7eb",
+        "text-valign": "center",
+        "text-halign": "center",
+        "text-outline-color": "#0f1419",
+        "text-outline-width": 2,
+        "background-color": "#999",
+        "width": 18,
+        "height": 18,
+        "border-width": 0,
+      },
+    },
+    { selector: "node.static", style: { "background-color": LAYER_COLORS.static } },
+    { selector: "node.state",  style: { "background-color": LAYER_COLORS.state  } },
+    { selector: "node.k8s",    style: { "background-color": LAYER_COLORS.k8s    } },
+    { selector: "node.docs",   style: { "background-color": LAYER_COLORS.docs   } },
+    {
+      selector: "node.compound",
+      style: {
+        "background-color": "rgba(255,255,255,0.04)",
+        "background-opacity": 1,
+        "border-color": "rgba(255,255,255,0.10)",
+        "border-width": 1,
+        "shape": "round-rectangle",
+        "label": "data(label)",
+        "text-valign": "top",
+        "text-halign": "center",
+        "font-size": 10,
+        "color": "#9ca3af",
+        "padding": 14,
+        "min-zoomed-font-size": 8,
+      },
+    },
+    {
+      selector: "node.compound.env",
+      style: {
+        "border-color": "rgba(255,255,255,0.18)",
+        "background-color": "rgba(255,255,255,0.02)",
+        "font-size": 12,
+        "color": "#e5e7eb",
+      },
+    },
+    // k8s OFF by default — hide both leaf nodes and their compound parents.
+    { selector: "node.k8s.layer-off", style: { "display": "none" } },
+    { selector: "node.static.layer-off", style: { "display": "none" } },
+    { selector: "node.state.layer-off", style: { "display": "none" } },
+    { selector: "node.docs.layer-off", style: { "display": "none" } },
+    {
+      selector: "edge",
+      style: {
+        "width": 1.2,
+        "line-color": "#374151",
+        "target-arrow-color": "#374151",
+        "target-arrow-shape": "triangle",
+        "curve-style": "bezier",
+        "arrow-scale": 0.7,
+        "opacity": 0.7,
+      },
+    },
+    { selector: "edge.dim", style: { "opacity": 0.08 } },
+    { selector: "node.dim", style: { "opacity": 0.15 } },
+    {
+      selector: "node:selected",
+      style: {
+        "border-width": 3,
+        "border-color": "#22d3ee",
+        "background-color": "data(color)",
+      },
+    },
+    { selector: "node.match", style: { "border-width": 2, "border-color": "#22d3ee" } },
+    {
+      selector: "node.upstream",
+      style: { "border-width": 3, "border-color": "#f87171", "background-color": "#f87171" },
+    },
+    {
+      selector: "node.downstream",
+      style: { "border-width": 3, "border-color": "#22d3ee" },
+    },
+    {
+      selector: "edge.highlight",
+      style: { "line-color": "#22d3ee", "target-arrow-color": "#22d3ee", "opacity": 1, "width": 2 },
+    },
+  ],
+  layout: { name: "fcose", quality: "default", animate: false, randomize: true,
+            nodeSeparation: 80, idealEdgeLength: 80, packComponents: true },
+});
 
-// Populate env filter
-const envs = new Set();
-allNodes.forEach(n => {{ if (n.group === 'environment') envs.add(n.label); }});
-const envSel = document.getElementById('envFilter');
-envs.forEach(e => {{ const o = document.createElement('option'); o.value = e; o.text = e; envSel.add(o); }});
+// Apply default k8s OFF state via `layer-off` class on every k8s node.
+function applyLayerVisibility(layer, on) {
+  cy.batch(() => {
+    cy.nodes("." + layer).forEach(n => {
+      if (on) n.removeClass("layer-off");
+      else    n.addClass("layer-off");
+    });
+  });
+}
+applyLayerVisibility("k8s", false);
 
-function applyFilters() {{
-  const typeVal = document.getElementById('typeFilter').value;
-  const envVal = document.getElementById('envFilter').value;
-  const searchVal = document.getElementById('search').value.toLowerCase();
+document.querySelectorAll(".layer-toggles input").forEach(cb => {
+  cb.addEventListener("change", () => {
+    applyLayerVisibility(cb.dataset.layer, cb.checked);
+  });
+});
 
-  const visibleIds = new Set();
-  allNodes.forEach(n => {{
-    let show = true;
-    if (typeVal !== 'all' && n.group !== typeVal) show = false;
-    if (envVal !== 'all') {{
-      // Show node if it belongs to this env or is a module/provider (always show)
-      const isGlobal = ['module', 'cloud_provider'].includes(n.group);
-      const matchesEnv = n.id.includes(envVal + '/') || n.id === 'env:' + envVal;
-      if (!isGlobal && !matchesEnv) show = false;
-    }}
-    if (searchVal && !n.label.toLowerCase().includes(searchVal) && !n.id.toLowerCase().includes(searchVal)) show = false;
-    if (show) visibleIds.add(n.id);
-  }});
+// Layout switcher.
+function runLayout(name) {
+  let opts = { name, animate: false, fit: true };
+  if (name === "fcose") {
+    opts = { ...opts, quality: "default", randomize: true,
+             nodeSeparation: 80, idealEdgeLength: 80, packComponents: true };
+  } else if (name === "dagre") {
+    opts = { ...opts, rankDir: "TB", nodeSep: 30, rankSep: 60 };
+  } else if (name === "concentric") {
+    opts = { ...opts, concentric: n => n.degree(), levelWidth: () => 1 };
+  }
+  cy.layout(opts).run();
+}
+document.getElementById("layout-select").addEventListener("change", e => {
+  runLayout(e.target.value);
+});
 
-  nodes.update(allNodes.map(n => ({{ id: n.id, hidden: !visibleIds.has(n.id) }})));
-  edges.update(allEdges.map((e, i) => ({{ id: i, hidden: !visibleIds.has(e.from) || !visibleIds.has(e.to) }})));
-}}
+// Search — fuzzy substring match on id + label.
+const searchEl = document.getElementById("search");
+searchEl.addEventListener("input", () => {
+  const q = searchEl.value.trim().toLowerCase();
+  cy.nodes().removeClass("match pulse");
+  if (!q) return;
+  const matches = cy.nodes().filter(n => {
+    if (n.data("compound")) return false;
+    const id = (n.id() || "").toLowerCase();
+    const lbl = (n.data("label") || "").toLowerCase();
+    return id.includes(q) || lbl.includes(q);
+  });
+  matches.addClass("match pulse");
+});
+searchEl.addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  const first = cy.nodes(".match").first();
+  if (first && first.length) {
+    cy.animate({ center: { eles: first }, zoom: 1.3 }, { duration: 250 });
+  }
+});
 
-document.getElementById('typeFilter').onchange = applyFilters;
-document.getElementById('envFilter').onchange = applyFilters;
-document.getElementById('search').oninput = applyFilters;
+// Sidebar.
+const sidebar = document.getElementById("sidebar");
+const sidebarBody = document.getElementById("sidebar-body");
 
-function resetView() {{
-  document.getElementById('typeFilter').value = 'all';
-  document.getElementById('envFilter').value = 'all';
-  document.getElementById('search').value = '';
-  applyFilters();
-  network.fit();
-}}
+function renderSidebar(node) {
+  const data = node.data();
+  const layer = data.source_layer || "static";
+  const incoming = cy.edges(`[target = "$${data.id}"]`);
+  const outgoing = cy.edges(`[source = "$${data.id}"]`);
+  const attrs = data.attrs || {};
+  const attrEntries = Object.entries(attrs).filter(([k]) => k !== "label" && k !== "id");
 
-// Click info panel
-network.on('click', params => {{
-  const info = document.getElementById('info');
-  if (params.nodes.length > 0) {{
-    const nid = params.nodes[0];
-    const node = allNodes.find(n => n.id === nid);
-    const incoming = allEdges.filter(e => e.to === nid);
-    const outgoing = allEdges.filter(e => e.from === nid);
-    info.style.display = 'block';
-    info.innerHTML = '<b>' + node.id + '</b><br>Type: ' + node.group +
-      '<br><br><b>Incoming (' + incoming.length + '):</b><br>' +
-      incoming.map(e => '  ' + e.from + ' [' + e.label + ']').join('<br>') +
-      '<br><br><b>Outgoing (' + outgoing.length + '):</b><br>' +
-      outgoing.map(e => '  ' + e.to + ' [' + e.label + ']').join('<br>');
-  }} else {{
-    info.style.display = 'none';
-  }}
-}});
+  let attrHtml = "";
+  if (attrEntries.length) {
+    attrHtml = `<details $${attrEntries.length <= 4 ? "open" : ""}><summary>$${attrEntries.length} attribute$${attrEntries.length === 1 ? "" : "s"}</summary><div class="attrs">` +
+      attrEntries.map(([k, v]) => {
+        const vs = typeof v === "object" ? JSON.stringify(v) : String(v);
+        return `<div><span class="k">$${k}:</span> <span class="v">$${escapeHtml(vs)}</span></div>`;
+      }).join("") + `</div></details>`;
+  }
+
+  const inHtml = incoming.map(e => {
+    const src = e.source().id();
+    const rel = e.data("relation") || "";
+    return `<a href="#" data-jump="$${src}">$${escapeHtml(src)}<span class="rel">[$${escapeHtml(rel)}]</span></a>`;
+  }).join("") || `<div class="rel">none</div>`;
+  const outHtml = outgoing.map(e => {
+    const tgt = e.target().id();
+    const rel = e.data("relation") || "";
+    return `<a href="#" data-jump="$${tgt}">$${escapeHtml(tgt)}<span class="rel">[$${escapeHtml(rel)}]</span></a>`;
+  }).join("") || `<div class="rel">none</div>`;
+
+  sidebarBody.innerHTML = `
+    <h2>$${escapeHtml(data.id)}</h2>
+    <div class="chips">
+      $${data.type ? `<span class="chip">$${escapeHtml(data.type)}</span>` : ""}
+      <span class="chip layer-$${layer}">$${layer}</span>
+    </div>
+    $${attrHtml}
+    <h3>Incoming ($${incoming.length})</h3>
+    <div class="edges">$${inHtml}</div>
+    <h3>Outgoing ($${outgoing.length})</h3>
+    <div class="edges">$${outHtml}</div>
+    <div class="actions">
+      <button id="blast-btn">Show blast radius</button>
+      <button id="center-btn">Center</button>
+    </div>
+  `;
+  sidebar.classList.add("open");
+
+  sidebarBody.querySelectorAll("a[data-jump]").forEach(a => {
+    a.addEventListener("click", ev => {
+      ev.preventDefault();
+      const target = cy.getElementById(a.dataset.jump);
+      if (target && target.length) {
+        cy.nodes().unselect();
+        target.select();
+        cy.animate({ center: { eles: target }, zoom: 1.3 }, { duration: 250 });
+        renderSidebar(target);
+      }
+    });
+  });
+  document.getElementById("blast-btn").addEventListener("click", () => showBlast(node));
+  document.getElementById("center-btn").addEventListener("click", () => {
+    cy.animate({ center: { eles: node }, zoom: 1.3 }, { duration: 250 });
+  });
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function showBlast(node) {
+  cy.elements().addClass("dim");
+  // Walk upstream (sources -> us) and downstream (us -> sinks).
+  const upstream = node.predecessors("node");
+  const downstream = node.successors("node");
+  upstream.removeClass("dim").addClass("upstream");
+  downstream.removeClass("dim").addClass("downstream");
+  node.removeClass("dim");
+  node.predecessors("edge").removeClass("dim").addClass("highlight");
+  node.successors("edge").removeClass("dim").addClass("highlight");
+}
+
+function clearBlast() {
+  cy.elements().removeClass("dim upstream downstream highlight");
+}
+
+cy.on("tap", "node", evt => {
+  const n = evt.target;
+  if (n.data("compound")) {
+    // Click on compound: toggle child visibility (cheap collapse).
+    const kids = n.children();
+    if (kids.first().style("display") === "none") {
+      kids.style("display", "element");
+    } else {
+      kids.style("display", "none");
+    }
+    return;
+  }
+  clearBlast();
+  renderSidebar(n);
+});
+
+cy.on("tap", evt => {
+  if (evt.target === cy) {
+    sidebar.classList.remove("open");
+    cy.nodes().unselect();
+    clearBlast();
+  }
+});
+
+document.getElementById("close-btn").addEventListener("click", () => {
+  sidebar.classList.remove("open");
+  cy.nodes().unselect();
+  clearBlast();
+});
+
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    sidebar.classList.remove("open");
+    cy.nodes().unselect();
+    clearBlast();
+    cy.nodes().removeClass("match pulse");
+    searchEl.value = "";
+  }
+});
 </script>
 </body>
-</html>"""
+</html>
+""")
 
+
+def write_graph_html(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool = False):
+    """Render the cytoscape-based interactive viz to <out_dir>/graph.html.
+
+    Replaces the v0.22 force-graph viz. All four overlays (static,
+    state, k8s, docs) are color-coded and compound-nested by env →
+    namespace / layer. k8s layer is OFF by default (864 nodes is noisy);
+    user toggles it on via the topbar checkbox.
+    """
+    data = graph.to_json()
+    cy_nodes, cy_edges = _build_cytoscape_elements(data)
+    html = _GRAPH_HTML_TEMPLATE.substitute(
+        NODES_JSON=json.dumps(cy_nodes),
+        EDGES_JSON=json.dumps(cy_edges),
+    )
     path = out_dir / "graph.html"
     path.write_text(html)
     if verbose:

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.23.0 — 2026-05-05
+
+- **NEW:** cytoscape.js compound-node graph viz replaces vis.js force-graph
+  in `.claude/graph.html`.
+  - Color-coded by source layer (static / state / k8s / docs)
+  - Collapsible compound nesting by env -> namespace
+  - Layer toggles, fuzzy search, layout switcher (fcose / dagre /
+    concentric)
+  - Click-to-sidebar with node details + edges + blast-radius highlight
+  - k8s layer OFF by default (cuts initial render from 864 to ~100
+    nodes)
+
 ## v0.22.0 — 2026-05-05
 
 - **BREAKING:** persona rename — `iac-developer` → `agent-infra-ops`,

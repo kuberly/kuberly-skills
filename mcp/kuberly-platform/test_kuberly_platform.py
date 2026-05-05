@@ -13,6 +13,7 @@ The path-resolution shim below makes this script runnable in two layouts:
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -1703,6 +1704,137 @@ class DocsGraphProducerTests(unittest.TestCase):
         }
         out = self.dg._validate_overlay(bad)
         self.assertEqual(len(out["docs"]), 0)
+
+
+class GraphHtmlVizTests(unittest.TestCase):
+    """v0.23.0: cytoscape compound-node graph viz.
+
+    Builds a tiny in-memory graph with one node per source layer
+    (static / state / k8s / docs), renders the HTML, and asserts:
+      - the file exists and contains the cytoscape script tag
+      - the embedded NODES json parses and every leaf has source_layer
+        in {static, state, k8s, docs}
+      - every k8s node has a parent compound id, and every parent id
+        also exists as a node (cytoscape requires this)
+    """
+
+    def _build_graph(self):
+        from kuberly_platform import KuberlyPlatform
+
+        tmp = _fake_repo()
+        g = KuberlyPlatform(tmp.name)
+        g.build()
+        # Inject one synthetic node per source layer so the test
+        # exercises every classification branch even if the fake repo
+        # is missing overlays.
+        g.add_node("k8s:prod/monitoring/Deployment/loki",
+                   type="k8s_resource", label="Deployment/loki",
+                   environment="prod", k8s_kind="Deployment",
+                   k8s_namespace="monitoring", k8s_name="loki")
+        g.add_node("k8s:prod/argocd/Deployment/argocd-server",
+                   type="k8s_resource", label="Deployment/argocd-server",
+                   environment="prod", k8s_kind="Deployment",
+                   k8s_namespace="argocd", k8s_name="argocd-server")
+        g.add_node("doc:skill/loki-troubleshoot",
+                   type="doc", label="loki-troubleshoot",
+                   doc_kind="skill", path="docs/loki.md")
+        g.add_node("resource:prod/loki/aws_s3_bucket.ingester",
+                   type="resource", label="aws_s3_bucket.ingester",
+                   environment="prod")
+        return tmp, g
+
+    def _extract_elements(self, html: str):
+        # The template renders `const NODES = [...]; const EDGES = [...];`
+        m = re.search(r"const NODES = (\[.*?\]);\s*const EDGES = (\[.*?\]);",
+                      html, re.DOTALL)
+        self.assertIsNotNone(m, "expected NODES/EDGES JSON in graph.html")
+        nodes = json.loads(m.group(1))
+        edges = json.loads(m.group(2))
+        return nodes, edges
+
+    def test_write_graph_html_produces_valid_file(self):
+        from kuberly_platform import write_graph_html
+
+        tmp, g = self._build_graph()
+        try:
+            with tempfile.TemporaryDirectory() as out:
+                out_path = Path(out)
+                write_graph_html(g, out_path)
+                html_file = out_path / "graph.html"
+                self.assertTrue(html_file.is_file())
+                html = html_file.read_text(encoding="utf-8")
+                # Cytoscape + fcose CDN refs are present.
+                self.assertIn("cytoscape", html)
+                self.assertIn("fcose", html)
+                # No leftover vis.js references.
+                self.assertNotIn("vis-network", html)
+                self.assertNotIn("vis.Network", html)
+                # The substitution happened — no raw $NODES_JSON literal.
+                self.assertNotIn("$NODES_JSON", html)
+                # Embedded JSON parses.
+                nodes, edges = self._extract_elements(html)
+                self.assertGreater(len(nodes), 0)
+                self.assertIsInstance(edges, list)
+        finally:
+            tmp.cleanup()
+
+    def test_graph_html_compound_hierarchy(self):
+        from kuberly_platform import write_graph_html
+
+        tmp, g = self._build_graph()
+        try:
+            with tempfile.TemporaryDirectory() as out:
+                out_path = Path(out)
+                write_graph_html(g, out_path)
+                html = (out_path / "graph.html").read_text(encoding="utf-8")
+                nodes, _ = self._extract_elements(html)
+
+                ids = {n["data"]["id"] for n in nodes}
+                # Every k8s leaf has a parent compound id.
+                k8s_leaves = [n for n in nodes
+                              if n["data"].get("source_layer") == "k8s"
+                              and not n["data"].get("compound")]
+                self.assertGreater(len(k8s_leaves), 0)
+                for n in k8s_leaves:
+                    parent = n["data"].get("parent")
+                    self.assertIsNotNone(parent,
+                        f"k8s leaf {n['data']['id']} has no parent")
+                    self.assertIn(parent, ids,
+                        f"compound parent {parent} not present as a node")
+
+                # Every compound parent that any node references must
+                # itself exist as a node (cytoscape invariant).
+                referenced_parents = {n["data"].get("parent") for n in nodes
+                                      if n["data"].get("parent")}
+                for p in referenced_parents:
+                    self.assertIn(p, ids, f"missing compound: {p}")
+        finally:
+            tmp.cleanup()
+
+    def test_graph_html_source_layer_attr(self):
+        from kuberly_platform import write_graph_html
+
+        tmp, g = self._build_graph()
+        try:
+            with tempfile.TemporaryDirectory() as out:
+                out_path = Path(out)
+                write_graph_html(g, out_path)
+                html = (out_path / "graph.html").read_text(encoding="utf-8")
+                nodes, _ = self._extract_elements(html)
+
+                allowed = {"static", "state", "k8s", "docs"}
+                for n in nodes:
+                    layer = n["data"].get("source_layer")
+                    self.assertIn(layer, allowed,
+                        f"node {n['data']['id']} has bad source_layer={layer}")
+
+                # All four layers are represented (we injected one of each).
+                seen = {n["data"].get("source_layer") for n in nodes
+                        if not n["data"].get("compound")}
+                self.assertEqual(allowed, allowed & seen,
+                    f"missing layers — saw {seen}")
+        finally:
+            tmp.cleanup()
 
 
 if __name__ == "__main__":
