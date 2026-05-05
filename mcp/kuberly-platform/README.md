@@ -82,3 +82,61 @@ ServiceAccounts with `eks.amazonaws.com/role-arn` annotation get an `irsa_bound`
 ### MCP tool: `query_k8s`
 
 Filter `k8s_resource:` nodes by `environment` / `namespace` / `kind` / `name_contains` / `label_selector`. Set `include_redacted=False` to hide Secret/ConfigMap nodes when sharing graph dumps.
+
+## Docs / knowledge overlay (v0.20.0+)
+
+`docs_graph.py` indexes every doc/skill/agent/prompt/OpenSpec change in the repo into `.claude/docs_overlay.json`. Stdlib only, deterministic, runs offline by default.
+
+```bash
+# offline pass — file walk + frontmatter + headings + link/mention edges
+python3 scripts/mcp/kuberly-platform/docs_graph.py generate
+
+# also compute embeddings (incremental — only changed files re-embedded):
+KUBERLY_DOCS_EMBED=openai OPENAI_API_KEY=sk-... \
+    python3 scripts/mcp/kuberly-platform/docs_graph.py generate --embed
+
+# limit to specific path prefixes:
+python3 scripts/mcp/kuberly-platform/docs_graph.py generate --paths agents/,docs/
+
+# full rescan (ignore prior overlay; useful after switching embed providers):
+python3 scripts/mcp/kuberly-platform/docs_graph.py generate --full --embed
+```
+
+### Pre-commit auto-regen
+
+Wire `scripts/regenerate_docs_overlay.sh` into the consumer's `.pre-commit-config.yaml`:
+
+```yaml
+- repo: local
+  hooks:
+    - id: regenerate-docs-overlay
+      name: Refresh .claude/docs_overlay.json
+      entry: bash apm_modules/kuberly/kuberly-skills/scripts/regenerate_docs_overlay.sh
+      language: system
+      pass_filenames: false
+      files: '\.(md|json)$'
+```
+
+The hook is idempotent — when no doc changed, the only diff is the `generated_at` timestamp. Embeddings default OFF (no API key needed); set `KUBERLY_DOCS_EMBED=openai` in your shell to also embed changed files.
+
+### What gets indexed
+
+| Kind | Path pattern | Source of metadata |
+|---|---|---|
+| `skill` | `.apm/skills/*/SKILL.md` | YAML frontmatter (name, description) |
+| `agent` | `agents/*.md` | YAML frontmatter (tools, description) |
+| `doc` | `docs/*.md`, `*.md` (top-level), `mcp/*/README.md` | First H1 + leading paragraph |
+| `openspec` | `openspec/changes/*/{proposal,tasks,design,CHANGELOG}.md` | Filename + headings |
+| `reference` | `references/**/*.md` | Headings |
+| `prompt` | `prompts/**/*.md` | Headings |
+
+Edges:
+- `links_to` — markdown links between docs
+- `mentions` — backtick-wrapped mentions of known module/component/application names map to those graph nodes (so `query_nodes(node_type="doc")` and `get_neighbors("module:aws/loki")` connect)
+- `uses_tool` — agents → `tool:<name>` (informational)
+
+### MCP tools: `find_docs` + `graph_index`
+
+`find_docs(query, kind=None, semantic=True, limit=20)` — keyword scoring against title+description+headings always; if embeddings present, also cosine similarity (combined 0.4 keyword + 0.6 semantic).
+
+`graph_index()` — meta-tool. Returns a snapshot of every layer loaded, node counts by type, edge counts by relation, cross-layer bridges (IRSA, configures_module, depends_on, mentions), and overlay file freshness timestamps. Call this at session start to know what data you have.

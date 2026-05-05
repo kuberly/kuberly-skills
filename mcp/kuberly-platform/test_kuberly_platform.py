@@ -1265,5 +1265,163 @@ class K8sOverlayConsumerTests(unittest.TestCase):
         self.assertNotIn("ConfigMap", kinds)
 
 
+class DocsOverlayTests(unittest.TestCase):
+    """Docs overlay (knowledge layer) — extraction + cross-link edges +
+    find_docs + graph_index meta tool."""
+
+    def setUp(self) -> None:
+        self.tmp = _fake_repo()
+        # The fake repo already has a `loki` module + `prod/loki` component.
+        # Add an OpenSpec change + a skill + an agent that mention loki.
+        Path(self.tmp.name, ".apm/skills/test-skill").mkdir(parents=True, exist_ok=True)
+        Path(self.tmp.name, ".apm/skills/test-skill/SKILL.md").write_text(
+            "---\nname: test-skill\ndescription: Test skill that talks about `loki` and `eks`\n---\n"
+            "# Test skill\n## Section\nThis skill mentions `loki` and `prod/loki` and `nonexistent`.\n"
+            "Link: [other doc](../../docs/HELLO.md)\n"
+        )
+        Path(self.tmp.name, "agents").mkdir(exist_ok=True)
+        Path(self.tmp.name, "agents/foo.md").write_text(
+            "---\nname: foo\ndescription: Test agent\ntools: Read, Write, mcp__kuberly-platform__query_nodes\n---\n"
+            "# Foo agent\n## How\nUse `loki` for logs.\n"
+        )
+        Path(self.tmp.name, "docs").mkdir(exist_ok=True)
+        Path(self.tmp.name, "docs/HELLO.md").write_text("# Hello\nA test doc.\n")
+
+        # Build the docs overlay file directly (no need to run docs_graph.py)
+        overlay = Path(self.tmp.name) / ".claude" / "docs_overlay.json"
+        overlay.parent.mkdir(parents=True, exist_ok=True)
+        overlay.write_text(json.dumps({
+            "schema_version": 1,
+            "generated_at": "2026-05-05T00:00:00Z",
+            "generator": "kuberly-skills/docs_graph.py",
+            "embed_provider": "",
+            "docs": [
+                {"id": "skill/test-skill", "kind": "skill",
+                 "path": ".apm/skills/test-skill/SKILL.md",
+                 "title": "test-skill",
+                 "description": "Test skill that talks about loki and eks",
+                 "headings": ["Test skill", "Section"],
+                 "tools": [], "linked_docs": ["docs/HELLO.md"],
+                 "mentions": {"modules": ["loki"], "components": ["loki"], "applications": []},
+                 "content_sha": "sha256:abc123"},
+                {"id": "agent/foo", "kind": "agent",
+                 "path": "agents/foo.md",
+                 "title": "foo",
+                 "description": "Test agent that handles loki incidents",
+                 "headings": ["Foo agent", "How"],
+                 "tools": ["Read", "mcp__kuberly-platform__query_nodes"],
+                 "linked_docs": [],
+                 "mentions": {"modules": ["loki"], "components": [], "applications": []},
+                 "content_sha": "sha256:def456"},
+                {"id": "doc/HELLO", "kind": "doc",
+                 "path": "docs/HELLO.md",
+                 "title": "Hello", "description": "",
+                 "headings": ["Hello"], "tools": [], "linked_docs": [],
+                 "mentions": {"modules": [], "components": [], "applications": []},
+                 "content_sha": "sha256:ghi789"},
+            ],
+        }) + "\n")
+        self.g = KuberlyPlatform(self.tmp.name)
+        self.g.build()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_doc_nodes_synthesized(self) -> None:
+        ids = sorted(n["id"] for n in self.g.nodes.values() if n.get("type") == "doc")
+        self.assertEqual(ids, ["doc:agent/foo", "doc:doc/HELLO", "doc:skill/test-skill"])
+
+    def test_links_to_edge_emitted(self) -> None:
+        edges = [(e["source"], e["target"]) for e in self.g.edges
+                 if e.get("relation") == "links_to"]
+        self.assertIn(("doc:skill/test-skill", "doc:doc/HELLO"), edges)
+
+    def test_mentions_edges_to_module(self) -> None:
+        edges = [(e["source"], e["target"]) for e in self.g.edges
+                 if e.get("relation") == "mentions"]
+        # Both skill and agent mention `loki` -> edges to module:aws/loki
+        self.assertIn(("doc:skill/test-skill", "module:aws/loki"), edges)
+        self.assertIn(("doc:agent/foo", "module:aws/loki"), edges)
+
+    def test_uses_tool_edges(self) -> None:
+        edges = [(e["source"], e["target"]) for e in self.g.edges
+                 if e.get("relation") == "uses_tool"]
+        self.assertIn(("doc:agent/foo", "tool:Read"), edges)
+        self.assertIn(("doc:agent/foo", "tool:mcp__kuberly-platform__query_nodes"), edges)
+
+    def test_find_docs_keyword_match(self) -> None:
+        res = self.g.find_docs(query="loki", limit=10)
+        self.assertGreater(res["count"], 0)
+        ids = {m["id"] for m in res["matches"]}
+        # Both docs that mention loki should rank above the empty doc.
+        self.assertIn("doc:skill/test-skill", ids)
+        self.assertIn("doc:agent/foo", ids)
+
+    def test_find_docs_kind_filter(self) -> None:
+        res = self.g.find_docs(query="loki", kind="skill", limit=10)
+        for m in res["matches"]:
+            self.assertEqual(m["doc_kind"], "skill")
+
+    def test_graph_index_reports_layers(self) -> None:
+        idx = self.g.graph_index()
+        self.assertGreater(idx["node_counts_by_type"].get("doc", 0), 0)
+        self.assertGreater(idx["edge_counts_by_relation"].get("uses_tool", 0), 0)
+        meta = idx.get("docs_overlay_meta") or {}
+        self.assertEqual(meta.get("doc_count"), 3)
+
+
+class DocsGraphProducerTests(unittest.TestCase):
+    """Pure tests for the offline docs_graph.py extractor — no network."""
+
+    def setUp(self) -> None:
+        sg_path = _pkg if (_pkg / "docs_graph.py").is_file() else _script_dir
+        if str(sg_path) not in sys.path:
+            sys.path.insert(0, str(sg_path))
+        import docs_graph
+        self.dg = docs_graph
+
+    def test_classify_recognises_skill(self) -> None:
+        self.assertEqual(self.dg._classify(".apm/skills/foo/SKILL.md"), "skill")
+        self.assertEqual(self.dg._classify("agents/troubleshooter.md"), "agent")
+        self.assertEqual(self.dg._classify("docs/AGENT_SESSIONS.md"), "doc")
+        self.assertIsNone(self.dg._classify("apm_modules/x/y.md"))
+        self.assertIsNone(self.dg._classify("random/file.txt"))
+
+    def test_doc_id_stable_human(self) -> None:
+        self.assertEqual(self.dg._doc_id(".apm/skills/foo/SKILL.md", "skill"),
+                         "skill/foo")
+        self.assertEqual(self.dg._doc_id("agents/troubleshooter.md", "agent"),
+                         "agent/troubleshooter")
+
+    def test_frontmatter_parses_inline_list(self) -> None:
+        text = (
+            "---\n"
+            "name: x\n"
+            "description: 'A thing'\n"
+            "tools: Read, Write, Bash\n"
+            "---\n# body\n"
+        )
+        fm = self.dg._parse_frontmatter(text)
+        self.assertEqual(fm["name"], "x")
+        self.assertEqual(fm["description"], "A thing")
+        self.assertEqual(fm["tools"], ["Read", "Write", "Bash"])
+
+    def test_mentions_match_known_modules(self) -> None:
+        text = "Backticks `loki` and `unknown_module` and prose loki."
+        out = self.dg._detect_mentions(text, {"loki"}, set(), set())
+        self.assertEqual(out["modules"], ["loki"])
+
+    def test_validator_rejects_bad_doc_id(self) -> None:
+        bad = {
+            "schema_version": 1,
+            "generated_at": "2026-05-05T00:00:00Z",
+            "embed_provider": "",
+            "docs": [{"id": "$(rm -rf /)", "kind": "skill",
+                      "path": "x.md", "content_sha": "sha256:ab"}],
+        }
+        out = self.dg._validate_overlay(bad)
+        self.assertEqual(len(out["docs"]), 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

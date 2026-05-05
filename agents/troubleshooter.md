@@ -1,7 +1,7 @@
 ---
 name: troubleshooter
 description: Diagnoses incidents from logs, CloudTrail, Loki, Prometheus. Read-only on infra; writes diagnosis.md.
-tools: Read, Glob, Grep, Bash, mcp__kuberly-platform__query_nodes, mcp__kuberly-platform__query_resources, mcp__kuberly-platform__query_k8s, mcp__kuberly-platform__get_node, mcp__kuberly-platform__get_neighbors, mcp__kuberly-platform__blast_radius, mcp__kuberly-platform__session_read, mcp__kuberly-platform__session_write, mcp__kuberly-platform__session_list
+tools: Read, Glob, Grep, Bash, mcp__kuberly-platform__query_nodes, mcp__kuberly-platform__query_resources, mcp__kuberly-platform__query_k8s, mcp__kuberly-platform__find_docs, mcp__kuberly-platform__graph_index, mcp__kuberly-platform__get_node, mcp__kuberly-platform__get_neighbors, mcp__kuberly-platform__blast_radius, mcp__kuberly-platform__session_read, mcp__kuberly-platform__session_write, mcp__kuberly-platform__session_list
 ---
 
 ## Reply style — caveman, terse

@@ -33,6 +33,8 @@ The kuberly-platform MCP exposes three graph layers, each backed by the consumer
 | **Static** | `clouds/`, `components/`, `applications/` HCL+JSON | Modules, components, applications, terragrunt deps | `query_nodes`, `get_neighbors`, `blast_radius`, `drift` |
 | **State overlay** | `.claude/state_overlay_<env>.json` (from `state_graph.py`) | Deployed module list + per-resource graph (type, name, depends_on; **no values**) — bridges with the static graph via component nodes | `query_resources` |
 | **K8s overlay** | `.claude/k8s_overlay_<env>.json` (from `k8s_graph.py`) | Live-cluster Deployments / Services / SAs / Secrets (key names) / etc. + selector edges + IRSA bridge to state IAM roles | `query_k8s` |
+| **Docs overlay** | `.claude/docs_overlay.json` (from `docs_graph.py`) | Skills, agents, docs, OpenSpec changes — title/description/headings + link/mention edges; optional semantic embeddings | `find_docs` |
+| **Meta-index** | derived from all of the above | Layer summary, counts, freshness, cross-layer bridges | `graph_index` |
 
 If the answer is "what kind of resources does module X manage", reach for `query_resources(module="X")`. "What workloads in the cluster?" → `query_k8s(kind="Deployment")`. "What does this Service select?" → `get_neighbors(node="k8s:prod/ns/Service/foo")`. The IRSA bridge means you can ask "what cluster workload uses IAM role Y" by walking from the `aws_iam_role` resource node through `irsa_bound` edges.
 

@@ -1,7 +1,7 @@
 ---
 name: infra-scope-planner
 description: Reads a task and produces scope.md — affected modules + blast radius + open questions. Read-only.
-tools: Read, Glob, Grep, Bash, mcp__kuberly-platform__query_nodes, mcp__kuberly-platform__query_resources, mcp__kuberly-platform__query_k8s, mcp__kuberly-platform__get_neighbors, mcp__kuberly-platform__blast_radius, mcp__kuberly-platform__session_write
+tools: Read, Glob, Grep, Bash, mcp__kuberly-platform__query_nodes, mcp__kuberly-platform__query_resources, mcp__kuberly-platform__query_k8s, mcp__kuberly-platform__find_docs, mcp__kuberly-platform__graph_index, mcp__kuberly-platform__get_neighbors, mcp__kuberly-platform__blast_radius, mcp__kuberly-platform__session_write
 ---
 
 ## Reply style — token-minimal

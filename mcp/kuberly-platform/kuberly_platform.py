@@ -9,14 +9,39 @@ Parses components, applications, modules, and their dependencies to produce:
 """
 
 import argparse
+import base64
 import json
+import math
 import os
 import re
+import struct
 import sys
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _b64_to_float_list(b64: str) -> list[float]:
+    """Decode a base64-encoded float32 array into a Python list. Returns
+    [] on any decoding failure — caller treats as "no embedding"."""
+    try:
+        raw = base64.b64decode(b64, validate=True)
+        n = len(raw) // 4
+        return list(struct.unpack(f"{n}f", raw))
+    except Exception:
+        return []
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
 
 
 # ---------------------------------------------------------------------------
@@ -726,6 +751,89 @@ class KuberlyPlatform:
                         and node.get("resource_name") == role_name):
                     self.add_edge(sa_nid, nid, relation="irsa_bound")
 
+    def scan_docs_overlay(self):
+        """Load `.claude/docs_overlay.json` (produced by `docs_graph.py`)
+        and synthesize doc nodes + cross-link edges.
+
+        Knowledge layer of the graph: which file explains which thing,
+        what links what, what skill mentions which module. Embeddings
+        (if present) are kept on the node attrs for `find_docs` semantic
+        ranking; they're not used by node-level graph traversal.
+        """
+        overlay_path = self.repo / ".claude" / "docs_overlay.json"
+        if not overlay_path.is_file():
+            return
+        data = load_json_safe(overlay_path)
+        if not data or data.get("schema_version") != 1:
+            return
+        for d in data.get("docs") or []:
+            if not isinstance(d, dict):
+                continue
+            did = d.get("id")
+            kind = d.get("kind")
+            path = d.get("path")
+            if not (did and kind and path):
+                continue
+            nid = f"doc:{did}"
+            attrs = {
+                "type": "doc",
+                "label": d.get("title") or did,
+                "doc_kind": kind,
+                "path": path,
+                "description": d.get("description", "") or "",
+                "headings": d.get("headings") or [],
+                "tools": d.get("tools") or [],
+                "content_sha": d.get("content_sha", ""),
+            }
+            embed = d.get("embedding_b64", "")
+            if embed:
+                attrs["has_embedding"] = True
+                # Keep the raw embedding off the public node dict to
+                # avoid bloating query_nodes responses; stash separately.
+                self._doc_embeddings = getattr(self, "_doc_embeddings", {})
+                self._doc_embeddings[nid] = embed
+            self.add_node(nid, **attrs)
+
+        # Pass 2: edges. linked_docs map to other doc IDs by path.
+        path_to_did: dict[str, str] = {}
+        for d in data.get("docs") or []:
+            if isinstance(d, dict) and d.get("path") and d.get("id"):
+                path_to_did[d["path"]] = d["id"]
+
+        for d in data.get("docs") or []:
+            if not isinstance(d, dict):
+                continue
+            src = f"doc:{d.get('id')}"
+            for link_path in d.get("linked_docs") or []:
+                if link_path in path_to_did:
+                    self.add_edge(src, f"doc:{path_to_did[link_path]}",
+                                  relation="links_to")
+            mentions = d.get("mentions") or {}
+            for mod in (mentions.get("modules") or []):
+                # Find the module node — there may be multiple cloud variants.
+                for nid, node in self.nodes.items():
+                    if node.get("type") == "module" and node.get("label") == mod:
+                        self.add_edge(src, nid, relation="mentions")
+            for comp in (mentions.get("components") or []):
+                for nid, node in self.nodes.items():
+                    if node.get("type") == "component" and node.get("label") == comp:
+                        self.add_edge(src, nid, relation="mentions")
+            for app in (mentions.get("applications") or []):
+                for nid, node in self.nodes.items():
+                    if node.get("type") == "application" and node.get("label") == app:
+                        self.add_edge(src, nid, relation="mentions")
+            # Agent → tool edges (informational; tool node may not exist
+            # but the edge target is a stable id like "tool:Read").
+            for t in d.get("tools") or []:
+                self.add_edge(src, f"tool:{t}", relation="uses_tool")
+
+        # Stash overlay metadata for graph_index().
+        self._docs_overlay_meta = {
+            "generated_at": data.get("generated_at", ""),
+            "embed_provider": data.get("embed_provider", ""),
+            "doc_count": len(data.get("docs") or []),
+        }
+
     def _scan_state_resources(self, env: str, modules_section: dict) -> None:
         """Synthesize `resource:<env>/<mod>/<addr>` nodes and depends_on
         edges from the schema 2 overlay's `modules` section."""
@@ -1011,6 +1119,111 @@ class KuberlyPlatform:
                 continue
             results.append(node)
         return results
+
+    def find_docs(self, query: str = "", kind: str = None,
+                  semantic: bool = True, limit: int = 20) -> dict:
+        """Search the docs overlay. Always does keyword scoring (title
+        + description + headings). If embeddings are present and
+        `semantic=True`, *also* computes cosine similarity and combines
+        the two scores. Returns top `limit` hits."""
+        q = (query or "").strip().lower()
+        q_terms = [t for t in re.split(r"[\s,]+", q) if t]
+        embeddings = getattr(self, "_doc_embeddings", {})
+        provider = (getattr(self, "_docs_overlay_meta", {}) or {}).get("embed_provider", "")
+
+        # Optional: embed the query.
+        q_vec: list[float] | None = None
+        if semantic and embeddings and provider and q:
+            q_b64 = self._embed_query(q, provider)
+            if q_b64:
+                q_vec = _b64_to_float_list(q_b64)
+
+        scored: list[tuple[float, dict]] = []
+        for nid, node in self.nodes.items():
+            if node.get("type") != "doc":
+                continue
+            if kind and node.get("doc_kind") != kind:
+                continue
+            kw_score = 0.0
+            if q_terms:
+                hay = " ".join([
+                    node.get("label", ""),
+                    node.get("description", ""),
+                    " ".join(node.get("headings", []) or []),
+                    nid,
+                ]).lower()
+                kw_score = sum(1.0 for t in q_terms if t in hay) / max(1, len(q_terms))
+            sem_score = 0.0
+            if q_vec is not None and nid in embeddings:
+                doc_vec = _b64_to_float_list(embeddings[nid])
+                sem_score = _cosine(q_vec, doc_vec)
+            # Combine: 0.4 * keyword + 0.6 * semantic if semantic available,
+            # else 100% keyword.
+            if q_vec is not None:
+                score = 0.4 * kw_score + 0.6 * sem_score
+            else:
+                score = kw_score
+            if not q_terms:
+                score = 1.0  # no query -> rank by id alphabetically
+            if score > 0:
+                scored.append((score, node))
+        scored.sort(key=lambda x: (-x[0], x[1].get("id", "")))
+        matches = [n for _, n in scored[:limit]]
+        return {
+            "matches": matches,
+            "count": len(scored),
+            "semantic_used": q_vec is not None,
+        }
+
+    def _embed_query(self, query: str, provider: str) -> str:
+        """Best-effort: embed a query string via the same provider used
+        for the overlay. Returns base64 string or "" on failure."""
+        try:
+            sg_dir = Path(__file__).resolve().parent
+            if str(sg_dir) not in sys.path:
+                sys.path.insert(0, str(sg_dir))
+            import docs_graph  # noqa: E402
+            return docs_graph._embed_text_b64(query, provider)
+        except Exception:
+            return ""
+
+    def graph_index(self) -> dict:
+        """Meta-tool: summarize the loaded graph layers, their freshness,
+        and which cross-layer bridges fired."""
+        layer_counts: dict[str, int] = {}
+        for n in self.nodes.values():
+            t = n.get("type", "?")
+            layer_counts[t] = layer_counts.get(t, 0) + 1
+        edge_counts: dict[str, int] = {}
+        bridges = {"irsa_bound": 0, "configures_module": 0,
+                   "depends_on": 0, "mentions": 0}
+        for e in self.edges:
+            r = e.get("relation", "")
+            edge_counts[r] = edge_counts.get(r, 0) + 1
+            if r in bridges:
+                bridges[r] += 1
+        # Discover overlay files for freshness reporting.
+        overlay_dir = self.repo / ".claude"
+        overlays = []
+        if overlay_dir.is_dir():
+            for of in sorted(overlay_dir.glob("*_overlay*.json")):
+                try:
+                    with of.open("r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                    overlays.append({
+                        "file": str(of.relative_to(self.repo)),
+                        "schema_version": data.get("schema_version"),
+                        "generated_at": data.get("generated_at", ""),
+                    })
+                except (OSError, json.JSONDecodeError):
+                    continue
+        return {
+            "node_counts_by_type": layer_counts,
+            "edge_counts_by_relation": dict(sorted(edge_counts.items())),
+            "cross_layer_bridges": bridges,
+            "overlays_found": overlays,
+            "docs_overlay_meta": getattr(self, "_docs_overlay_meta", {}),
+        }
 
     def query_k8s(self, environment: str = None, namespace: str = None,
                   kind: str = None, name_contains: str = None,
@@ -2008,6 +2221,9 @@ class KuberlyPlatform:
         # k8s overlay must run AFTER state overlay so the IRSA bridge can
         # find aws_iam_role resource nodes synthesized from state.
         self.scan_k8s_overlays()
+        # Docs overlay can run anytime — its mentions edges target nodes
+        # that already exist by this point (modules/components/apps).
+        self.scan_docs_overlay()
         self.scan_catalog()
         self.link_components_to_modules()
 
@@ -3280,6 +3496,35 @@ def _compact_summary(name: str, result, args: dict) -> str:
             rows.append(f"{rt}\t{env}/{mod}/{lbl}{tag}")
         return head + "\n" + "\n".join(rows)
 
+    if name == "find_docs":
+        matches = result.get("matches", [])
+        head = f"find_docs: {result.get('count', len(matches))}"
+        if result.get("semantic_used"):
+            head += " (semantic)"
+        if not matches:
+            return head
+        rows = []
+        for m in matches:
+            rows.append(f"{m.get('doc_kind','?')}\t{m.get('id','?')}\t{m.get('label','')[:80]}")
+        return head + "\n" + "\n".join(rows)
+
+    if name == "graph_index":
+        nc = result.get("node_counts_by_type") or {}
+        ec = result.get("edge_counts_by_relation") or {}
+        bridges = result.get("cross_layer_bridges") or {}
+        overlays = result.get("overlays_found") or []
+        out = ["graph_index:"]
+        out.append("  nodes: " + ", ".join(f"{k}={v}" for k, v in sorted(nc.items())))
+        out.append("  edges: " + ", ".join(f"{k}={v}" for k, v in sorted(ec.items())))
+        out.append("  bridges: " + ", ".join(f"{k}={v}" for k, v in bridges.items()))
+        out.append("  overlays:")
+        for o in overlays:
+            out.append(f"    {o.get('file','?')} schema={o.get('schema_version','?')} at={o.get('generated_at','?')}")
+        meta = result.get("docs_overlay_meta") or {}
+        if meta:
+            out.append(f"  docs: {meta.get('doc_count', 0)} indexed, embed_provider={meta.get('embed_provider', '') or '<none>'}")
+        return "\n".join(out)
+
     if name == "query_k8s":
         matches = result.get("matches", [])
         n = result.get("count", len(matches))
@@ -3535,6 +3780,27 @@ def run_mcp_server(graph: KuberlyPlatform):
                     "format": _FORMAT_PROP,
                 },
             },
+        },
+        {
+            "name": "find_docs",
+            "defer_loading": True,
+            "description": "Search the docs overlay (skills, agents, READMEs, OpenSpec changes, prompts). Always does keyword scoring against title/description/headings. If embeddings are present (KUBERLY_DOCS_EMBED was set when the overlay was generated), also computes semantic cosine similarity and combines the two scores 0.4 keyword + 0.6 semantic. Use to answer 'where is the skill that explains X' / 'what skill mentions module Y'.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query":    {"type": "string", "description": "Free-text query (will be tokenized for keyword + embedded for semantic)"},
+                    "kind":     {"type": "string", "description": "Filter: skill / agent / doc / openspec / reference / prompt"},
+                    "semantic": {"type": "boolean", "default": True, "description": "Use embedding similarity if available"},
+                    "limit":    {"type": "integer", "default": 20, "description": "Max results"},
+                    "format":   _FORMAT_PROP,
+                },
+            },
+        },
+        {
+            "name": "graph_index",
+            "defer_loading": True,
+            "description": "Meta-tool. Returns a summary of every graph layer that's loaded (static, state, k8s, docs), node counts by type, edge counts by relation, cross-layer bridges that fired (IRSA, configures_module, depends_on, mentions), and overlay file freshness timestamps. Use at the start of a session to know what data you have.",
+            "inputSchema": {"type": "object", "properties": {"format": _FORMAT_PROP}},
         },
         {
             "name": "query_k8s",
@@ -3813,6 +4079,15 @@ def run_mcp_server(graph: KuberlyPlatform):
                 name_contains=args.get("name_contains"),
                 include_redacted=args.get("include_redacted", True),
             )
+        elif name == "find_docs":
+            return g.find_docs(
+                query=args.get("query", ""),
+                kind=args.get("kind"),
+                semantic=args.get("semantic", True),
+                limit=args.get("limit", 20),
+            )
+        elif name == "graph_index":
+            return g.graph_index()
         elif name == "query_k8s":
             return g.query_k8s(
                 environment=args.get("environment"),
