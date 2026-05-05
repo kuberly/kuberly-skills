@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.27.0 — 2026-05-05
+
+- **FIX:** empty-canvas regression on graphs with state + k8s overlays.
+  HCL `component_type:*` references, agent doc `tool:*` references,
+  `k8s_namespace:*` targets, and state-overlay refs to suppressed
+  sensitive resource types all emitted edges to non-existent target
+  nodes. Cytoscape aborts on the first such edge ("Can not create edge
+  eN with nonexistant target ...") and renders nothing — even though
+  the header still shows the right node/edge counts.
+  - Filter orphan edges inside `to_json()` (the single chokepoint
+    feeding both `write_graph_json` and `write_graph_html`) via a new
+    `_serializable_edges()` helper. In-memory `self.edges` is left
+    intact so existing query semantics and tests that assert on those
+    edges (e.g. `targets_namespace`, `uses_tool`) keep working — only
+    the serialized projection is sanitized. On stage5 (1307 nodes /
+    4157 edges pre-fix) this drops ~2.4k orphan edges from the output
+    and the canvas renders cleanly.
+  - Regression test: `test_to_json_strips_orphan_edges`.
+- **BUMP:** apm.yml 0.26.0 → 0.27.0.
+
 ## v0.26.0 — 2026-05-05
 
 - **BREAKING:** graph artifacts directory `kuberly/` → `.kuberly/` (dot-prefix

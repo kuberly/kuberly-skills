@@ -1908,6 +1908,42 @@ class GraphHtmlVizTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_to_json_strips_orphan_edges(self):
+        """Regression for v0.27.0: serialized output must be cytoscape-safe.
+
+        HCL `component_type:*` refs, agent doc `tool:*` refs,
+        `k8s_namespace:*` refs, and state-overlay refs to redacted
+        resources all emit edges to non-materialized targets. In-memory
+        `self.edges` keeps them (existing query tests assert on them),
+        but `to_json()` — the single chokepoint feeding both
+        `write_graph_json` and `write_graph_html` — must filter them.
+        Cytoscape aborts on the first orphan and renders nothing.
+        """
+        from kuberly_platform import KuberlyPlatform
+
+        tmp = _fake_repo()
+        try:
+            g = KuberlyPlatform(tmp.name)
+            g.build()
+            # Inject a deliberate orphan and confirm in-memory state
+            # retains it but to_json() filters it out.
+            g.add_edge("env:prod", "component_type:does-not-exist",
+                       relation="reads_config")
+            self.assertTrue(any(
+                e["target"] == "component_type:does-not-exist"
+                for e in g.edges
+            ), "in-memory edges should retain the orphan")
+
+            data = g.to_json()
+            node_ids = {n["id"] for n in data["nodes"]}
+            for e in data["edges"]:
+                self.assertIn(e["source"], node_ids,
+                    f"serialized orphan edge source: {e}")
+                self.assertIn(e["target"], node_ids,
+                    f"serialized orphan edge target: {e}")
+        finally:
+            tmp.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

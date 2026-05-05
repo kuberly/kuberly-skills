@@ -297,6 +297,25 @@ class KuberlyPlatform:
     def add_edge(self, src: str, dst: str, **attrs):
         self.edges.append({"source": src, "target": dst, **attrs})
 
+    def _serializable_edges(self) -> list[dict]:
+        """Return edges with both endpoints materialized as real nodes.
+
+        Several scans intentionally emit edges to endpoints that are not
+        added as nodes — abstract HCL `component_type:*` references,
+        `tool:*` labels on agent docs, `k8s_namespace:*` targets, and
+        state-overlay refs to resources the producer redacts. These
+        carry useful query semantics (and existing tests assert on them
+        in `self.edges`), but cytoscape aborts on the first orphan and
+        refuses to render the canvas at all. Filter them out of the
+        serialized projection only — leave `self.edges` intact for
+        in-memory queries.
+        """
+        node_ids = self.nodes.keys()
+        return [
+            e for e in self.edges
+            if e["source"] in node_ids and e["target"] in node_ids
+        ]
+
     # -- scanners --
     def scan_environments(self):
         """Scan components/ for environments and their JSON configs."""
@@ -2340,7 +2359,7 @@ class KuberlyPlatform:
     def to_json(self) -> dict:
         return {
             "nodes": list(self.nodes.values()),
-            "edges": self.edges,
+            "edges": self._serializable_edges(),
             "stats": self.compute_stats(),
             "drift": self.cross_env_drift(),
         }
@@ -3490,8 +3509,19 @@ def main():
         n_crit  = sum(1 for _, ind, _ in stats["critical_nodes"] if ind >= 3)
         n_drift = len(drift["components"]) + len(drift["applications"])
 
+        # Edge counts: total emitted vs serialized. Orphan edges (targets
+        # not materialized as nodes — e.g. component_type:*, tool:*,
+        # redacted resources) are kept in-memory for query semantics but
+        # filtered from graph.json/graph.html so cytoscape can render.
+        n_edges_total = len(g.edges)
+        n_edges_out = len(g._serializable_edges())
+        edges_str = (
+            f"edges={n_edges_out}"
+            if n_edges_out == n_edges_total
+            else f"edges={n_edges_out} (+{n_edges_total - n_edges_out} orphan)"
+        )
         print(
-            f"kuberly-platform: nodes={len(g.nodes)} edges={len(g.edges)} "
+            f"kuberly-platform: nodes={len(g.nodes)} {edges_str} "
             f"envs={n_envs} modules={n_mods} apps={n_apps} "
             f"critical={n_crit} drift={n_drift}"
         )
