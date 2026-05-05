@@ -34,6 +34,8 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     --aws-soft:   #ffb84d;
     --amber:      #d89614;
     --amber-warm: #f5b042;
+    --k8s-red:    #e44d4d;
+    --k8s-red-soft: #ff7676;
     --blue-glow:  rgba(22,119,255,0.22);
     --radius:     14px;
     --radius-lg:  22px;
@@ -144,7 +146,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .layer-toggle .dot { width: 6px; height: 6px; border-radius: 50%; }
   .layer-toggle[data-layer=static] .dot { background: var(--blue); }
   .layer-toggle[data-layer=state]  .dot { background: var(--aws); }
-  .layer-toggle[data-layer=k8s]    .dot { background: var(--amber); }
+  .layer-toggle[data-layer=k8s]    .dot { background: var(--k8s-red); }
   .layer-toggle[data-layer=docs]   .dot { background: var(--ink-mute); }
   #graph-view-mode,
   #graph-group-by {
@@ -173,11 +175,15 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     border-color: var(--blue);
     color: #fff;
   }
-  /* Filter panel: drops down below the topbar when toggled. */
+  /* Filter panel: drops down below the actual topbar bottom edge. The
+     `top` value is set in JS at open time (topbar.getBoundingClientRect().bottom)
+     because the topbar is `flex-wrap: wrap` — when controls wrap to a
+     second row the topbar grows past 56px and a hardcoded top offset
+     would hide the wrapped controls underneath this panel. */
   #graph-filter-panel {
     position: fixed;
     top: 56px; left: 0; right: 0;
-    z-index: 11;
+    z-index: 9;
     background: rgba(11,14,18,0.96);
     border-bottom: 1px solid var(--ink-line);
     padding: 14px 20px 16px;
@@ -188,6 +194,26 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   }
   #graph-filter-panel:not([hidden]) { display: grid; }
   body:not(.view-graph) #graph-filter-panel { display: none !important; }
+  #graph-filter-panel .fp-close {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    width: 28px; height: 28px;
+    border: 1px solid var(--ink-line);
+    background: rgba(255,255,255,0.04);
+    color: var(--ink);
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #graph-filter-panel .fp-close:hover {
+    border-color: var(--blue-soft);
+    background: rgba(22,119,255,0.12);
+  }
   .fp-label {
     font-family: var(--font-mono);
     font-size: 10px;
@@ -708,12 +734,32 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   }
   .layer-legend {
     display: flex;
-    gap: 16px;
+    gap: 8px;
     flex-wrap: wrap;
     font-size: 12px;
     color: var(--ink-mute);
     font-family: var(--font-mono);
   }
+  .ll-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px 4px 8px;
+    border: 1px solid var(--ink-line);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.02);
+    cursor: help;
+  }
+  .ll-pill .ll-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+  .ll-pill.ll-static { border-color: rgba(22,119,255,0.30); }
+  .ll-pill.ll-static .ll-dot { background: var(--blue); box-shadow: 0 0 6px var(--blue-glow); }
+  .ll-pill.ll-state  { border-color: rgba(255,153,0,0.30); }
+  .ll-pill.ll-state  .ll-dot { background: var(--aws); box-shadow: 0 0 6px rgba(255,153,0,0.4); }
+  .ll-pill.ll-k8s    { border-color: rgba(228,77,77,0.32); }
+  .ll-pill.ll-k8s    .ll-dot { background: var(--k8s-red); box-shadow: 0 0 6px rgba(228,77,77,0.45); }
+  .ll-pill.ll-docs   { border-color: var(--ink-line); }
+  .ll-pill.ll-docs   .ll-dot { background: var(--ink-mute); }
+  .ll-pill strong { color: var(--ink); margin-left: 2px; }
 
   .env-grid {
     display: grid;
@@ -979,7 +1025,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   }
   #sidebar .chip.layer-static { color: var(--blue); border-color: rgba(22,119,255,0.30); background: rgba(22,119,255,0.08); }
   #sidebar .chip.layer-state  { color: var(--aws); border-color: rgba(255,153,0,0.30); background: rgba(255,153,0,0.08); }
-  #sidebar .chip.layer-k8s   { color: var(--amber-warm); border-color: rgba(245,176,66,0.30); background: rgba(245,176,66,0.08); }
+  #sidebar .chip.layer-k8s   { color: var(--k8s-red-soft); border-color: rgba(228,77,77,0.32); background: rgba(228,77,77,0.10); }
   #sidebar .chip.layer-docs  { color: var(--ink-mute); border-color: var(--ink-line); background: rgba(255,255,255,0.04); }
   #sidebar h3 {
     font-family: var(--font-mono);
@@ -1059,10 +1105,18 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   <div id="graph-controls">
     <input id="search" type="text" placeholder="Search nodes…" autocomplete="off" />
     <div class="layer-toggles">
-      <label class="layer-toggle active" data-layer="static"><input type="checkbox" data-layer="static" checked><span class="dot"></span>static</label>
-      <label class="layer-toggle active" data-layer="state"><input type="checkbox" data-layer="state" checked><span class="dot"></span>state</label>
-      <label class="layer-toggle inactive" data-layer="k8s"><input type="checkbox" data-layer="k8s"><span class="dot"></span>k8s</label>
-      <label class="layer-toggle active" data-layer="docs"><input type="checkbox" data-layer="docs" checked><span class="dot"></span>docs</label>
+      <label class="layer-toggle active" data-layer="static"
+             title="IaC files — Infrastructure-as-Code in this repo (HCL / JSON / CUE). The source of truth before anything is applied.">
+        <input type="checkbox" data-layer="static" checked><span class="dot"></span>IaC files</label>
+      <label class="layer-toggle active" data-layer="state"
+             title="Terragrunt / OpenTofu state — resources actually created for this cluster/env. What the IaC files produced after `terragrunt apply`.">
+        <input type="checkbox" data-layer="state" checked><span class="dot"></span>TG / OpenTofu state</label>
+      <label class="layer-toggle inactive" data-layer="k8s"
+             title="Live Kubernetes resources — Deployments, Services, ConfigMaps, etc. read from the running cluster overlay.">
+        <input type="checkbox" data-layer="k8s"><span class="dot"></span>K8s resources</label>
+      <label class="layer-toggle active" data-layer="docs"
+             title="Documentation references — module READMEs, runbooks, ADRs that mention the modules in this graph.">
+        <input type="checkbox" data-layer="docs" checked><span class="dot"></span>Docs</label>
     </div>
     <select id="graph-view-mode" title="Graph scope — start with overview on large stacks">
       <option value="overview">Overview (module deps)</option>
@@ -1082,6 +1136,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     <span class="stats" id="stats"></span>
   </div>
   <div id="graph-filter-panel" hidden>
+    <button type="button" class="fp-close" id="graph-filter-close" aria-label="Close filters" title="Close (Esc)">×</button>
     <div class="fp-section">
       <div class="fp-label">Environment</div>
       <div class="fp-row" id="fp-envs"></div>
@@ -1453,7 +1508,20 @@ function renderDashboard() {
 
   const cov = DASHBOARD.coverage || {};
   const layers = DASHBOARD.source_layers || {};
-  const layerLegend = ["static", "state", "k8s", "docs"].map(L => `$${L}: <strong>$${layers[L] || 0}</strong>`).join(" · ");
+  /* v0.34.3: descriptive labels for each source layer.
+     - static: IaC files in this repo (HCL / JSON / CUE)
+     - state:  Terragrunt / OpenTofu state — what's actually applied
+     - k8s:    live cluster overlay (Deployments, Services, ...)
+     - docs:   README / runbook references */
+  const LAYER_LABELS = {
+    static: "IaC files",
+    state:  "TG / OpenTofu state",
+    k8s:    "K8s resources",
+    docs:   "Docs",
+  };
+  const layerLegend = ["static", "state", "k8s", "docs"].map(L =>
+    `<span class="ll-pill ll-$${L}" title="$${esc(L === 'static' ? 'Infrastructure-as-Code files in the repo (HCL / JSON / CUE)' : L === 'state' ? 'Resources actually created by Terragrunt / OpenTofu for this cluster/env' : L === 'k8s' ? 'Live Kubernetes cluster resources (Deployments, Services, Pods, ...)' : 'Documentation references — module READMEs, runbooks, ADRs')}"><span class="ll-dot"></span>$${esc(LAYER_LABELS[L])}: <strong>$${layers[L] || 0}</strong></span>`
+  ).join(" ");
 
   const envCards = (DASHBOARD.environments || []).map(e => {
     const dcomp = (e.drift_components || []).length;
@@ -1828,7 +1896,7 @@ function buildGraph3D() {
   const LAYER_COLORS = {
     static: _v("--blue") || "#1677ff",
     state:  _v("--aws")  || "#ff9900",
-    k8s:    _v("--amber") || "#d89614",
+    k8s:    _v("--k8s-red") || "#e44d4d",
     docs:   "rgba(255,255,255,0.65)",
   };
   const HIGHLIGHT = _v("--blue-soft") || "#3c89e8";
@@ -2350,21 +2418,48 @@ function buildGraph3D() {
         applyDataAndRefresh();
       });
     }
-    /* v0.34.2: Filters toggle button + reset. */
+    /* v0.34.2/v0.34.3: Filters panel open/close.
+     * Topbar is flex-wrap so its height isn't fixed — measure on open and
+     * pin the panel to the actual bottom edge. ESC + click-outside +
+     * dedicated × button all close it. */
     const filterToggle = document.getElementById("graph-filters-toggle");
     const filterPanel  = document.getElementById("graph-filter-panel");
+    const filterCloseBtn = document.getElementById("graph-filter-close");
+    function closeFilterPanel() {
+      if (!filterPanel) return;
+      filterPanel.setAttribute("hidden", "");
+      if (filterToggle) filterToggle.setAttribute("aria-expanded", "false");
+    }
+    function openFilterPanel() {
+      if (!filterPanel) return;
+      const bar = document.getElementById("topbar");
+      if (bar) {
+        const r = bar.getBoundingClientRect();
+        filterPanel.style.top = Math.max(56, Math.round(r.bottom)) + "px";
+      }
+      filterPanel.removeAttribute("hidden");
+      if (filterToggle) filterToggle.setAttribute("aria-expanded", "true");
+    }
     if (filterToggle && filterPanel) {
       filterToggle.addEventListener("click", () => {
-        const open = filterPanel.hasAttribute("hidden") ? false : true;
-        if (open) {
-          filterPanel.setAttribute("hidden", "");
-          filterToggle.setAttribute("aria-expanded", "false");
-        } else {
-          filterPanel.removeAttribute("hidden");
-          filterToggle.setAttribute("aria-expanded", "true");
-        }
+        const isOpen = !filterPanel.hasAttribute("hidden");
+        if (isOpen) closeFilterPanel(); else openFilterPanel();
       });
     }
+    if (filterCloseBtn) filterCloseBtn.addEventListener("click", closeFilterPanel);
+    /* Click outside the panel closes it (but not when clicking the toggle —
+     * its own handler already toggles state). */
+    document.addEventListener("mousedown", e => {
+      if (!filterPanel || filterPanel.hasAttribute("hidden")) return;
+      if (filterPanel.contains(e.target)) return;
+      if (filterToggle && filterToggle.contains(e.target)) return;
+      closeFilterPanel();
+    });
+    /* If the topbar reflows (window resize, font load, layout settle),
+     * keep the panel pinned to the new bottom edge while it's open. */
+    window.addEventListener("resize", () => {
+      if (filterPanel && !filterPanel.hasAttribute("hidden")) openFilterPanel();
+    });
     const resetBtn = document.getElementById("graph-reset");
     if (resetBtn) resetBtn.addEventListener("click", resetFilters);
     searchEl.addEventListener("input", () => {
@@ -2392,6 +2487,11 @@ function buildGraph3D() {
     document.addEventListener("keydown", e => {
       if (e.key !== "Escape") return;
       if (!document.body.classList.contains("view-graph")) return;
+      /* Filter panel closes first if open — ESC twice clears search/blast. */
+      if (filterPanel && !filterPanel.hasAttribute("hidden")) {
+        closeFilterPanel();
+        return;
+      }
       sidebar.classList.remove("open");
       if (GRAPH_STATE) {
         GRAPH_STATE.blast = null;

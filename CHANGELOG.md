@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.34.3 — 2026-05-06
+
+Layer-pill rename + recolor, filter-panel UX fixes.
+
+### Graph layer pills (topbar)
+
+- **RENAME:** layer pills now read **"IaC files"** (was *static*),
+  **"TG / OpenTofu state"** (was *state*), **"K8s resources"** (was
+  *k8s*), **"Docs"** (was *docs*). Tooltips on each pill explain what
+  the layer means.
+- **RECOLOR:** k8s layer dot/legend goes from **amber `#d89614`** to
+  **dark red `#e44d4d`** (new CSS var `--k8s-red`) — amber was too
+  close to the `state` orange and made the two layers indistinguishable
+  in screenshots. Sidebar `.chip.layer-k8s` and the dashboard layer
+  legend pick up the new color.
+- **NEW:** `LAYER_LABELS` map + new `.ll-pill` styling for the
+  Dashboard's *Coverage & overlays* layer legend — each layer gets a
+  colored dot and a tooltip describing what it actually represents.
+
+### Filter-panel UX
+
+- **FIX:** filter panel now anchors to the actual bottom edge of the
+  topbar (measured via `getBoundingClientRect`) instead of the
+  hardcoded 56 px. Topbar is `flex-wrap: wrap`; with the v0.34.2
+  controls (group-by select + filters toggle + reset) it wraps to a
+  second row on narrow viewports — the old hardcoded offset hid the
+  wrapped controls under the panel and left no way to close it.
+- **NEW:** dedicated **×** close button in the panel header.
+- **NEW:** **Esc** closes the filter panel first; pressing Esc again
+  (or once when no panel is open) clears search/blast/sidebar like
+  before.
+- **NEW:** clicking outside the panel/toggle closes it.
+- Window-resize re-pins the panel to the new topbar edge while open.
+- **BUMP:** apm.yml 0.34.2 → 0.34.3.
+
 ## v0.34.2 — 2026-05-06
 
 Filtering / grouping / IAM detail. The Graph view gets explorer-style
