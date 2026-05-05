@@ -3259,6 +3259,153 @@ def _scan_workflow_origins(repo: Path) -> dict:
 
 # v0.35.0: customer-facing dashboard signals — replaces Modules/Components
 # meta with what an operator actually wants to know about their stack.
+def _compute_hero_facts(resource_nodes: list[dict], envs: list[dict],
+                        sec_findings: dict, irsa_count: int) -> list[dict]:
+    """v0.41.2: hero KPI strip that answers concrete operator questions
+    instead of generic counts. Each fact returns {label, value, sub}.
+
+    Picks 5 high-signal items from whatever data is loaded:
+      - K8s version + cluster count + fargate/addon count
+      - Database engine + version + count
+      - Cache (ElastiCache) node type
+      - Open-to-internet ingress count (from findings)
+      - Apps per env split (prod/dev/...)
+
+    Falls back gracefully when a category is empty (returns "—" sub).
+    """
+    by_type: dict[str, list[dict]] = defaultdict(list)
+    for n in resource_nodes:
+        by_type[n.get("resource_type") or ""].append(n)
+
+    def _ess(n: dict) -> dict:
+        ess_list = n.get("essentials") or []
+        if ess_list and isinstance(ess_list[0], dict):
+            return ess_list[0]
+        return {}
+
+    facts: list[dict] = []
+
+    # --- K8s ---
+    eks_clusters = by_type.get("aws_eks_cluster") or []
+    if eks_clusters:
+        version = _ess(eks_clusters[0]).get("version") or "—"
+        node_groups = len(by_type.get("aws_eks_node_group") or [])
+        fargate = len(by_type.get("aws_eks_fargate_profile") or [])
+        addons = len(by_type.get("aws_eks_addon") or [])
+        sub_parts = []
+        if node_groups: sub_parts.append(f"{node_groups} node groups")
+        if fargate:     sub_parts.append(f"{fargate} fargate")
+        if addons:      sub_parts.append(f"{addons} addons")
+        facts.append({
+            "label": "K8s version",
+            "value": str(version),
+            "sub": " · ".join(sub_parts) or f"{len(eks_clusters)} cluster",
+        })
+    else:
+        facts.append({"label": "K8s", "value": "—", "sub": "no EKS cluster"})
+
+    # --- Database ---
+    rds_clusters = by_type.get("aws_rds_cluster") or []
+    rds_instances = by_type.get("aws_db_instance") or []
+    if rds_clusters or rds_instances:
+        primary = rds_clusters[0] if rds_clusters else rds_instances[0]
+        ess = _ess(primary)
+        # Engine can live on the cluster, the cluster_instance, or be implied
+        # by the module name (aurora module → Aurora).
+        engine = ess.get("engine") or ""
+        version = ess.get("engine_version") or ""
+        ci = (by_type.get("aws_rds_cluster_instance") or [])
+        instance_class = ""
+        if ci:
+            ci_ess = _ess(ci[0])
+            engine = engine or ci_ess.get("engine") or ""
+            version = version or ci_ess.get("engine_version") or ""
+            instance_class = ci_ess.get("instance_class") or ""
+        elif rds_instances:
+            instance_class = ess.get("instance_class") or ""
+        engine_mode = ess.get("engine_mode") or ""
+        # Last-ditch fallback: module name often tells us the engine
+        # ("aurora" → Aurora, "mongodb" → MongoDB, etc).
+        if not engine:
+            mod_hint = (primary.get("module") or "").lower()
+            for h, lbl in [("aurora", "Aurora"), ("mongodb", "MongoDB"),
+                           ("mysql", "MySQL"), ("postgres", "Postgres")]:
+                if h in mod_hint:
+                    engine = lbl
+                    break
+        val = f"{engine} {version}".strip() or "RDS"
+        sub_parts = []
+        if engine_mode and engine_mode != "provisioned":
+            sub_parts.append(engine_mode)
+        if instance_class: sub_parts.append(instance_class)
+        n_clusters = len(rds_clusters)
+        n_instances = len(rds_instances)
+        if n_clusters: sub_parts.append(f"{n_clusters} cluster{'s' if n_clusters != 1 else ''}")
+        if n_instances: sub_parts.append(f"{n_instances} instance{'s' if n_instances != 1 else ''}")
+        facts.append({
+            "label": "Database",
+            "value": val,
+            "sub": " · ".join(sub_parts) or "deployed",
+        })
+    else:
+        facts.append({"label": "Database", "value": "—", "sub": "no RDS"})
+
+    # --- Cache (ElastiCache) ---
+    caches = by_type.get("aws_elasticache_replication_group") or []
+    if caches:
+        ess = _ess(caches[0])
+        node_type = ess.get("node_type") or "—"
+        version = ess.get("engine_version") or ""
+        ng = ess.get("num_node_groups")
+        sub_parts = []
+        if version: sub_parts.append(f"v{version}")
+        if isinstance(ng, int): sub_parts.append(f"{ng} shard{'s' if ng != 1 else ''}")
+        facts.append({
+            "label": "Cache",
+            "value": str(node_type),
+            "sub": " · ".join(sub_parts) or f"{len(caches)} replication group",
+        })
+    else:
+        facts.append({"label": "Cache", "value": "—", "sub": "no ElastiCache"})
+
+    # --- Public exposure (open-to-internet ingress) ---
+    high_items = (sec_findings.get("items") or {}).get("high") or []
+    ingress_world = [f for f in high_items if f.get("rule") == "open-to-internet"]
+    public_rds = [f for f in high_items if f.get("rule") == "rds-publicly-accessible"]
+    public_exposed = len(ingress_world) + len(public_rds)
+    sub_parts = []
+    if ingress_world: sub_parts.append(f"{len(ingress_world)} ingress to 0.0.0.0/0")
+    if public_rds:    sub_parts.append(f"{len(public_rds)} public RDS")
+    facts.append({
+        "label": "Public exposure",
+        "value": str(public_exposed),
+        "sub": " · ".join(sub_parts) or "no high findings",
+    })
+
+    # --- Apps deployed per env ---
+    apps_per_env = []
+    total_apps = 0
+    for e in envs or []:
+        n = e.get("applications") or 0
+        if n:
+            apps_per_env.append(f"{n} {e.get('name','?')}")
+            total_apps += n
+    facts.append({
+        "label": "Apps deployed",
+        "value": str(total_apps),
+        "sub": " · ".join(apps_per_env) if apps_per_env else "no app sidecars",
+    })
+
+    # Bonus: IRSA bindings (ServiceAccount → IAM role) — operator-relevant.
+    if irsa_count:
+        facts.append({
+            "label": "IRSA bindings",
+            "value": str(irsa_count),
+            "sub": "k8s SA → AWS IAM role",
+        })
+    return facts[:5]  # keep grid tidy — drop IRSA if it pushes past 5
+
+
 def _compute_security_findings(resource_nodes: list[dict]) -> dict:
     """Aggregate security findings from schema-v3 essentials.
 
@@ -4152,6 +4299,8 @@ def _compute_dashboard_data(
         "state": state_summary,
         "categories": _compute_categories(resource_nodes),
         "architecture": _compute_architecture(resource_nodes),
+        "hero_facts": _compute_hero_facts(
+            resource_nodes, env_data, sec_findings, len(irsa_bindings)),
         "iam": _compute_iam_view(resource_nodes, edges, nodes),
         # v0.35.0: customer-facing signal blocks.
         "findings":   sec_findings,

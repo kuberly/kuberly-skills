@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.41.2 — 2026-05-06
+
+- **DROP:** the "stack intelligence / kuberly" eyebrow + `<h1>` from
+  the hero panel — purely chrome, no signal.
+- **REPLACE: hero KPIs.** Generic counters (AWS Resources / Findings /
+  State age / Modules / Graph) replaced with concrete operator
+  facts that answer specific questions:
+    - **K8s version** — EKS cluster K8s version + node groups /
+      fargate / addons
+    - **Database** — engine (Aurora/MySQL/Postgres) + version + class
+      (e.g. `aurora-postgresql 16.6 · db.serverless`)
+    - **Cache** — ElastiCache node type + version + shard count
+    - **Public exposure** — count of `0.0.0.0/0` ingress + publicly-
+      accessible RDS, with a callout when zero (`no high findings`)
+    - **Apps deployed** — total + per-env breakdown (`2 prod · 2 dev`)
+- **NEW:** `_compute_hero_facts()` server-side helper composes the
+  facts from existing schema-v3 essentials + findings + env data.
+  Falls back gracefully when a category is empty.
+- **BUMP:** apm.yml 0.41.1 → 0.41.2.
+
 ## v0.41.1 — 2026-05-06
 
 - **MERGE:** the v0.41.0 stats bar and hero used to render as two

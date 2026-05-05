@@ -1356,10 +1356,10 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   }
   .hero-kpis {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 32px;
-    padding: 16px 0 0;
-    border-top: 1px solid var(--ink-line);
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 28px;
+    padding: 18px 24px 22px;
+    border-top: none;
   }
   .hero-kpi {
     display: flex;
@@ -2730,17 +2730,17 @@ function renderDashboard() {
    * already shown in the layer-legend (CUE schemas / CI/CD workflows /
    * Applications). The footer stats now live at the bottom of the
    * dashboard, dedup'd. */
-  /* v0.37.0: SaaS-grade hero band with prominent KPI tiles. */
+  /* v0.41.2: hero KPIs come from server-computed `hero_facts` — answers
+   * concrete operator questions (k8s version, database engine, public
+   * exposure, apps per env, IRSA bindings) instead of generic counts. */
   const arch = DASHBOARD.architecture || {};
-  const findings = (DASHBOARD.findings && DASHBOARD.findings.summary) || {};
-  const stateAge = kpis.state_age || {};
-  const heroKpis = `
-    <div class="hero-kpi"><div class="label">AWS resources</div><div class="value">$${arch.total_resources || 0}</div><div class="sub">$${arch.total_services || 0} services · $${(arch.layers || []).length} layers</div></div>
-    <div class="hero-kpi"><div class="label">Findings</div><div class="value">$${findings.total || 0}</div><div class="sub">$${findings.high || 0} high · $${findings.medium || 0} med · $${findings.low || 0} low</div></div>
-    <div class="hero-kpi"><div class="label">State age</div><div class="value">$${esc(stateAge.value || "—")}</div><div class="sub">$${esc(stateAge.sub || "")}</div></div>
-    <div class="hero-kpi"><div class="label">Modules</div><div class="value">$${m.module_count}</div><div class="sub">across $${m.env_count} env$${m.env_count === 1 ? '' : 's'}</div></div>
-    <div class="hero-kpi"><div class="label">Graph</div><div class="value">$${m.node_count}</div><div class="sub">$${m.edge_count} edges</div></div>
-  `;
+  const heroKpis = (DASHBOARD.hero_facts || []).map(f =>
+    `<div class="hero-kpi">
+      <div class="label">$${esc(f.label || "")}</div>
+      <div class="value">$${esc(String(f.value ?? "—"))}</div>
+      <div class="sub">$${esc(f.sub || "")}</div>
+    </div>`
+  ).join("");
   root.innerHTML = `
     <div class="hero-panel">
       <div class="stats-bar">
@@ -2756,11 +2756,7 @@ function renderDashboard() {
           $${layerLegend}
         </div>
       </div>
-      <header class="hero-saas">
-        <div class="hero-eyebrow">stack intelligence</div>
-        <h1>$${esc((DASHBOARD.environments?.[0]?.cluster_name) || "kuberly")}</h1>
-        <div class="hero-kpis">$${heroKpis}</div>
-      </header>
+      <div class="hero-kpis">$${heroKpis}</div>
     </div>
 
     <section class="section">
