@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.39.0 — 2026-05-06
+
+- **CHARTS:** migrate from Chart.js to **Apache ECharts** for the
+  Distributions panel. ECharts gives the dashboard a far-more-polished
+  default look — gradient fills (LinearGradient), smooth animations,
+  rich hover tooltips with category dot + bold value, dark theme,
+  inline value labels on bars. The 3 charts (Category share doughnut,
+  IAM trust principals horizontal bar, Top resource types horizontal
+  bar) all replaced. ResizeObserver re-fits each chart on grid reflow
+  / window resize.
+- **REORDER:** Distributions section moved to **top of dashboard**
+  (right after the SaaS hero band, before Architecture). Hero → Charts
+  → Architecture → Stats overlays → Spotlight.
+- **STYLE:** chart cards get a subtle radial-gradient background + a
+  hover lift (border glow + shadow + 1 px rise). Mount divs are 240 px
+  tall. Chart.js canvas elements replaced with `div.chart-mount`.
+- **RENAME:** the "Rendered" layer pill becomes **"Applications"**.
+  Color changes from teal `#22a1c4` to **hot pink `#ff5e9c`** so the
+  per-app cluster reads as distinct on the 3D graph. Spotlight chip
+  reads "apps". Internal node types (`app_render`, `rendered_resource`,
+  source_layer="rendered") unchanged — only labels/colors flipped.
+- **FIX:** v0.39.0-pre had a broken `${...}` JS-template-literal in
+  the new ECharts `formatter` that broke Python's string.Template.
+  Escaped to `$${...}`.
+- **BUMP:** apm.yml 0.38.1 → 0.39.0.
+
 ## v0.38.1 — 2026-05-06
 
 - **FIX:** `scripts/render_apps.py` was running `cue cmd dump` directly,

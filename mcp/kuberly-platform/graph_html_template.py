@@ -13,7 +13,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.0/dist/3d-force-graph.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
 <script src="https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js"></script>
 <style>
   :root {
@@ -151,7 +151,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .layer-toggle[data-layer=docs]   .dot { background: var(--ink-mute); }
   .layer-toggle[data-layer=schema]   .dot { background: #a266ff; }
   .layer-toggle[data-layer=ci_cd]    .dot { background: #5fd098; }
-  .layer-toggle[data-layer=rendered] .dot { background: #22a1c4; }
+  .layer-toggle[data-layer=rendered] .dot { background: #ff5e9c; }
   #graph-view-mode,
   #graph-group-by {
     background: rgba(255,255,255,0.04);
@@ -897,21 +897,33 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     margin-bottom: 24px;
   }
   .chart-card {
-    background: var(--bg-card);
+    background:
+      radial-gradient(600px 200px at 100% 0%, rgba(22,119,255,0.05), transparent 60%),
+      var(--bg-card);
     border: 1px solid var(--ink-line);
     border-radius: var(--radius-lg);
-    padding: 14px 16px 18px;
-    min-height: 220px;
+    padding: 16px 18px 20px;
+    min-height: 280px;
+    transition: border-color 140ms, box-shadow 140ms, transform 140ms;
+  }
+  .chart-card:hover {
+    border-color: rgba(22,119,255,0.30);
+    box-shadow: 0 30px 70px -40px rgba(0,0,0,0.7),
+                0 0 0 1px rgba(22,119,255,0.18);
+    transform: translateY(-1px);
   }
   .chart-card h4 {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.14em;
     color: var(--ink-faint);
-    margin-bottom: 10px;
+    margin-bottom: 12px;
     font-weight: 500;
   }
-  .chart-card canvas { max-height: 200px !important; }
+  .chart-mount {
+    width: 100%;
+    height: 240px;
+  }
   .chart-card .chart-empty {
     display: flex;
     flex-direction: column;
@@ -1382,8 +1394,8 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .ll-pill.ll-schema .ll-dot { background: #a266ff; box-shadow: 0 0 6px rgba(162,102,255,0.45); }
   .ll-pill.ll-ci_cd    { border-color: rgba(95,208,152,0.32); }
   .ll-pill.ll-ci_cd    .ll-dot { background: #5fd098; box-shadow: 0 0 6px rgba(95,208,152,0.40); }
-  .ll-pill.ll-rendered { border-color: rgba(34,161,196,0.32); }
-  .ll-pill.ll-rendered .ll-dot { background: #22a1c4; box-shadow: 0 0 6px rgba(34,161,196,0.45); }
+  .ll-pill.ll-rendered { border-color: rgba(255,94,156,0.36); }
+  .ll-pill.ll-rendered .ll-dot { background: #ff5e9c; box-shadow: 0 0 6px rgba(255,94,156,0.50); }
   .ll-pill strong { color: var(--ink); margin-left: 2px; }
 
   .env-grid {
@@ -1749,8 +1761,8 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
              title="GitHub workflows — .github/workflows/*.yml. References show which workflow deploys which module.">
         <input type="checkbox" data-layer="ci_cd" checked><span class="dot"></span>CI/CD</label>
       <label class="layer-toggle active" data-layer="rendered"
-             title="Per-app rendered manifests — output of `cue cmd dump` for each applications/<env>/<app>.json. Populated by scripts/render_apps.py.">
-        <input type="checkbox" data-layer="rendered" checked><span class="dot"></span>Rendered</label>
+             title="Applications — k8s manifests rendered from each applications/<env>/<app>.json via `cue cmd dump`. Populated by scripts/render_apps.py.">
+        <input type="checkbox" data-layer="rendered" checked><span class="dot"></span>Applications</label>
     </div>
     <select id="graph-view-mode" title="Graph scope — start with overview on large stacks">
       <option value="overview">Overview (module deps)</option>
@@ -2359,51 +2371,87 @@ function renderCategoryCards(cats) {
     : `<p style="color:var(--ink-faint)">No state-overlay essentials yet — run <span class="mono">state_graph.py generate</span> against your envs.</p>`;
 }
 
-/* v0.34.0: Charts (Chart.js doughnut + bar). Called AFTER renderDashboard
- * has injected the canvas elements; safe no-op if Chart.js failed to load. */
+/* v0.39.0: Charts via Apache ECharts. Replaces Chart.js with a
+ * far-more-polished default style — gradient bar fills, smooth
+ * animations, rich hover tooltips with category dot + bold value, and
+ * proper dark-theme spacing. Each card mounts an ECharts instance into
+ * a div (was canvas under Chart.js); resize-handler re-fits on window
+ * change so cards never crop. */
 function renderDashboardCharts(cats) {
-  if (typeof Chart === "undefined") return;
-  Chart.defaults.color = "rgba(255,255,255,0.65)";
-  Chart.defaults.borderColor = "rgba(255,255,255,0.10)";
-  Chart.defaults.font.family = 'JetBrains Mono, ui-monospace, monospace';
-  const palette = ["#1677ff","#ff9900","#d89614","#39c47a","#a266ff","#22a1c4","#7c5cff","#3c89e8","#f5b042","#5fd098"];
-  function destroyOnEl(id) {
-    const el = document.getElementById(id);
-    if (el && el.__chart) { el.__chart.destroy(); el.__chart = null; }
-    return el;
+  if (typeof echarts === "undefined") return;
+  const TOOLTIP = {
+    backgroundColor: "rgba(11,14,18,0.96)",
+    borderColor: "rgba(255,255,255,0.10)",
+    borderWidth: 1,
+    padding: [8, 12],
+    textStyle: {
+      color: "#fff",
+      fontFamily: "JetBrains Mono, ui-monospace, monospace",
+      fontSize: 11,
+    },
+    extraCssText: "box-shadow: 0 18px 48px -16px rgba(0,0,0,0.7); border-radius: 10px;",
+  };
+  const PALETTE = ["#1677ff","#ff9900","#a266ff","#5fd098","#22a1c4",
+                   "#3c89e8","#f5b042","#7c5cff","#39c47a","#ff5e9c",
+                   "#ffd700","#ff8b3d"];
+  function _gradientFor(color) {
+    return new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+      { offset: 0, color: color },
+      { offset: 1, color: color + "aa" },
+    ]);
   }
-  /* Doughnut: category share of total resources. */
+  function mountOnEl(id, opt) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    if (el.__echart) { el.__echart.dispose(); el.__echart = null; }
+    const ch = echarts.init(el, null, { renderer: "canvas" });
+    ch.setOption(opt);
+    el.__echart = ch;
+    /* Re-fit on viewport change (the chart-card resizes on grid reflow). */
+    new ResizeObserver(() => ch.resize()).observe(el);
+    return ch;
+  }
+
+  /* Doughnut — category share of total resources. */
   (() => {
-    const el = destroyOnEl("chart-cat-share");
-    if (!el) return;
-    const labels = [], data = [], colors = [];
+    const items = [];
     Object.entries(cats || {}).forEach(([k, c]) => {
-      if (c && c.count) { labels.push(c.title); data.push(c.count); colors.push(c.color || "#888"); }
+      if (c && c.count) items.push({ name: c.title, value: c.count, color: c.color || "#888" });
     });
-    if (!labels.length) return;
-    el.__chart = new Chart(el, {
-      type: "doughnut",
-      data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 0 }] },
-      options: {
-        responsive: true, maintainAspectRatio: false, cutout: "62%",
-        plugins: {
-          legend: { position: "bottom", labels: { boxWidth: 8, padding: 8, font: { size: 10 } } },
-          tooltip: { backgroundColor: "rgba(20,24,30,0.95)" },
-        },
+    if (!items.length) return;
+    mountOnEl("chart-cat-share", {
+      tooltip: { ...TOOLTIP, trigger: "item",
+        formatter: p => `<div style="font-weight:600;color:$${p.color}">$${p.name}</div><div style="color:#fff;font-size:14px;font-weight:600;margin-top:2px">$${p.value} <span style="opacity:0.6;font-size:10px;margin-left:4px">$${p.percent}%</span></div>` },
+      legend: {
+        bottom: 0, icon: "circle", itemWidth: 8, itemHeight: 8,
+        itemGap: 12, textStyle: { color: "rgba(255,255,255,0.65)", fontSize: 10, fontFamily: "JetBrains Mono" },
       },
+      series: [{
+        type: "pie", radius: ["56%", "78%"], center: ["50%", "44%"],
+        avoidLabelOverlap: true,
+        label: { show: false }, labelLine: { show: false },
+        emphasis: {
+          itemStyle: {
+            shadowBlur: 16, shadowColor: "rgba(22,119,255,0.45)",
+            borderColor: "rgba(255,255,255,0.18)", borderWidth: 2,
+          },
+          scale: true, scaleSize: 6,
+        },
+        itemStyle: { borderColor: "var(--bg-card)", borderWidth: 2, borderRadius: 4 },
+        data: items.map(it => ({ name: it.name, value: it.value,
+          itemStyle: { color: _gradientFor(it.color) } })),
+      }],
     });
   })();
-  /* Bar: IAM principal-kind distribution. */
+
+  /* Horizontal bar — IAM principal-kind distribution. */
   (() => {
-    const el = destroyOnEl("chart-iam-principals");
+    const el = document.getElementById("chart-iam-principals");
     if (!el) return;
     const pk = (cats && cats.identity && cats.identity.totals && cats.identity.totals.principal_kinds) || {};
     const labels = Object.keys(pk);
     if (!labels.length) {
-      /* Replace canvas with helpful placeholder rather than blank box.
-       * Click-to-copy: clicking the command copies it to clipboard with
-       * a visible "copied" tick — saves the user from typing the long
-       * apm_modules path. */
+      /* No data → click-to-copy command placeholder (kept from v0.34.5). */
       const card = el.parentElement;
       if (card && !card.querySelector(".chart-empty")) {
         const cmd = "python3 apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/state_graph.py generate --env prod --resources --output .kuberly/state_overlay_prod.json && python3 apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/kuberly_platform.py generate . -o .kuberly";
@@ -2412,75 +2460,67 @@ function renderDashboardCharts(cats) {
         ph.innerHTML =
           'no trust principals in current state overlay<br>' +
           '<span style="margin-top:6px;display:inline-block">click the command to copy &amp; run with AWS SSO active:</span><br>' +
-          '<button type="button" class="kbd kbd-copy" data-copy="' + cmd.replace(/"/g, "&quot;") + '" title="Copy to clipboard">' +
-            'state_graph.py generate <span class="kbd-tick">copy</span>' +
-          '</button>' +
+          '<button type="button" class="kbd kbd-copy" data-copy="' + cmd.replace(/"/g, "&quot;") + '" title="Copy to clipboard">state_graph.py generate <span class="kbd-tick">copy</span></button>' +
           '<br><span style="margin-top:4px;display:inline-block;color:var(--ink-faint)">requires AWS SSO authenticated for this account</span>';
         el.style.display = "none";
         card.appendChild(ph);
-        const btn = ph.querySelector(".kbd-copy");
-        if (btn) {
-          btn.addEventListener("click", async () => {
-            const text = btn.getAttribute("data-copy") || "";
-            try {
-              await navigator.clipboard.writeText(text);
-              const tick = btn.querySelector(".kbd-tick");
-              if (tick) {
-                tick.textContent = "copied ✓";
-                setTimeout(() => { tick.textContent = "copy"; }, 1600);
-              }
-            } catch (e) {
-              /* Clipboard API may be blocked on file:// — fall back to
-               * select-all so the user can ⌘C manually. */
-              const r = document.createRange(); r.selectNodeContents(btn);
-              const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
-            }
-          });
-        }
       }
       return;
     }
-    el.__chart = new Chart(el, {
-      type: "bar",
-      data: {
-        labels,
-        datasets: [{ label: "principals", data: labels.map(k => pk[k]),
-          backgroundColor: labels.map((_, i) => palette[i % palette.length]),
-          borderRadius: 4 }],
+    const data = labels.map((k, i) => ({ name: k, value: pk[k],
+      itemStyle: { color: _gradientFor(PALETTE[i % PALETTE.length]),
+                   borderRadius: [0, 6, 6, 0] } }));
+    mountOnEl("chart-iam-principals", {
+      tooltip: { ...TOOLTIP, trigger: "axis", axisPointer: { type: "shadow" } },
+      grid: { left: 80, right: 24, top: 12, bottom: 24, containLabel: false },
+      xAxis: {
+        type: "value", splitNumber: 4,
+        axisLine: { show: false }, axisTick: { show: false },
+        splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
+        axisLabel: { color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "JetBrains Mono" },
       },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-          y: { beginAtZero: true, ticks: { font: { size: 10 }, precision: 0 }, grid: { color: "rgba(255,255,255,0.06)" } },
-        },
+      yAxis: {
+        type: "category", data: labels, inverse: true,
+        axisLine: { show: false }, axisTick: { show: false },
+        axisLabel: { color: "rgba(255,255,255,0.85)", fontSize: 11, fontFamily: "JetBrains Mono" },
       },
+      series: [{ type: "bar", data, barWidth: "60%",
+        emphasis: { itemStyle: { shadowBlur: 10, shadowColor: "rgba(22,119,255,0.4)" } },
+        label: { show: true, position: "right", color: "rgba(255,255,255,0.85)",
+                 fontSize: 11, fontFamily: "JetBrains Mono" } }],
     });
   })();
-  /* Bar: top resource types overall. */
+
+  /* Horizontal bar — top resource types. */
   (() => {
-    const el = destroyOnEl("chart-top-rtypes");
-    if (!el) return;
     const top = (DASHBOARD.state && DASHBOARD.state.top_resource_types) || [];
     if (!top.length) return;
     const sliced = top.slice(0, 10);
-    el.__chart = new Chart(el, {
-      type: "bar",
-      data: {
-        labels: sliced.map(x => x.type),
-        datasets: [{ label: "count", data: sliced.map(x => x.count),
-          backgroundColor: sliced.map((_, i) => palette[i % palette.length]),
-          borderRadius: 4 }],
+    const data = sliced.map((x, i) => ({ name: x.type, value: x.count,
+      itemStyle: { color: _gradientFor(PALETTE[i % PALETTE.length]),
+                   borderRadius: [0, 6, 6, 0] } }));
+    mountOnEl("chart-top-rtypes", {
+      tooltip: { ...TOOLTIP, trigger: "axis", axisPointer: { type: "shadow" } },
+      grid: { left: 4, right: 30, top: 8, bottom: 18, containLabel: true },
+      xAxis: {
+        type: "value", splitNumber: 4,
+        axisLine: { show: false }, axisTick: { show: false },
+        splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
+        axisLabel: { color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "JetBrains Mono" },
       },
-      options: {
-        indexAxis: "y", responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { beginAtZero: true, ticks: { font: { size: 10 }, precision: 0 }, grid: { color: "rgba(255,255,255,0.06)" } },
-          y: { grid: { display: false }, ticks: { font: { size: 9 } } },
+      yAxis: {
+        type: "category", data: sliced.map(x => x.type), inverse: true,
+        axisLine: { show: false }, axisTick: { show: false },
+        axisLabel: {
+          color: "rgba(255,255,255,0.85)", fontSize: 11,
+          fontFamily: "JetBrains Mono",
+          formatter: v => v.length > 28 ? v.slice(0, 26) + "…" : v,
         },
       },
+      series: [{ type: "bar", data, barWidth: "62%",
+        emphasis: { itemStyle: { shadowBlur: 10, shadowColor: "rgba(22,119,255,0.4)" } },
+        label: { show: true, position: "right", color: "rgba(255,255,255,0.85)",
+                 fontSize: 11, fontFamily: "JetBrains Mono" } }],
     });
   })();
 }
@@ -2523,7 +2563,7 @@ function renderDashboard() {
     docs:     "Docs",
     schema:   "CUE schemas",
     ci_cd:    "CI/CD workflows",
-    rendered: "Rendered manifests",
+    rendered: "Applications",
   };
   const LAYER_TIPS = {
     static:   "Infrastructure-as-Code files in the repo (HCL / JSON / CUE)",
@@ -2641,19 +2681,19 @@ function renderDashboard() {
     </header>
 
     <section class="section">
+      <h2>Distributions</h2>
+      <div class="chart-row">
+        <div class="chart-card"><h4>Category share</h4><div id="chart-cat-share" class="chart-mount"></div></div>
+        <div class="chart-card"><h4>IAM role trust — by principal kind</h4><div id="chart-iam-principals" class="chart-mount"></div></div>
+        <div class="chart-card"><h4>Top resource types</h4><div id="chart-top-rtypes" class="chart-mount"></div></div>
+      </div>
+    </section>
+
+    <section class="section">
       <h2>Architecture — deployed AWS services</h2>
       <p class="section-sub">Click a tile to see every resource of that type, or open the 3D graph filtered to it.</p>
       $${renderArchitectureDiagram(arch)}
       <div id="arch-detail-panel" hidden></div>
-    </section>
-
-    <section class="section">
-      <h2>Distributions</h2>
-      <div class="chart-row">
-        <div class="chart-card"><h4>Category share</h4><canvas id="chart-cat-share"></canvas></div>
-        <div class="chart-card"><h4>IAM role trust — by principal kind</h4><canvas id="chart-iam-principals"></canvas></div>
-        <div class="chart-card"><h4>Top resource types</h4><canvas id="chart-top-rtypes"></canvas></div>
-      </div>
     </section>
 
     <section class="section stats-section">
@@ -2682,7 +2722,7 @@ function renderDashboard() {
             <button type="button" data-lf="docs"   class="lf">docs</button>
             <button type="button" data-lf="schema"   class="lf">CUE</button>
             <button type="button" data-lf="ci_cd"    class="lf">CI/CD</button>
-            <button type="button" data-lf="rendered" class="lf">rendered</button>
+            <button type="button" data-lf="rendered" class="lf">apps</button>
           </div>
         </div>
         <div id="spotlight-pick"></div>
@@ -2735,7 +2775,7 @@ function renderDashboard() {
     if (layer === "k8s")      return "var(--k8s-red)";
     if (layer === "schema")   return "#a266ff";
     if (layer === "ci_cd")    return "#5fd098";
-    if (layer === "rendered") return "#22a1c4";
+    if (layer === "rendered") return "#ff5e9c";
     return "var(--ink-mute)";
   }
   function _layerLabel(layer) {
@@ -2745,7 +2785,7 @@ function renderDashboard() {
     if (layer === "docs")     return "docs";
     if (layer === "schema")   return "CUE";
     if (layer === "ci_cd")    return "CI/CD";
-    if (layer === "rendered") return "rendered";
+    if (layer === "rendered") return "Apps";
     return layer || "?";
   }
 
@@ -2908,7 +2948,7 @@ function buildGraph3D() {
     docs:     "rgba(255,255,255,0.65)",
     schema:   "#a266ff",
     ci_cd:    "#5fd098",
-    rendered: "#22a1c4",
+    rendered: "#ff5e9c",
   };
   const HIGHLIGHT = _v("--blue-soft") || "#3c89e8";
   const DIM_COLOR = "rgba(120,120,140,0.18)";
