@@ -2554,6 +2554,154 @@ _CATEGORY_TITLES: dict[str, dict[str, str]] = {
 }
 
 
+# v0.34.6: per-resource-type → (architecture_layer, service_label, iconify_icon)
+# for the AWS-style architecture diagram on the dashboard. Layers stack
+# top-to-bottom: edge → compute → data → identity → secrets → registries →
+# observability → k8s. Resources without a mapping fall to a generic tile.
+_ARCH_RULES: dict[str, tuple[str, str, str]] = {
+    # Edge / CDN
+    "aws_cloudfront_distribution":     ("edge",   "CloudFront",       "logos:aws-cloudfront"),
+    # Compute
+    "aws_eks_cluster":                 ("compute","EKS Cluster",      "logos:aws-eks"),
+    "aws_eks_node_group":              ("compute","EKS Node Group",   "logos:aws-eks"),
+    "aws_eks_addon":                   ("compute","EKS Addon",        "logos:aws-eks"),
+    "aws_eks_fargate_profile":         ("compute","Fargate Profile",  "logos:aws-fargate"),
+    "aws_lambda_function":             ("compute","Lambda",           "logos:aws-lambda"),
+    # Data
+    "aws_rds_cluster":                 ("data",   "RDS / Aurora",     "logos:aws-rds"),
+    "aws_rds_cluster_instance":        ("data",   "RDS Instance",     "logos:aws-rds"),
+    "aws_db_instance":                 ("data",   "RDS Instance",     "logos:aws-rds"),
+    "aws_db_subnet_group":             ("data",   "DB Subnet Group",  "logos:aws-rds"),
+    "aws_elasticache_replication_group":("data",  "ElastiCache",      "logos:aws-elasticache"),
+    "aws_elasticache_user":            ("data",   "ElastiCache User", "logos:aws-elasticache"),
+    "aws_elasticache_user_group":      ("data",   "ElastiCache Group","logos:aws-elasticache"),
+    "aws_elasticache_subnet_group":    ("data",   "ElastiCache Subnet","logos:aws-elasticache"),
+    "aws_ebs_volume":                  ("data",   "EBS Volume",       "logos:aws-ec2"),
+    "aws_efs_file_system":             ("data",   "EFS",              "mdi:database"),
+    "aws_efs_mount_target":            ("data",   "EFS Mount",        "mdi:database"),
+    "aws_s3_bucket":                   ("data",   "S3 Bucket",        "logos:aws-s3"),
+    # Network
+    "aws_vpc":                         ("network","VPC",              "logos:aws-vpc"),
+    "aws_subnet":                      ("network","Subnet",           "logos:aws-vpc"),
+    "aws_nat_gateway":                 ("network","NAT Gateway",      "logos:aws-vpc"),
+    "aws_internet_gateway":            ("network","Internet Gateway", "logos:aws-vpc"),
+    "aws_egress_only_internet_gateway":("network","Egress-only IGW",  "logos:aws-vpc"),
+    "aws_security_group":              ("network","Security Group",   "logos:aws-vpc"),
+    "aws_security_group_rule":         ("network","SG Rule",          "logos:aws-vpc"),
+    "aws_vpc_endpoint":                ("network","VPC Endpoint",     "logos:aws-vpc"),
+    # Identity
+    "aws_iam_role":                    ("identity","IAM Role",        "logos:aws-iam"),
+    "aws_iam_policy":                  ("identity","IAM Policy",      "logos:aws-iam"),
+    "aws_iam_role_policy_attachment":  ("identity","IAM Attachment",  "logos:aws-iam"),
+    "aws_iam_role_policy":             ("identity","IAM Inline Policy","logos:aws-iam"),
+    "aws_iam_openid_connect_provider": ("identity","OIDC Provider",   "logos:aws-iam"),
+    # Secrets / KMS
+    "aws_secretsmanager_secret":       ("secrets","Secrets Manager",  "logos:aws-secrets-manager"),
+    "aws_secretsmanager_secret_version":("secrets","Secret Version",  "logos:aws-secrets-manager"),
+    "aws_kms_key":                     ("secrets","KMS Key",          "logos:aws-kms"),
+    "aws_kms_alias":                   ("secrets","KMS Alias",        "logos:aws-kms"),
+    # Registries
+    "aws_ecr_repository":              ("registries","ECR Repository","mdi:package-variant"),
+    "aws_ecr_repository_policy":       ("registries","ECR Policy",    "mdi:package-variant"),
+    "aws_ecr_lifecycle_policy":        ("registries","ECR Lifecycle", "mdi:package-variant"),
+    # Queues / Logs / Events
+    "aws_sqs_queue":                   ("ops",    "SQS Queue",        "logos:aws-sqs"),
+    "aws_sqs_queue_policy":            ("ops",    "SQS Policy",       "logos:aws-sqs"),
+    "aws_cloudwatch_log_group":        ("ops",    "CloudWatch Logs",  "logos:aws-cloudwatch"),
+    "aws_cloudwatch_event_rule":       ("ops",    "EventBridge Rule", "logos:aws-cloudwatch"),
+    "aws_cloudwatch_event_target":     ("ops",    "EventBridge Target","logos:aws-cloudwatch"),
+    # Kubernetes (in-cluster, owned by Terraform providers)
+    "helm_release":                    ("k8s",    "Helm Release",     "logos:helm"),
+    "kubernetes_namespace_v1":         ("k8s",    "Namespace",        "logos:kubernetes"),
+    "kubernetes_namespace":            ("k8s",    "Namespace",        "logos:kubernetes"),
+    "kubernetes_cluster_role":         ("k8s",    "ClusterRole",      "logos:kubernetes"),
+    "kubernetes_cluster_role_binding": ("k8s",    "ClusterRoleBinding","logos:kubernetes"),
+    "kubectl_manifest":                ("k8s",    "kubectl Manifest", "logos:kubernetes"),
+}
+
+_ARCH_LAYERS: list[tuple[str, str]] = [
+    ("edge",       "Edge / CDN"),
+    ("compute",    "Compute"),
+    ("data",       "Data & Storage"),
+    ("network",    "Networking"),
+    ("identity",   "Identity & Access"),
+    ("secrets",    "Secrets / KMS"),
+    ("registries", "Container Registry"),
+    ("ops",        "Observability & Events"),
+    ("k8s",        "Kubernetes (in-cluster)"),
+]
+
+
+def _compute_architecture(resource_nodes: list[dict]) -> dict:
+    """AWS-style architecture diagram payload — services grouped per layer.
+
+    Output:
+      {
+        "layers": [
+          {"key": "compute", "title": "Compute", "service_count": 4, "total": 8,
+           "services": [
+             {"label": "EKS Cluster", "icon": "logos:aws-eks", "count": 1,
+              "rtype": "aws_eks_cluster",
+              "items": [{"address":..., "module":..., "env":..., "details": {...}}]},
+             ...
+           ]},
+          ...
+        ],
+        "total_services": int,
+        "total_resources": int,
+      }
+    """
+    by_layer_service: dict[tuple[str, str], dict] = {}
+    for n in resource_nodes:
+        rtype = n.get("resource_type") or ""
+        rule = _ARCH_RULES.get(rtype)
+        if not rule:
+            continue
+        layer, label, icon = rule
+        key = (layer, label)
+        bucket = by_layer_service.get(key)
+        if bucket is None:
+            bucket = {
+                "label": label,
+                "icon": icon,
+                "rtype": rtype,
+                "count": 0,
+                "items": [],
+            }
+            by_layer_service[key] = bucket
+        bucket["count"] += 1
+        ess_list = n.get("essentials") or []
+        first = ess_list[0] if ess_list and isinstance(ess_list[0], dict) else {}
+        bucket["items"].append({
+            "address": n.get("label") or "",
+            "module": n.get("module") or "",
+            "env": n.get("environment") or "",
+            "details": first,
+        })
+
+    layers_out = []
+    for layer_key, layer_title in _ARCH_LAYERS:
+        services = [v for (lk, _), v in by_layer_service.items() if lk == layer_key]
+        if not services:
+            continue
+        services.sort(key=lambda s: -s["count"])
+        for s in services:
+            s["items"].sort(key=lambda x: (x["env"], x["address"]))
+            s["items"] = s["items"][:50]  # cap per service
+        layers_out.append({
+            "key": layer_key,
+            "title": layer_title,
+            "service_count": len(services),
+            "total": sum(s["count"] for s in services),
+            "services": services,
+        })
+    return {
+        "layers": layers_out,
+        "total_services": sum(L["service_count"] for L in layers_out),
+        "total_resources": sum(L["total"] for L in layers_out),
+    }
+
+
 def _resource_category(rtype: str) -> tuple[str, str] | None:
     for cat, kind, types in _CATEGORY_RULES:
         if rtype in types:
@@ -3226,6 +3374,7 @@ def _compute_dashboard_data(
         },
         "state": state_summary,
         "categories": _compute_categories(resource_nodes),
+        "architecture": _compute_architecture(resource_nodes),
         "iam": _compute_iam_view(resource_nodes, edges, nodes),
         "longest_chains": [list(c) for c in stats.get("longest_chains", [])][:5],
     }

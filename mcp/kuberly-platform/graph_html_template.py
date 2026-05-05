@@ -14,6 +14,7 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
 <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.0/dist/3d-force-graph.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js"></script>
 <style>
   :root {
     --bg:        #090b0d;
@@ -720,20 +721,124 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .iam-oidc-row:last-child { border-bottom: none; }
   .iam-oidc-row .iam-oidc-mod { color: var(--ink); }
 
-  /* Compute → Data → Identity flow strip */
-  .stack-flow {
+  /* v0.34.6: AWS-style architecture diagram (replaces the old mermaid
+     stack-flow). Each architectural layer is a band; each band holds
+     service tiles with the AWS iconify icon, service label, count, and
+     a hover-revealed sample of resource addresses. Tiles click through
+     to the Graph view filtered by that resource_type. */
+  .arch {
     background: var(--bg-card);
     border: 1px solid var(--ink-line);
     border-radius: var(--radius-lg);
-    padding: 18px;
+    padding: 16px 18px 18px;
     margin-bottom: 24px;
+    overflow: hidden;
   }
-  .stack-flow .mermaid {
-    background: transparent;
+  .arch-summary {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+  }
+  .arch-summary strong { color: var(--ink); margin: 0 4px; }
+  .arch-layer {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 14px;
+    padding: 10px 0;
+    border-top: 1px solid var(--ink-line-soft);
+    align-items: stretch;
+  }
+  .arch-layer:first-of-type { border-top: none; }
+  .arch-layer-head {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+  }
+  .arch-layer-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--ink-soft);
+  }
+  .arch-layer-sub {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--ink-faint);
+  }
+  /* Per-layer accent stripe — hooks via data-layer */
+  .arch-layer[data-layer=edge]       .arch-layer-title { color: #ff8b3d; }
+  .arch-layer[data-layer=compute]    .arch-layer-title { color: #3c89e8; }
+  .arch-layer[data-layer=data]       .arch-layer-title { color: #5fd098; }
+  .arch-layer[data-layer=network]    .arch-layer-title { color: #f5b042; }
+  .arch-layer[data-layer=identity]   .arch-layer-title { color: #ff9900; }
+  .arch-layer[data-layer=secrets]    .arch-layer-title { color: #c39cff; }
+  .arch-layer[data-layer=registries] .arch-layer-title { color: #a266ff; }
+  .arch-layer[data-layer=ops]        .arch-layer-title { color: #22a1c4; }
+  .arch-layer[data-layer=k8s]        .arch-layer-title { color: #39c47a; }
+  .arch-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px;
+    align-items: stretch;
+  }
+  .arch-tile {
+    position: relative;
+    background: rgba(255,255,255,0.025);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
+    padding: 10px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    cursor: pointer;
+    transition: border-color 120ms, background 120ms, transform 120ms;
+    min-height: 84px;
+  }
+  .arch-tile:hover {
+    border-color: var(--blue-soft);
+    background: rgba(22,119,255,0.05);
+    transform: translateY(-1px);
+  }
+  .arch-tile-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .arch-tile iconify-icon {
+    font-size: 22px;
+    /* iconify-icon honors color when icons use currentColor; AWS logos
+       have their own color baked in so iconify ignores ours — ok. */
+    flex: 0 0 auto;
+  }
+  .arch-tile-label {
+    font-size: 11px;
+    font-weight: 600;
     color: var(--ink);
-    text-align: center;
+    line-height: 1.2;
   }
-  .stack-flow .mermaid svg { max-width: 100%; height: auto; }
+  .arch-tile-count {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--blue-soft);
+    font-weight: 600;
+  }
+  .arch-tile-meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--ink-faint);
+    line-height: 1.4;
+    margin-top: 2px;
+    word-break: break-all;
+  }
+  .arch-tile[data-empty="true"] {
+    background: rgba(255,255,255,0.015);
+    color: var(--ink-faint);
+  }
 
   .section {
     margin-bottom: 36px;
@@ -1319,6 +1424,63 @@ function renderIamView(iam) {
   return `$${banner}<div class="iam-groups">$${groupBlocks}</div>$${oidcHtml}$${irsaHtml}`;
 }
 
+/* v0.34.6: AWS-style layered architecture diagram. Each architectural
+ * band ("Compute", "Data & Storage", ...) holds service tiles with the
+ * AWS iconify icon, label, count, and a sample address. Click a tile
+ * to switch to the Graph view filtered to that resource_type. */
+function renderArchitectureDiagram(arch) {
+  const layers = (arch && arch.layers) || [];
+  if (!layers.length) {
+    return `<p style="color:var(--ink-faint)">No deployed resources detected — run <span class="mono">state_graph.py generate --resources</span> to populate the architecture view.</p>`;
+  }
+  const summary = `<div class="arch-summary"><strong>$${arch.total_resources}</strong> deployed resources across <strong>$${arch.total_services}</strong> AWS services in <strong>$${layers.length}</strong> architectural layer$${layers.length === 1 ? '' : 's'}</div>`;
+  const bands = layers.map(L => {
+    const tiles = L.services.map(s => {
+      const sample = s.items[0] || {};
+      const sampleMeta = sample.address ? `$${esc(sample.address)}` : "";
+      const moreCount = s.count > 1 ? ` <span style="color:var(--ink-faint)">+ $${s.count - 1} more</span>` : "";
+      const sampleLine = sampleMeta ? `<div class="arch-tile-meta" title="$${esc(sampleMeta)}">$${sampleMeta}$${moreCount}</div>` : "";
+      return `<div class="arch-tile" data-rtype="$${esc(s.rtype)}" title="Click to filter the Graph view by $${esc(s.rtype)} ($${s.count} resource$${s.count === 1 ? '' : 's'})">
+        <div class="arch-tile-row">
+          <iconify-icon icon="$${esc(s.icon)}" aria-hidden="true"></iconify-icon>
+          <div class="arch-tile-label">$${esc(s.label)}</div>
+          <div class="arch-tile-count">$${s.count}</div>
+        </div>
+        $${sampleLine}
+      </div>`;
+    }).join("");
+    return `<div class="arch-layer" data-layer="$${esc(L.key)}">
+      <div class="arch-layer-head">
+        <div class="arch-layer-title">$${esc(L.title)}</div>
+        <div class="arch-layer-sub">$${L.service_count} service$${L.service_count === 1 ? '' : 's'} · $${L.total} resource$${L.total === 1 ? '' : 's'}</div>
+      </div>
+      <div class="arch-tiles">$${tiles}</div>
+    </div>`;
+  }).join("");
+  /* Wire click handlers AFTER innerHTML insert — kept out of render
+   * function so it runs after dashboard root.innerHTML is in the DOM. */
+  setTimeout(() => {
+    document.querySelectorAll(".arch-tile[data-rtype]").forEach(tile => {
+      if (tile.__wired) return;
+      tile.__wired = true;
+      tile.addEventListener("click", () => {
+        const rtype = tile.getAttribute("data-rtype");
+        if (!rtype) return;
+        /* Switch to Graph view + apply the filter. setView triggers
+         * buildGraph3D on first use, which registers the helper. */
+        if (typeof setView === "function") setView("graph");
+        /* Defer until Graph3D + GRAPH_STATE are initialized. */
+        setTimeout(() => {
+          if (typeof window.__kuberlyFilterByResourceType === "function") {
+            window.__kuberlyFilterByResourceType(rtype);
+          }
+        }, 80);
+      });
+    });
+  }, 0);
+  return `<div class="arch">$${summary}$${bands}</div>`;
+}
+
 /* v0.34.0: Build the small Mermaid flowchart that sits above the category
  * cards. Pure string-builder — Mermaid takes the textContent later. The
  * counts feed live from DASHBOARD.categories so a stack with no Identity
@@ -1646,9 +1808,7 @@ function renderDashboard() {
         <div class="chart-card"><h4>IAM role trust — by principal kind</h4><canvas id="chart-iam-principals"></canvas></div>
         <div class="chart-card"><h4>Top resource types</h4><canvas id="chart-top-rtypes"></canvas></div>
       </div>
-      <div class="stack-flow">
-        <div class="mermaid" id="stack-flow-mmd">$${buildStackFlowDiagram(DASHBOARD.categories || {})}</div>
-      </div>
+      $${renderArchitectureDiagram(DASHBOARD.architecture || {})}
       $${renderCategoryCards(DASHBOARD.categories || {})}
     </section>
 
@@ -2286,6 +2446,18 @@ function buildGraph3D() {
     /* Reheat sim so nodes migrate to new cluster centroids. */
     if (Graph3D.d3ReheatSimulation) Graph3D.d3ReheatSimulation();
   }
+  /* v0.34.6: expose a focused-filter helper so the dashboard's
+   * architecture-diagram tiles can switch the Graph view to a single
+   * resource_type filter without reaching into closure-scoped helpers. */
+  window.__kuberlyFilterByResourceType = function (rtype) {
+    if (!GRAPH_STATE || !rtype) return;
+    GRAPH_STATE.filters.rtypes.clear();
+    GRAPH_STATE.filters.rtypes.add(rtype);
+    document.querySelectorAll('#fp-rtypes .fp-chip').forEach(c => {
+      c.classList.toggle("on", c.dataset.value === rtype);
+    });
+    applyDataAndRefresh();
+  };
 
   /* v0.34.2: build the filter-panel chip lists from ALL_NODES values.
    * Each section: a flex-wrap of chip elements; click toggles membership

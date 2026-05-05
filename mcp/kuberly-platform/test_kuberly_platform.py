@@ -2098,11 +2098,13 @@ class GraphHtmlVizTests(unittest.TestCase):
                 # Category card render hooks.
                 self.assertIn("function renderCategoryCards", html)
                 self.assertIn("function renderDashboardCharts", html)
-                self.assertIn("function buildStackFlowDiagram", html)
+                self.assertIn("function renderArchitectureDiagram", html)
                 self.assertIn('id="chart-cat-share"', html)
                 self.assertIn('id="chart-iam-principals"', html)
                 self.assertIn('id="chart-top-rtypes"', html)
-                self.assertIn('id="stack-flow-mmd"', html)
+                # iconify-icon library loaded for the architecture tiles.
+                self.assertIn("iconify-icon", html)
+                self.assertIn("code.iconify.design", html)
                 # Chart.js loaded.
                 self.assertIn("chart.umd.min.js", html)
                 # Inline SVG favicon (data URI).

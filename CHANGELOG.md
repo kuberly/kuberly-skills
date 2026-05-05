@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.34.6 — 2026-05-06
+
+- **REPLACE:** the abstract Mermaid "Networking → Compute → Data" flow
+  is replaced with a real **AWS-style layered architecture diagram**.
+  Each architectural band (Edge / Compute / Data & Storage / Networking
+  / Identity & Access / Secrets / Registries / Observability /
+  Kubernetes) holds service tiles with the proper **AWS service icon**
+  (iconify CDN — `logos:aws-eks`, `logos:aws-rds`, `logos:aws-iam`,
+  `logos:aws-vpc`, `logos:aws-s3`, etc.), service label, count, and a
+  sample resource address.
+- **NEW:** `_compute_architecture` Python helper buckets every
+  `resource_node` into a `(layer, service_label, icon)` triple via the
+  `_ARCH_RULES` table — covers ~40 AWS resource types plus Helm /
+  Kubernetes provider resources.
+- **NEW:** clicking a tile switches to the **Graph** view filtered to
+  that resource_type — the architecture overview becomes a launchpad
+  into the 3D explorer. Wired via `window.__kuberlyFilterByResourceType`.
+- **CDN:** adds `iconify-icon@2.1.0` (~3KB) for on-demand SVG icon
+  loading.
+- **BUMP:** apm.yml 0.34.5 → 0.34.6.
+
 ## v0.34.5 — 2026-05-06
 
 - **FIX:** the click-to-copy command on the empty IAM-trust chart was
