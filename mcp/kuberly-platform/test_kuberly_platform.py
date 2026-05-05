@@ -54,6 +54,15 @@ def _fake_repo() -> tempfile.TemporaryDirectory:
     (eks / "terragrunt.hcl").write_text("# eks\n")
     (eks / "kuberly.json").write_text('{"description":"eks"}\n')
 
+    # v0.15.0: a component instance invoking loki — needed so the
+    # actionability pre-flight (in plan_persona_fanout / quick_scope)
+    # treats loki as a real, tune-able deployment, not a graph leaf.
+    comp = root / "components" / "prod" / "loki.json"
+    comp.parent.mkdir(parents=True, exist_ok=True)
+    comp.write_text('{"name":"loki","module":"loki","provider":"aws"}\n')
+    si = root / "components" / "prod" / "shared-infra.json"
+    si.write_text('{"shared-infra":{"target":{"cluster":{"name":"prod"}}}}\n')
+
     # Persona stubs so personas_synced reports OK
     agents = root / ".claude" / "agents"
     agents.mkdir(parents=True)
@@ -167,6 +176,104 @@ class PersonaDAGTests(unittest.TestCase):
         self.assertNotIn("pr-reviewer-in-context", EXPECTED_PERSONAS)
         self.assertNotIn("pr-reviewer-cold", EXPECTED_PERSONAS)
         self.assertIn("pr-reviewer", EXPECTED_PERSONAS)
+
+    def test_v0_15_stop_no_instance_in_dags(self) -> None:
+        self.assertIn("stop-no-instance", PERSONA_DAGS)
+        self.assertEqual(PERSONA_DAGS["stop-no-instance"][0]["personas"], [])
+
+
+class QuickScopeTests(unittest.TestCase):
+    """v0.15.0: quick_scope replaces scope-planner agent for typical tasks."""
+
+    def setUp(self) -> None:
+        self.tmp = _fake_repo()
+        self.g = KuberlyPlatform(self.tmp.name)
+        self.g.build()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_actionable_loki_returns_dispatch_recommendation(self) -> None:
+        # _fake_repo now wires components/prod/loki.json -> loki module.
+        r = self.g.quick_scope(task="bump loki memory", named_modules=["loki"])
+        self.assertEqual(r["recommendation"], "dispatch-iac-developer")
+        self.assertTrue(r["actionable"])
+        self.assertIn("module:aws/loki", r["modules"])
+        self.assertIn("# Scope:", r["scope_md"])
+        self.assertIn("## Affected", r["scope_md"])
+        self.assertIn("## Blast", r["scope_md"])
+
+    def test_unresolved_target_returns_stop_target_absent(self) -> None:
+        r = self.g.quick_scope(task="bump tempo memory", named_modules=["tempo"])
+        self.assertEqual(r["recommendation"], "stop-target-absent")
+        self.assertFalse(r["actionable"])
+        self.assertEqual(r["unresolved"], ["tempo"])
+        self.assertIn("STOP", r["scope_md"])
+
+    def test_no_named_modules_falls_back(self) -> None:
+        # Without named_modules, quick_scope can't infer scope reliably —
+        # tell the orchestrator to dispatch the full scope-planner agent.
+        r = self.g.quick_scope(task="something vague")
+        self.assertEqual(r["recommendation"], "fall-back-to-scope-planner")
+
+
+class StopNoInstanceTests(unittest.TestCase):
+    """v0.15.0: actionability pre-flight in plan_persona_fanout."""
+
+    def _build_module_only_repo(self) -> tempfile.TemporaryDirectory:
+        # No component, no app — pure module. Should trigger stop-no-instance
+        # for resource-bump-style tasks.
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / "root.hcl").write_text("# fake\n")
+        m = root / "clouds" / "aws" / "modules" / "tempo"
+        m.mkdir(parents=True)
+        (m / "terragrunt.hcl").write_text("\n")
+        (m / "kuberly.json").write_text('{"description":"tempo"}\n')
+        agents = root / ".claude" / "agents"
+        agents.mkdir(parents=True)
+        for p in EXPECTED_PERSONAS:
+            (agents / f"{p}.md").write_text(f"# {p}\n")
+        return tmp
+
+    def test_resource_bump_on_orphan_module_halts(self) -> None:
+        with self._build_module_only_repo() as repo:
+            g = KuberlyPlatform(repo)
+            g.build()
+            plan = g.plan_persona_fanout(
+                task="bump tempo memory",
+                named_modules=["tempo"],
+                current_branch="agrishko/feature",
+            )
+            self.assertEqual(plan["task_kind"], "stop-no-instance")
+            self.assertIn("tempo", plan["unactionable_modules"])
+            self.assertEqual(plan["phases"][0]["personas"], [])
+
+    def test_incident_on_orphan_does_not_halt(self) -> None:
+        # Investigations should still go through even for leaf modules.
+        with self._build_module_only_repo() as repo:
+            g = KuberlyPlatform(repo)
+            g.build()
+            plan = g.plan_persona_fanout(
+                task="tempo is throwing 5xx errors",
+                named_modules=["tempo"],
+                current_branch="agrishko/feature",
+            )
+            self.assertEqual(plan["task_kind"], "incident")
+            # Actionability is recorded informationally even when not halting.
+            self.assertEqual(plan["unactionable_modules"], [])
+
+    def test_new_application_does_not_halt(self) -> None:
+        # new-* task_kinds CREATE the first instance — unactionable is normal.
+        with self._build_module_only_repo() as repo:
+            g = KuberlyPlatform(repo)
+            g.build()
+            plan = g.plan_persona_fanout(
+                task="add new application using tempo",
+                named_modules=["tempo"],
+                current_branch="agrishko/feature",
+            )
+            self.assertNotEqual(plan["task_kind"], "stop-no-instance")
 
 
 class PlanPersonaFanoutTests(unittest.TestCase):

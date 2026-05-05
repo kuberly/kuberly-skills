@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -138,6 +139,13 @@ PERSONA_DAGS = {
     ],
     # Pre-flight halt: caller named modules that don't exist as graph nodes.
     "stop-target-absent": [
+        {"id": "halt", "personas": [], "parallel": False, "needs_approval": False},
+    ],
+    # v0.15.0 pre-flight halt: caller named modules that EXIST in the graph
+    # but are leaves with no component instance invoking them. The work is
+    # unactionable as a "bump" — what the user probably means is "create a
+    # new component instance" (a different task_kind). Halt the DAG and ask.
+    "stop-no-instance": [
         {"id": "halt", "personas": [], "parallel": False, "needs_approval": False},
     ],
 }
@@ -934,6 +942,144 @@ class KuberlyPlatform:
             },
         }
 
+    def quick_scope(self, task: str,
+                    named_modules: list[str] | None = None,
+                    target_envs:   list[str] | None = None) -> dict:
+        """Server-side scope.md generation. v0.15.0.
+
+        Replaces the `infra-scope-planner` agent for typical tasks
+        ('bump X memory', 'add Y database', 'increase Z replicas'). The
+        orchestrator calls this, gets a fully-formed scope.md body back,
+        writes it directly to `.agents/prompts/<session>/scope.md` — no
+        agent dispatch, no 18k-token round-trip.
+
+        Returns:
+            scope_md: ready-to-write Markdown body
+            modules: resolved module ids
+            actionable: bool — True if at least one module has a component
+                invoker (and is therefore tune-able)
+            recommendation: 'dispatch-iac-developer' | 'stop-target-absent'
+                | 'stop-no-instance' | 'fall-back-to-scope-planner'
+            blast_summary: one-line summary of impact
+            unactionable: list of unactionable module labels
+            unresolved: list of named modules that didn't resolve
+        """
+        scope = self.scope_for_change(named_modules, target_envs)
+        modules = scope.get("modules", [])
+
+        # Resolution + actionability — same logic as plan_persona_fanout
+        unresolved: list[str] = []
+        unactionable: list[str] = []
+        if named_modules:
+            found_labels = {
+                self.nodes[nid].get("label", "").lower()
+                for nid in modules if nid in self.nodes
+            }
+            unresolved = [m for m in named_modules if m.lower() not in found_labels]
+        for nid in modules:
+            has_consumer = False
+            for e in self.edges:
+                if e.get("target") != nid:
+                    continue
+                src_node = self.nodes.get(e.get("source"), {})
+                if src_node.get("type") in {"component", "application"}:
+                    has_consumer = True
+                    break
+            if not has_consumer:
+                label = self.nodes.get(nid, {}).get("label", nid)
+                unactionable.append(label)
+
+        # Build affected-nodes section
+        affected: list[str] = []
+        for nid in modules:
+            node = self.nodes.get(nid, {})
+            desc = node.get("description") or "module"
+            affected.append(f"- {nid} — direct edit ({desc[:80]})")
+            for e in self.edges:
+                if e.get("target") == nid:
+                    src_node = self.nodes.get(e.get("source"), {})
+                    if src_node.get("type") == "component":
+                        affected.append(f"- {e['source']} — invokes {nid}")
+                    elif src_node.get("type") == "application":
+                        rt = src_node.get("runtime", "")
+                        affected.append(f"- {e['source']} — uses {nid}{f' (runtime={rt})' if rt else ''}")
+
+        # Blast — scope_for_change returns counts/labels; call blast_radius()
+        # on the first module to get the id-keyed dict shape we want.
+        downstream_ids: list[str] = []
+        upstream_ids: list[str] = []
+        blast_summary = scope.get("blast_radius", {}).get("summary", "")
+        if modules:
+            br = self.blast_radius(modules[0], direction="both", max_depth=3)
+            if "error" not in br:
+                ds = br.get("downstream") or {}
+                downstream_ids = list(ds.keys()) if isinstance(ds, dict) else list(ds)
+                us = br.get("upstream") or {}
+                upstream_ids = list(us.keys()) if isinstance(us, dict) else list(us)
+        files = scope.get("files_likely_changed") or []
+
+        # Recommendation
+        if not named_modules:
+            recommendation = "fall-back-to-scope-planner"
+        elif unresolved and not modules:
+            recommendation = "stop-target-absent"
+        elif unactionable and len(unactionable) == len(modules):
+            recommendation = "stop-no-instance"
+        else:
+            recommendation = "dispatch-iac-developer"
+
+        # Build scope.md body
+        lines = [f"# Scope: {task or 'unspecified'}", ""]
+        if recommendation == "stop-target-absent":
+            lines += [
+                "## STOP — target absent",
+                f"Named: {', '.join(unresolved)}. None resolve to graph nodes.",
+                "Confirm with user; do NOT dispatch personas.",
+                "",
+            ]
+        elif recommendation == "stop-no-instance":
+            lines += [
+                "## STOP — no component instance",
+                f"Module(s) {', '.join(unactionable)} exist but have zero component invokers.",
+                "A 'bump' is moot — there is nothing deployed to bump.",
+                "Likely intent: 'create new component instance' (task_kind=new-application/new-database).",
+                "",
+            ]
+        else:
+            if affected:
+                lines += ["## Affected"] + affected + [""]
+            blast_line_down = (f"down={len(downstream_ids)} ids="
+                               + (",".join(downstream_ids[:5]) if downstream_ids else "leaf"))
+            blast_line_up = (f"up={len(upstream_ids)} ids="
+                             + (",".join(upstream_ids[:5]) if upstream_ids else "-"))
+            lines += ["## Blast", blast_line_down, blast_line_up, ""]
+            if files:
+                lines += ["## Files likely changed"] + [f"- {f}" for f in files[:10]] + [""]
+            if unresolved:
+                lines += ["## Unresolved (partial)", f"- {', '.join(unresolved)}", ""]
+            if unactionable:
+                lines += ["## Open questions",
+                          f"- {', '.join(unactionable)} — module exists but no component invoker; verify intent",
+                          ""]
+            if scope.get("openspec_paths_touched"):
+                paths = ", ".join(scope["openspec_paths_touched"])
+                lines += ["## OpenSpec",
+                          f"required (paths under {paths}); confirm change folder exists before iac-developer",
+                          ""]
+
+        return {
+            "scope_md":        "\n".join(lines).rstrip() + "\n",
+            "modules":         modules,
+            "actionable":      bool(modules) and recommendation == "dispatch-iac-developer",
+            "recommendation":  recommendation,
+            "blast_summary":   blast_summary,
+            "downstream_ids":  downstream_ids[:10],
+            "upstream_ids":    upstream_ids[:10],
+            "unresolved":      unresolved,
+            "unactionable":    unactionable,
+            "files_likely_changed": files[:20],
+        }
+
     def recommend_personas(self, task_kind: str) -> dict:
         """Return the persona DAG for a given task_kind."""
         if task_kind not in PERSONA_DAGS:
@@ -982,6 +1128,7 @@ class KuberlyPlatform:
         # the absence. This is the v0.10.2 root-cause guard for the "Loki
         # not deployed but planner+troubleshooter both spawned" pattern.
         unresolved_modules: list[str] = []
+        unactionable_modules: list[str] = []
         if named_modules:
             found_labels = {
                 self.nodes[nid].get("label", "").lower()
@@ -997,15 +1144,39 @@ class KuberlyPlatform:
                 # that overrides classification.
                 task_kind = "stop-target-absent"
                 confidence = "high"
+            else:
+                # v0.15.0: actionability pre-flight. Apply ONLY to task_kinds
+                # that mutate an EXISTING deployment. For incident (investigation),
+                # new-* (we're creating the first instance), unknown, plan-review,
+                # leaf modules are normal/expected.
+                MUTATES_EXISTING = {"resource-bump", "drift-fix", "cleanup", "cicd"}
+                if task_kind in MUTATES_EXISTING:
+                    for nid in scope.get("modules", []):
+                        # Actionable iff any component or application edge points at it.
+                        has_consumer = False
+                        for e in self.edges:
+                            if e.get("target") != nid:
+                                continue
+                            src_node = self.nodes.get(e.get("source"), {})
+                            if src_node.get("type") in {"component", "application"}:
+                                has_consumer = True
+                                break
+                        if not has_consumer:
+                            label = self.nodes.get(nid, {}).get("label", nid)
+                            unactionable_modules.append(label)
+                    # If EVERY resolved module is unactionable, halt.
+                    resolved_count = len(scope.get("modules", []))
+                    if unactionable_modules and len(unactionable_modules) == resolved_count:
+                        task_kind = "stop-no-instance"
+                        confidence = "high"
 
         recommended = self.recommend_personas(task_kind)
         phases = recommended["phases"]
 
         # Append the optional review phase. Skipped when:
-        #   - the DAG is already a special flow (plan-review, stop-target-absent,
-        #     unknown — these have their own structure)
+        #   - the DAG is already a special flow (plan-review, stop-*, unknown — they have their own structure)
         #   - the implement phase doesn't exist (review without code change is moot)
-        if with_review and task_kind not in {"plan-review", "stop-target-absent", "unknown"}:
+        if with_review and task_kind not in {"plan-review", "stop-target-absent", "stop-no-instance", "unknown"}:
             phases = phases + [
                 {"id": "review", "personas": ["pr-reviewer"],
                  "parallel": False, "needs_approval": False},
@@ -1015,6 +1186,7 @@ class KuberlyPlatform:
         context_md = self._build_context_md(
             session=slug, task=task, scope=scope, gates=gates,
             unresolved_modules=unresolved_modules,
+            unactionable_modules=unactionable_modules,
         )
 
         return {
@@ -1025,13 +1197,15 @@ class KuberlyPlatform:
             "phases":      phases,
             "session_slug": slug,
             "context_md":  context_md,
-            "unresolved_modules": unresolved_modules,
+            "unresolved_modules":   unresolved_modules,
+            "unactionable_modules": unactionable_modules,
             "with_review": with_review,
         }
 
     def _build_context_md(self, session: str, task: str,
                           scope: dict, gates: dict,
-                          unresolved_modules: list[str] | None = None) -> str:
+                          unresolved_modules: list[str] | None = None,
+                          unactionable_modules: list[str] | None = None) -> str:
         """Build the Markdown body session_init writes to context.md."""
         # Graph snapshot lines
         glines = [f"- **Modules in scope:** {', '.join(scope['modules']) or '(none resolved)'}"]
@@ -1052,11 +1226,19 @@ class KuberlyPlatform:
             halt_block = (
                 f"\n## Pre-flight halt — target absent\n"
                 f"Named module(s) {names} have **no matching node** in the "
-                f"kuberly-platform. The fanout DAG was overridden to "
-                f"`stop-target-absent` (zero personas). Confirm with the user "
-                f"before any persona dispatch — likely the target is not "
-                f"deployed in this fork, the user means a different name, or "
-                f"the graph is stale.\n"
+                f"kuberly-platform. DAG: `stop-target-absent` (zero personas). "
+                f"Confirm with the user before any persona dispatch.\n"
+            )
+        elif unactionable_modules:
+            # v0.15.0: module exists but is a graph leaf (no component invokes it).
+            names = ", ".join(f"`{m}`" for m in unactionable_modules)
+            halt_block = (
+                f"\n## Pre-flight halt — module not deployed\n"
+                f"Module(s) {names} exist in the graph but have **no component "
+                f"instance** invoking them. A 'bump' / 'tune' task is moot — "
+                f"there is nothing to tune. Likely the user means 'create a "
+                f"new component instance' (different task_kind: new-application "
+                f"or new-database). Confirm before any persona dispatch.\n"
             )
         elif unresolved_modules:
             # Some resolved, some didn't — informational, not a halt.
@@ -2640,6 +2822,13 @@ def _compact_summary(name: str, result, args: dict) -> str:
         return (f"stats: nodes={result.get('node_count',0)} edges={result.get('edge_count',0)}"
                 + (f"\ncritical: {crit_ids}" if crit_ids else ""))
 
+    if name == "quick_scope":
+        # Return the scope.md body directly — that's the value the caller wants.
+        # Recommendation header tells the orchestrator what to do next.
+        rec = result.get("recommendation", "?")
+        body = result.get("scope_md", "")
+        return f"recommendation: {rec}\n\n{body}"
+
     if name == "plan_persona_fanout":
         phases = result.get("phases", []) or []
         line = (f"plan: kind={result.get('task_kind','?')} "
@@ -2722,6 +2911,36 @@ def render_tool_result(name: str, result, args: dict, graph: KuberlyPlatform,
 # ---------------------------------------------------------------------------
 # MCP Server (stdio JSON-RPC)
 # ---------------------------------------------------------------------------
+
+def _emit_telemetry(graph, tool_name, fmt, tool_args, output_text,
+                    duration_ms, error):
+    """Append one JSONL line per MCP tool call to .claude/mcp-telemetry.jsonl.
+
+    v0.15.0: opt-in via KUBERLY_MCP_TELEMETRY=1. Off by default — never
+    breaks the call path on disk-write errors. Used to identify which
+    tools dominate token cost so the next optimization pass is data-driven.
+    """
+    if os.environ.get("KUBERLY_MCP_TELEMETRY") != "1":
+        return
+    try:
+        path = graph.repo / ".claude" / "mcp-telemetry.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rec = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "tool": tool_name,
+            "format": fmt,
+            "input_size": len(json.dumps(tool_args, default=str)),
+            "output_size": len(output_text or ""),
+            "duration_ms": duration_ms,
+        }
+        if error:
+            rec["error"] = error
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    except Exception:
+        # Telemetry must NEVER break the MCP call path.
+        pass
+
 
 def run_mcp_server(graph: KuberlyPlatform):
     """Run an MCP server over stdio that exposes graph query tools."""
@@ -2834,9 +3053,23 @@ def run_mcp_server(graph: KuberlyPlatform):
                     "target_envs":    {"type": "array", "items": {"type": "string"}, "description": "Optional: target environments. Drift slice is computed only when set."},
                     "current_branch": {"type": "string", "description": "Result of `git rev-parse --abbrev-ref HEAD` — enables the branch gate."},
                     "session_name":   {"type": "string", "description": "Optional override for the session slug; defaults to slugified task."},
-                    "task_kind":      {"type": "string", "enum": ["resource-bump", "incident", "new-application", "new-database", "new-module", "drift-fix", "cicd", "cleanup", "plan-review", "unknown", "stop-target-absent"], "description": "Override task_kind inference. Note: `stop-target-absent` is normally set automatically when `named_modules` are supplied but none resolve to graph nodes — the orchestrator should not pass this value, the planner emits it."},
+                    "task_kind":      {"type": "string", "enum": ["resource-bump", "incident", "new-application", "new-database", "new-module", "drift-fix", "cicd", "cleanup", "plan-review", "unknown", "stop-target-absent", "stop-no-instance"], "description": "Override task_kind inference. Note: `stop-target-absent` and `stop-no-instance` are normally set automatically — the orchestrator should not pass them, the planner emits them."},
                     "with_review":    {"type": "boolean", "default": False, "description": "Append a final `review` phase running the merged `pr-reviewer` (single agent, diff-only, ~5-8k tokens). v0.14.0+: review is OFF by default to save tokens — CI runs terraform_validate/tflint and the human PR review covers normal cases. Set true for high-risk changes (shared-infra blast, security/IAM). Auto-enabled when the task description literally contains the word 'review'."},
                     "format":         _FORMAT_PROP,
+                },
+                "required": ["task"],
+            },
+        },
+        {
+            "name": "quick_scope",
+            "description": "Server-side scope.md generation. v0.15.0+: replaces the `infra-scope-planner` agent for typical 'bump X', 'add Y', 'increase Z' tasks. The orchestrator calls this and writes the returned `scope_md` directly to `.agents/prompts/<session>/scope.md` — no agent dispatch, no 18k-token round-trip. Includes the v0.15.0 actionability check: returns `recommendation: 'stop-no-instance'` when a named module exists but has no component invoker. Fall back to dispatching `infra-scope-planner` only when this returns `recommendation: 'fall-back-to-scope-planner'`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task":          {"type": "string", "description": "Free-form task description from the user."},
+                    "named_modules": {"type": "array", "items": {"type": "string"}, "description": "Module names hinted by the user (e.g. ['loki']). Without this, returns recommendation='fall-back-to-scope-planner'."},
+                    "target_envs":   {"type": "array", "items": {"type": "string"}, "description": "Optional: target environments. Drift slice computed only when set."},
+                    "format":        _FORMAT_PROP,
                 },
                 "required": ["task"],
             },
@@ -2953,9 +3186,13 @@ def run_mcp_server(graph: KuberlyPlatform):
             tool_name = params.get("name", "")
             tool_args = params.get("arguments", {})
             fmt = tool_args.get("format", "compact")
+            t0 = time.monotonic()
             try:
                 result = dispatch_tool(graph, tool_name, tool_args)
                 text = render_tool_result(tool_name, result, tool_args, graph, fmt=fmt)
+                _emit_telemetry(graph, tool_name, fmt, tool_args, text,
+                                duration_ms=int((time.monotonic() - t0) * 1000),
+                                error=None)
                 return {
                     "jsonrpc": "2.0", "id": rid,
                     "result": {
@@ -2963,6 +3200,9 @@ def run_mcp_server(graph: KuberlyPlatform):
                     },
                 }
             except Exception as exc:
+                _emit_telemetry(graph, tool_name, fmt, tool_args, "",
+                                duration_ms=int((time.monotonic() - t0) * 1000),
+                                error=f"{type(exc).__name__}: {exc}")
                 return {
                     "jsonrpc": "2.0", "id": rid,
                     "result": {
@@ -3009,6 +3249,12 @@ def run_mcp_server(graph: KuberlyPlatform):
                 session_name=args.get("session_name"),
                 task_kind=args.get("task_kind"),
                 with_review=bool(args.get("with_review", False)),
+            )
+        elif name == "quick_scope":
+            return g.quick_scope(
+                task=args["task"],
+                named_modules=args.get("named_modules"),
+                target_envs=args.get("target_envs"),
             )
         elif name == "session_init":
             return g.session_init(

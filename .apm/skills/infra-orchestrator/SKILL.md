@@ -28,9 +28,13 @@ Pairs with **`revise-infra-plan`** (interview workflow) and **`infra-self-review
 
 For any non-trivial task, the first three calls are mechanical:
 
-1. `mcp__kuberly-platform__plan_persona_fanout({ task, named_modules?, current_branch })` — returns `task_kind`, `scope` (blast radius + likely-changed files + drift), `gates` (branch + OpenSpec + personas-synced), the persona DAG with per-phase `parallel`/`needs_approval` flags, and a ready-to-paste `context_md` body. The MCP card output is a **fanout briefing** with status-badged tables — paste it verbatim to the user as your "here's what I'm about to do" summary. **Replaces what the orchestrator used to chain by hand: `query_nodes` → `blast_radius` → `drift` → manual policy reasoning.**
+1. `mcp__kuberly-platform__plan_persona_fanout({ task, named_modules?, current_branch })` — returns `task_kind`, `scope` (blast radius + likely-changed files + drift), `gates` (branch + OpenSpec + personas-synced), the persona DAG with per-phase `parallel`/`needs_approval` flags, and a ready-to-paste `context_md` body. The MCP card output is a **fanout briefing** — paste it verbatim to the user as your "here's what I'm about to do" summary. **Replaces what the orchestrator used to chain by hand: `query_nodes` → `blast_radius` → `drift` → manual policy reasoning.**
 2. `mcp__kuberly-platform__session_init({ name, task, modules, current_branch })` — creates `.agents/prompts/<slug>/` with `context.md` (seeded from the plan above), `findings/`, `tasks/`, **and `status.json`** (live fanout dashboard, every persona starting in `queued`).
-3. Fan out **phase 1** of the returned DAG: one assistant message with one `Agent` call per persona in the phase. **Wrap each `Agent` call with status updates** so the user sees live progress (see "Status-aware fanout" below). Use `run_in_background: true` when you have other prep to do while a long-running persona finishes.
+3. **Skip the scope-planner agent for typical tasks (v0.15.0+).** If `named_modules` is one item and `task_kind` ∈ `{resource-bump, drift-fix, cleanup, cicd, new-application, new-database}`, call `mcp__kuberly-platform__quick_scope({ task, named_modules })` and write the returned `scope_md` directly to `.agents/prompts/<slug>/scope.md` via `session_write`. This is **~2-3k tokens** vs ~18k for the agent dispatch.
+   - If `quick_scope` returns `recommendation: "stop-target-absent"` or `"stop-no-instance"`: STOP, surface to user.
+   - If `recommendation: "fall-back-to-scope-planner"` (no `named_modules` or ambiguous): dispatch the agent.
+   - Otherwise (`"dispatch-iac-developer"`): scope.md is ready, proceed to the implement phase.
+4. Fan out the next phase of the DAG (typically `iac-developer`). One assistant message with `Agent` calls per persona. Wrap with `session_set_status` updates so the user sees live progress.
 
 If `gates.branch.verdict == "block"` or `gates.openspec.required == true && existing_change_folder == null`, **stop and surface to the user** before delegating implementation. Read-only personas (planner, troubleshooter, reviewers, reconciler) can still run.
 
