@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.41.1 — 2026-05-06
+
+- **MERGE:** the v0.41.0 stats bar and hero used to render as two
+  separate cards stacked above each other. Now wrapped in a single
+  `.hero-panel` card — stats rows on top, internal `border-bottom`
+  separator, then the cluster name + KPI strip below. One visual unit.
+
 ## v0.41.0 — 2026-05-06
 
 Dashboard redesign — toned down, less cartoonish, stats up top.

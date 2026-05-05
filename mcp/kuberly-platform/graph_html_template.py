@@ -1314,14 +1314,30 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .ad-detail { color: var(--ink-mute); font-family: var(--font-mono); font-size: 11px; }
   .ad-detail strong { color: var(--ink); }
 
-  /* v0.41.0: refined hero — smaller numbers, no radial-gradient burst,
-     thin border separator. Reads as professional dashboard, not toy. */
+  /* v0.41.1: combined hero panel — stats rows on top, then a HR, then
+     the eyebrow + cluster name + KPI strip. Single card surface. */
+  .hero-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius-lg);
+    padding: 0;
+    margin-bottom: 22px;
+    overflow: hidden;
+  }
+  .hero-panel .stats-bar {
+    margin: 0;
+    border: none;
+    border-bottom: 1px solid var(--ink-line);
+    border-radius: 0;
+    padding: 14px 22px 14px;
+    background: rgba(255,255,255,0.015);
+  }
   .hero-saas {
     background: transparent;
     border: none;
-    padding: 18px 0 22px;
-    margin-bottom: 16px;
-    border-bottom: 1px solid var(--ink-line);
+    padding: 22px 24px 24px;
+    margin-bottom: 0;
+    border-bottom: none;
   }
   .hero-saas .hero-eyebrow {
     font-family: var(--font-mono);
@@ -1336,14 +1352,14 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     font-weight: 500;
     letter-spacing: -0.01em;
     color: var(--ink);
-    margin: 0 0 16px;
+    margin: 0 0 18px;
   }
   .hero-kpis {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 32px;
-    padding: 0;
-    border-top: none;
+    padding: 16px 0 0;
+    border-top: 1px solid var(--ink-line);
   }
   .hero-kpi {
     display: flex;
@@ -2726,25 +2742,26 @@ function renderDashboard() {
     <div class="hero-kpi"><div class="label">Graph</div><div class="value">$${m.node_count}</div><div class="sub">$${m.edge_count} edges</div></div>
   `;
   root.innerHTML = `
-    <div class="stats-bar">
-      <div class="stats-bar-row">
-        <span class="stats-bar-key">overlays</span>
-        <span class="stats-bar-val">OpenSpec <strong>$${cov.openspec_present ? cov.openspec_changes + " changes" : "—"}</strong></span>
-        <span class="stats-bar-val">docs <strong>$${(cov.docs_overlay && cov.docs_overlay.generated_at) || "—"}</strong></span>
-        <span class="stats-bar-val">state snapshots <strong>$${(cov.state_overlay_envs || []).join(", ") || "—"}</strong></span>
-        <span class="stats-bar-val">doc-linked <strong>$${cov.modules_with_doc_mentions}/$${cov.modules_total}</strong></span>
+    <div class="hero-panel">
+      <div class="stats-bar">
+        <div class="stats-bar-row">
+          <span class="stats-bar-key">overlays</span>
+          <span class="stats-bar-val">OpenSpec <strong>$${cov.openspec_present ? cov.openspec_changes + " changes" : "—"}</strong></span>
+          <span class="stats-bar-val">docs <strong>$${(cov.docs_overlay && cov.docs_overlay.generated_at) || "—"}</strong></span>
+          <span class="stats-bar-val">state snapshots <strong>$${(cov.state_overlay_envs || []).join(", ") || "—"}</strong></span>
+          <span class="stats-bar-val">doc-linked <strong>$${cov.modules_with_doc_mentions}/$${cov.modules_total}</strong></span>
+        </div>
+        <div class="stats-bar-row">
+          <span class="stats-bar-key">graph nodes</span>
+          $${layerLegend}
+        </div>
       </div>
-      <div class="stats-bar-row">
-        <span class="stats-bar-key">graph nodes</span>
-        $${layerLegend}
-      </div>
+      <header class="hero-saas">
+        <div class="hero-eyebrow">stack intelligence</div>
+        <h1>$${esc((DASHBOARD.environments?.[0]?.cluster_name) || "kuberly")}</h1>
+        <div class="hero-kpis">$${heroKpis}</div>
+      </header>
     </div>
-
-    <header class="hero-saas">
-      <div class="hero-eyebrow">stack intelligence</div>
-      <h1>$${esc((DASHBOARD.environments?.[0]?.cluster_name) || "kuberly")}</h1>
-      <div class="hero-kpis">$${heroKpis}</div>
-    </header>
 
     <section class="section">
       <h2>Architecture — deployed AWS services</h2>
