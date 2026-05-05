@@ -2367,6 +2367,10 @@ class KuberlyPlatform:
         # 3D Graph view is now the single home for browsable nodes.
         self.scan_cue_schema_nodes()
         self.scan_workflow_nodes()
+        # v0.38.0: per-application rendered manifests (manual-run only —
+        # populated by scripts/render_apps.py) become graph nodes too.
+        # No-op if .kuberly/rendered_apps_<env>.json doesn't exist yet.
+        self.scan_rendered_app_nodes()
 
     def scan_cue_schema_nodes(self) -> None:
         """v0.37.0: emit `schema:cue/<file>` nodes with source_layer="schema"
@@ -2387,6 +2391,74 @@ class KuberlyPlatform:
                 field_count=f.get("field_count", 0),
                 source_layer="schema",
             )
+
+    def scan_rendered_app_nodes(self) -> None:
+        """v0.38.0: emit nodes for every CUE-rendered manifest written by
+        the manual `scripts/render_apps.py` to
+        `.kuberly/rendered_apps_<env>.json`.
+
+        Per env we synthesize:
+          - One `app_render:<env>/<app>` umbrella node per application.
+          - One `rendered:<env>/<app>/<Kind>/<name>` leaf per rendered
+            k8s manifest (deployment, service, secret-shell, etc.).
+          - Edges:
+              env → app_render        (relation: contains)
+              app_render → rendered   (relation: renders)
+              application → app_render (relation: rendered_into)
+                — only when the corresponding `app:<env>/<app>` static
+                node already exists (it does for every JSON sidecar).
+
+        Layer: "rendered" — gets its own pill on the Graph topbar.
+
+        Does nothing if no rendered_apps_*.json files exist.
+        """
+        rendered = _load_rendered_apps_raw(self.repo)
+        for env, bucket in (rendered or {}).items():
+            env_nid = f"env:{env}"
+            for a in bucket.get("apps", []):
+                app_name = a.get("app") or ""
+                if not app_name:
+                    continue
+                umbrella = f"app_render:{env}/{app_name}"
+                if umbrella not in self.nodes:
+                    self.add_node(
+                        umbrella, type="app_render",
+                        label=f"{env}/{app_name}",
+                        environment=env,
+                        application=app_name,
+                        ok=bool(a.get("ok", False)),
+                        resource_count=int(a.get("resource_count") or 0),
+                        kind_counts=dict(a.get("kind_counts") or {}),
+                        source_layer="rendered",
+                    )
+                    if env_nid in self.nodes:
+                        self.add_edge(env_nid, umbrella, relation="contains")
+                    static_app = f"app:{env}/{app_name}"
+                    if static_app in self.nodes:
+                        self.add_edge(static_app, umbrella, relation="rendered_into")
+                # Resources only present when the manifest stream parsed
+                # OK — failed renders carry an error list instead.
+                for r in a.get("resources", []) or []:
+                    kind = r.get("kind") or ""
+                    name = r.get("name") or ""
+                    ns   = r.get("namespace") or ""
+                    if not kind or not name:
+                        continue
+                    rid = f"rendered:{env}/{app_name}/{kind}/{name}"
+                    if rid in self.nodes:
+                        continue
+                    self.add_node(
+                        rid, type="rendered_resource",
+                        label=f"{kind}/{name}",
+                        environment=env,
+                        application=app_name,
+                        k8s_kind=kind, k8s_name=name, k8s_namespace=ns,
+                        replicas=r.get("replicas"),
+                        ports=list(r.get("ports") or [])[:8],
+                        service_account=r.get("service_account") or "",
+                        source_layer="rendered",
+                    )
+                    self.add_edge(umbrella, rid, relation="renders")
 
     def scan_workflow_nodes(self) -> None:
         """v0.37.0: emit `workflow:<file>` nodes with source_layer="ci_cd"
@@ -2461,12 +2533,15 @@ def _node_source_layer(node: dict) -> str:
     nid = node.get("id", "") or ""
     # Explicit source_layer wins (set by scanners that opt-in to a layer).
     explicit = node.get("source_layer", "")
-    if explicit in ("static", "state", "k8s", "docs", "schema", "ci_cd"):
+    if explicit in ("static", "state", "k8s", "docs", "schema", "ci_cd", "rendered"):
         return explicit
     if ntype == "cue_schema" or nid.startswith("schema:"):
         return "schema"
     if ntype == "workflow" or nid.startswith("workflow:"):
         return "ci_cd"
+    if ntype in ("app_render", "rendered_resource") \
+       or nid.startswith("app_render:") or nid.startswith("rendered:"):
+        return "rendered"
     if ntype == "k8s_resource" or nid.startswith("k8s:"):
         return "k8s"
     if ntype == "doc" or nid.startswith("doc:"):
@@ -3046,6 +3121,24 @@ def _scan_cue_schemas(repo: Path) -> dict:
         "file_count": len(out_files),
         "field_count": sum(f["field_count"] for f in out_files),
     }
+
+
+def _load_rendered_apps_raw(repo: Path) -> dict:
+    """v0.38.0: raw loader (keeps per-resource details) for the graph
+    scanner. Distinct from `_load_rendered_apps` (which strips detail
+    to keep the dashboard payload small)."""
+    out_dir = repo / ".kuberly"
+    if not out_dir.is_dir():
+        return {}
+    by_env: dict[str, dict] = {}
+    for p in sorted(out_dir.glob("rendered_apps_*.json")):
+        env = p.stem[len("rendered_apps_"):]
+        try:
+            data = json.loads(p.read_text())
+        except (ValueError, OSError):
+            continue
+        by_env[env] = data
+    return by_env
 
 
 def _load_rendered_apps(repo: Path) -> dict:

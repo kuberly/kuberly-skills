@@ -149,8 +149,9 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .layer-toggle[data-layer=state]  .dot { background: var(--aws); }
   .layer-toggle[data-layer=k8s]    .dot { background: var(--k8s-red); }
   .layer-toggle[data-layer=docs]   .dot { background: var(--ink-mute); }
-  .layer-toggle[data-layer=schema] .dot { background: #a266ff; }
-  .layer-toggle[data-layer=ci_cd]  .dot { background: #5fd098; }
+  .layer-toggle[data-layer=schema]   .dot { background: #a266ff; }
+  .layer-toggle[data-layer=ci_cd]    .dot { background: #5fd098; }
+  .layer-toggle[data-layer=rendered] .dot { background: #22a1c4; }
   #graph-view-mode,
   #graph-group-by {
     background: rgba(255,255,255,0.04);
@@ -1379,8 +1380,10 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
   .ll-pill.ll-docs   .ll-dot { background: var(--ink-mute); }
   .ll-pill.ll-schema { border-color: rgba(162,102,255,0.32); }
   .ll-pill.ll-schema .ll-dot { background: #a266ff; box-shadow: 0 0 6px rgba(162,102,255,0.45); }
-  .ll-pill.ll-ci_cd  { border-color: rgba(95,208,152,0.32); }
-  .ll-pill.ll-ci_cd  .ll-dot { background: #5fd098; box-shadow: 0 0 6px rgba(95,208,152,0.40); }
+  .ll-pill.ll-ci_cd    { border-color: rgba(95,208,152,0.32); }
+  .ll-pill.ll-ci_cd    .ll-dot { background: #5fd098; box-shadow: 0 0 6px rgba(95,208,152,0.40); }
+  .ll-pill.ll-rendered { border-color: rgba(34,161,196,0.32); }
+  .ll-pill.ll-rendered .ll-dot { background: #22a1c4; box-shadow: 0 0 6px rgba(34,161,196,0.45); }
   .ll-pill strong { color: var(--ink); margin-left: 2px; }
 
   .env-grid {
@@ -1745,6 +1748,9 @@ GRAPH_HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
       <label class="layer-toggle active" data-layer="ci_cd"
              title="GitHub workflows — .github/workflows/*.yml. References show which workflow deploys which module.">
         <input type="checkbox" data-layer="ci_cd" checked><span class="dot"></span>CI/CD</label>
+      <label class="layer-toggle active" data-layer="rendered"
+             title="Per-app rendered manifests — output of `cue cmd dump` for each applications/<env>/<app>.json. Populated by scripts/render_apps.py.">
+        <input type="checkbox" data-layer="rendered" checked><span class="dot"></span>Rendered</label>
     </div>
     <select id="graph-view-mode" title="Graph scope — start with overview on large stacks">
       <option value="overview">Overview (module deps)</option>
@@ -2511,22 +2517,24 @@ function renderDashboard() {
      - k8s:    live cluster overlay (Deployments, Services, ...)
      - docs:   README / runbook references */
   const LAYER_LABELS = {
-    static: "IaC files",
-    state:  "TG / OpenTofu state",
-    k8s:    "K8s resources",
-    docs:   "Docs",
-    schema: "CUE schemas",
-    ci_cd:  "CI/CD workflows",
+    static:   "IaC files",
+    state:    "TG / OpenTofu state",
+    k8s:      "K8s resources",
+    docs:     "Docs",
+    schema:   "CUE schemas",
+    ci_cd:    "CI/CD workflows",
+    rendered: "Rendered manifests",
   };
   const LAYER_TIPS = {
-    static: "Infrastructure-as-Code files in the repo (HCL / JSON / CUE)",
-    state:  "Resources actually created by Terragrunt / OpenTofu for this cluster/env",
-    k8s:    "Live Kubernetes cluster resources (Deployments, Services, Pods, ...)",
-    docs:   "Documentation references — module READMEs, runbooks, ADRs",
-    schema: "CUE schema files — cue/**/*.cue. Defines valid app JSON shape",
-    ci_cd:  "GitHub workflows — .github/workflows/*.yml. References modules / components",
+    static:   "Infrastructure-as-Code files in the repo (HCL / JSON / CUE)",
+    state:    "Resources actually created by Terragrunt / OpenTofu for this cluster/env",
+    k8s:      "Live Kubernetes cluster resources (Deployments, Services, Pods, ...)",
+    docs:     "Documentation references — module READMEs, runbooks, ADRs",
+    schema:   "CUE schema files — cue/**/*.cue. Defines valid app JSON shape",
+    ci_cd:    "GitHub workflows — .github/workflows/*.yml. References modules / components",
+    rendered: "Per-app rendered manifests from `cue cmd dump` (scripts/render_apps.py)",
   };
-  const layerLegend = ["static", "state", "k8s", "docs", "schema", "ci_cd"]
+  const layerLegend = ["static", "state", "k8s", "docs", "schema", "ci_cd", "rendered"]
     .filter(L => (layers[L] || 0) > 0)
     .map(L =>
       `<span class="ll-pill ll-$${L}" title="$${esc(LAYER_TIPS[L])}"><span class="ll-dot"></span>$${esc(LAYER_LABELS[L])}: <strong>$${layers[L] || 0}</strong></span>`
@@ -2672,8 +2680,9 @@ function renderDashboard() {
             <button type="button" data-lf="state"  class="lf">state</button>
             <button type="button" data-lf="k8s"    class="lf">k8s</button>
             <button type="button" data-lf="docs"   class="lf">docs</button>
-            <button type="button" data-lf="schema" class="lf">CUE</button>
-            <button type="button" data-lf="ci_cd"  class="lf">CI/CD</button>
+            <button type="button" data-lf="schema"   class="lf">CUE</button>
+            <button type="button" data-lf="ci_cd"    class="lf">CI/CD</button>
+            <button type="button" data-lf="rendered" class="lf">rendered</button>
           </div>
         </div>
         <div id="spotlight-pick"></div>
@@ -2721,20 +2730,22 @@ function renderDashboard() {
   const history = [];    /* recent node ids the user clicked */
 
   function _layerColor(layer) {
-    if (layer === "static") return "var(--blue)";
-    if (layer === "state")  return "var(--aws)";
-    if (layer === "k8s")    return "var(--k8s-red)";
-    if (layer === "schema") return "#a266ff";
-    if (layer === "ci_cd")  return "#5fd098";
+    if (layer === "static")   return "var(--blue)";
+    if (layer === "state")    return "var(--aws)";
+    if (layer === "k8s")      return "var(--k8s-red)";
+    if (layer === "schema")   return "#a266ff";
+    if (layer === "ci_cd")    return "#5fd098";
+    if (layer === "rendered") return "#22a1c4";
     return "var(--ink-mute)";
   }
   function _layerLabel(layer) {
-    if (layer === "static") return "IaC";
-    if (layer === "state")  return "state";
-    if (layer === "k8s")    return "k8s";
-    if (layer === "docs")   return "docs";
-    if (layer === "schema") return "CUE";
-    if (layer === "ci_cd")  return "CI/CD";
+    if (layer === "static")   return "IaC";
+    if (layer === "state")    return "state";
+    if (layer === "k8s")      return "k8s";
+    if (layer === "docs")     return "docs";
+    if (layer === "schema")   return "CUE";
+    if (layer === "ci_cd")    return "CI/CD";
+    if (layer === "rendered") return "rendered";
     return layer || "?";
   }
 
@@ -2891,12 +2902,13 @@ function buildGraph3D() {
     aws: _v("--aws"), amber: _v("--amber"), amberWarm: _v("--amber-warm"),
   };
   const LAYER_COLORS = {
-    static: _v("--blue") || "#1677ff",
-    state:  _v("--aws")  || "#ff9900",
-    k8s:    _v("--k8s-red") || "#e44d4d",
-    docs:   "rgba(255,255,255,0.65)",
-    schema: "#a266ff",
-    ci_cd:  "#5fd098",
+    static:   _v("--blue") || "#1677ff",
+    state:    _v("--aws")  || "#ff9900",
+    k8s:      _v("--k8s-red") || "#e44d4d",
+    docs:     "rgba(255,255,255,0.65)",
+    schema:   "#a266ff",
+    ci_cd:    "#5fd098",
+    rendered: "#22a1c4",
   };
   const HIGHLIGHT = _v("--blue-soft") || "#3c89e8";
   const DIM_COLOR = "rgba(120,120,140,0.18)";
@@ -2952,7 +2964,7 @@ function buildGraph3D() {
    * the node attribute must match. groupBy drives both color and cluster. */
   GRAPH_STATE = {
     layers: { static: true, state: true, k8s: false, docs: true,
-              schema: true, ci_cd: true },
+              schema: true, ci_cd: true, rendered: true },
     viewMode,
     search: "",
     selectedId: null,

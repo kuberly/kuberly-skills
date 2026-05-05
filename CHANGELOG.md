@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.38.0 — 2026-05-06
+
+Per-app rendered manifests now appear as graph nodes.
+
+- **NEW: `scan_rendered_app_nodes()`** auto-loads
+  `.kuberly/rendered_apps_<env>.json` (output of the manual
+  `scripts/render_apps.py`) and synthesizes:
+    - `app_render:<env>/<app>` umbrella node per app
+    - `rendered:<env>/<app>/<Kind>/<name>` leaf per rendered manifest
+    - Edges: `env → app_render` (contains), `app_render → rendered`
+      (renders), `app:<env>/<app> → app_render` (rendered_into)
+- **NEW: `rendered` layer** — color teal `#22a1c4`. Topbar pill,
+  spotlight chip, dashboard layer-legend pill all wired. New
+  `_load_rendered_apps_raw()` keeps per-resource detail for the
+  scanner without bloating the dashboard payload.
+- **MANUAL COMMAND** to populate the rendered nodes (no auto-run, no
+  pre-commit hook):
+  ```
+  python3 apm_modules/kuberly/kuberly-skills/scripts/render_apps.py \\
+    && python3 apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/kuberly_platform.py generate . -o .kuberly
+  ```
+- **BUMP:** apm.yml 0.37.0 → 0.38.0.
+
 ## v0.37.0 — 2026-05-06
 
 Dashboard restored to a real SaaS layout + Graph view gets dedicated
