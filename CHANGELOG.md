@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.42.0 — 2026-05-07
+
+First-class **opencode** support: the persona subagents now ship in a second
+frontmatter dialect that opencode's loader accepts, and `sync_agents.sh`
+materializes them at `.opencode/agents/` alongside the existing
+`.claude/agents/` and `.cursor/agents/` outputs.
+
+The Claude Code / Cursor frontmatter (`name:` + comma-separated `tools:`)
+is rejected by opencode's schema (it expects `mode:` and a `permission:`
+object). v0.42.0 ships a parallel source tree that produces opencode-native
+frontmatter without changing the persona bodies, so the same orchestration
+playbook works under all three runtimes.
+
+- **NEW:** `agents-opencode/*.md` — opencode-native variant of every persona.
+  Frontmatter reduced to `description:` + `mode: subagent`; bodies are byte-
+  identical to `agents/*.md`. Wide-open permission stance (no `permission:`
+  block) — consumers can tighten per-fork via opencode's `permission:` field
+  if needed.
+- **NEW:** `scripts/sync_agents.sh` extended to a third destination
+  (`.opencode/agents/`) sourced from `agents-opencode/`. Idempotent;
+  preserves the existing `.claude/` + `.cursor/` outputs unchanged.
+- **DOCS:** `agent-orchestrator` SKILL is unchanged — the orchestration
+  protocol applies identically under opencode (primary session fans out
+  via opencode's Task tool, subagents discover one another by filename).
+- **BUMP:** `apm.yml` 0.41.5 → 0.42.0.
+
+Consumer migration (kuberly-stack and forks):
+
+```yaml
+# apm.yml
+dependencies:
+  apm:
+    - git@github.com:kuberly/kuberly-skills.git#v0.42.0
+```
+
+Then `apm install`. If the consumer previously symlinked
+`.opencode → .cursor` to share Claude Code agent files, **remove the
+symlink** before installing so the new `.opencode/agents/` directory can
+be populated with native frontmatter.
+
 ## v0.41.5 — 2026-05-06
 
 Fix the two flap sources that forced consumers to commit with

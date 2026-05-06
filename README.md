@@ -31,10 +31,11 @@ The remaining skills assume the kuberly-stack layout (Terragrunt monorepo, OpenS
 | `.apm/skills/<name>/` | Each skill is a directory with **`SKILL.md`** at the leaf (flat layout for APM deploy). |
 | `.apm/cursor/rules/*.mdc` | Canonical **Cursor** rules; copied to the consumer's **`.cursor/rules/`** by **`scripts/sync_cursor_rules.sh`** after **`apm install`**. |
 | `.apm/cursor/commands/*.md` | Slash-command prompts (**`/kub-*`** — plan review, repo locate, PR draft, apply checklist, observability triage, graph refresh, stack context); copied to **`.cursor/commands/`** and **`.claude/commands/`** by **`scripts/sync_agent_commands.sh`** after **`apm install`** (same files for Cursor and Claude Code). |
-| `agents/<name>.md` | Persona subagent definitions (orchestrator's roster). Synced into the consumer's `.claude/agents/` via `scripts/sync_agents.sh` after `apm install`. |
+| `agents/<name>.md` | Persona subagent definitions for **Claude Code** + **Cursor** (`tools:` string frontmatter). Orchestrator's roster. |
+| `agents-opencode/<name>.md` | Same persona bodies as `agents/` but with **opencode**-native frontmatter (`mode: subagent`, no `tools:` string). Bodies are byte-identical; only the YAML header differs. |
 | `scripts/init_agent_session.py` | Manage `.agents/prompts/<session>/` directories (filesystem-based shared memory for the orchestrator and personas). |
-| `scripts/sync_agents.sh` | Copy `agents/*.md` from the apm cache to the consumer's `.claude/agents/`. |
-| **Claude Code** | After **`apm install`** in the infra repo, APM copies skills into **`.claude/skills/`**; `sync_agents.sh` then copies persona files into **`.claude/agents/`**. |
+| `scripts/sync_agents.sh` | Copy `agents/*.md` → `.claude/agents/` + `.cursor/agents/`, and `agents-opencode/*.md` → `.opencode/agents/`. |
+| **Claude Code / Cursor / opencode** | After **`apm install`** in the infra repo, APM copies skills under each runtime's skills root; `sync_agents.sh` then materializes persona files under each runtime's `agents/` directory in the matching frontmatter dialect. |
 | **`docs/RUNTIME_SKILLS.md`** | How ECS/EKS runtime packs are named in **`.apm/skills/`**. |
 | **`docs/AGENT_SESSIONS.md`** | Multi-agent session protocol — file layout under `.agents/prompts/<session>/`, each persona's read/write rules, sync mechanics. |
 | `.apm/skills/overlays/` | Optional tenant-specific skills. |
