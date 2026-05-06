@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.41.3 — 2026-05-06
+
+Orchestrator persona-roster bugfix.
+
+- **FIX: `agent-orchestrator` skill omitted `agent-k8s-ops` from its
+  routing surface.** The persona has shipped since v0.22.0 (the
+  v0.21.0 → v0.22.0 rename pass) but was never added to:
+    - the skill's frontmatter `description` (the routing one-liner
+      Claude Code reads to decide whether to load the skill)
+    - the persona roster table — so the orchestrator could not
+      decide between `agent-sre` ("what's the metric/log") and
+      `agent-k8s-ops` ("what's running, how is it wired") on any
+      live-cluster question.
+  Net effect: pre-v0.41.3, the orchestrator either routed all
+  cluster-state questions to `agent-sre` (wrong scope) or escalated
+  to the user (wasted round-trip).
+- **FIX: `terragrunt-plan-reviewer` was also missing from the persona
+  roster table** (was in frontmatter, not in the table). Added a
+  row describing its CI-comment plan-review scope.
+- **CLARIFY: `pr-reviewer` rows differentiated as in-context pass vs.
+  cold pass** (same persona, two distinct prompts run in parallel —
+  the duplicate row was confusing reviewers).
+- **EXTEND: read-only-personas mentions** (4 places) — added
+  `agent-k8s-ops` to the implicit allowlist so it dispatches without
+  user approval (matches its read-only frontmatter).
+- **EXTEND: shared-prompts directory tree** — added `k8s-state.md`
+  (agent-k8s-ops output) and `findings/plan-review.md`
+  (terragrunt-plan-reviewer output).
+- **EXTEND: cheap pre-flight rule** — added
+  `agent-k8s-ops` reservation note so the orchestrator routes
+  *"what's actually deployed in the cluster"* there instead of to
+  `agent-sre` (which is for metrics/logs).
+- **BUMP:** apm.yml 0.41.2 → 0.41.3.
+
 ## v0.41.2 — 2026-05-06
 
 - **DROP:** the "stack intelligence / kuberly" eyebrow + `<h1>` from
