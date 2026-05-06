@@ -123,7 +123,27 @@ if [[ -f "$GRAPH_GEN" && -f "$ROOT/root.hcl" ]]; then
   fi
 fi
 
-# 5. Lockfile drift report — only if caller passed KUBERLY_LOCK_BEFORE_PATH.
+# 5. Normalize apm-managed config files — apm-cli writes some of these
+# without a trailing newline, which then trips the consumer's
+# `end-of-file-fixer` pre-commit hook on every install. Idempotent: the
+# loop adds a single `\n` if and only if the file does not already end in
+# one. Files listed here are the ones apm-cli is known to rewrite.
+_eof_newline_fix() {
+  local f="$1"
+  [[ -f "$f" ]] || return 0
+  # `tail -c1` yields the last byte. If it is empty (no chars), the file
+  # is empty — leave alone. If it is anything other than `\n`, append one.
+  local last
+  last="$(tail -c1 "$f" 2>/dev/null || true)"
+  if [[ -n "$last" ]]; then
+    printf '\n' >> "$f"
+  fi
+}
+for f in opencode.json .mcp.json .cursor/mcp.json .cursor/hooks.json .claude/settings.json; do
+  _eof_newline_fix "$ROOT/$f"
+done
+
+# 6. Lockfile drift report — only if caller passed KUBERLY_LOCK_BEFORE_PATH.
 # Ignore generated_at for *comparison*. If semantic content is unchanged but
 # bytes differ (usually generated_at), restore the snapshot so pre-commit does
 # not fail on timestamp-only churn.

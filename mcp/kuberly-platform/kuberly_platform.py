@@ -4501,8 +4501,11 @@ def write_graph_report(graph: KuberlyPlatform, out_dir: Path, *, verbose: bool =
             env = node["environment"]
             affected = [e["target"] for e in graph.edges
                         if e["source"] == nid and e["relation"] == "configures"]
-            lines.append(f"- **{env}**: {len(affected)} components — "
-                         + ", ".join(a.split("/")[-1] for a in affected))
+            names = ", ".join(a.split("/")[-1] for a in affected)
+            if names:
+                lines.append(f"- **{env}**: {len(affected)} components — {names}")
+            else:
+                lines.append(f"- **{env}**: 0 components")
 
     lines.append("")
     path = out_dir / "GRAPH_REPORT.md"

@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.41.5 — 2026-05-06
+
+Fix the two flap sources that forced consumers to commit with
+`KUBERLY_SKIP_APM_SYNC=1`. After v0.41.5, routine commits and version
+bumps round-trip cleanly through the consumer's `ensure-apm-skills`
+pre-commit hook with no escape hatch.
+
+- **FIX: `kuberly-platform` graph generator wrote trailing space when an
+  environment had zero `configures` edges.** `GRAPH_REPORT.md`'s
+  blast-radius section used `f"... — " + ", ".join(...)`; an empty
+  list collapsed to `"... — "` (trailing space after the em-dash),
+  which then tripped the consumer's `trailing-whitespace` pre-commit
+  hook every install. Now emits `"...: 0 components"` (no trailing
+  punctuation) when the list is empty.
+- **FIX: `post_apm_install.sh` now normalizes EOF newlines on
+  apm-managed config files** (`opencode.json`, `.mcp.json`,
+  `.cursor/mcp.json`, `.cursor/hooks.json`, `.claude/settings.json`).
+  apm-cli writes some of these without a trailing `\n`, which fired
+  the consumer's `end-of-file-fixer` hook on every install. Idempotent:
+  the new step only appends `\n` if the file is missing it.
+- **VERIFIED:** kuberly-stack consumer now commits cleanly via
+  `git commit` (no `KUBERLY_SKIP_APM_SYNC=1`); the `ensure-apm-skills`
+  hook completes the version-bump round-trip without flap.
+- **BUMP:** apm.yml 0.41.4 → 0.41.5.
+
 ## v0.41.4 — 2026-05-06
 
 Source-side pre-commit hardening — catch trailing whitespace, EOL, and
