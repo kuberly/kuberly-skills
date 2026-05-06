@@ -1,0 +1,55 @@
+# Pre-commit hooks for kuberly-skills.
+#
+# Goals:
+#   - Catch trailing whitespace / missing EOF newline before they ship in a
+#     release tag (consumers' pre-commit fixes them locally and forces
+#     re-staging — that flap should not start at the source).
+#   - Validate YAML / JSON shipped in this package.
+#   - Keep shell scripts under `scripts/` syntactically correct (shellcheck).
+#
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        # Markdown line-break syntax requires two trailing spaces; allow it.
+        args: ['--markdown-linebreak-ext=md']
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # apm.yml uses YAML literal blocks — single-doc, no special exclusions.
+      - id: check-json
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        files: \.sh$
+        # Skip SC2155 (declare-and-assign) — pervasive across the scripts/.
+        args: ['-x', '-e', 'SC2155']
+
+  - repo: local
+    hooks:
+      - id: skill-frontmatter-required
+        name: SKILL.md must have YAML frontmatter with name + description
+        entry: |
+          bash -c '
+            rc=0
+            for f in "$@"; do
+              [[ "$f" != *SKILL.md ]] && continue
+              head -1 "$f" | grep -q "^---$" || { echo "$f: missing frontmatter open ---" >&2; rc=1; continue; }
+              awk "/^---$/{c++} c==2 {exit} c==1{print}" "$f" | grep -q "^name:" || { echo "$f: missing name:" >&2; rc=1; }
+              awk "/^---$/{c++} c==2 {exit} c==1{print}" "$f" | grep -q "^description:" || { echo "$f: missing description:" >&2; rc=1; }
+            done
+            exit "$rc"
+          ' --
+        language: system
+        files: SKILL\.md$
+        pass_filenames: true

@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.41.4 — 2026-05-06
+
+Source-side pre-commit hardening — catch trailing whitespace, EOL, and
+broken JSON/YAML/shell **at the source** so consumers' `ensure-apm-skills`
+hook never has to fix files this package shipped.
+
+- **NEW:** `.pre-commit-config.yaml` at repo root. Hooks:
+    - `trailing-whitespace`, `end-of-file-fixer`, `mixed-line-ending`
+      (LF) — no more shipping files that the consumer's `pre-commit`
+      auto-fixes after every `apm install`.
+    - `check-yaml`, `check-json` — validates `apm.yml`,
+      `apm.lock.yaml`, `.cursor/mcp.json` template, etc.
+    - `check-added-large-files` (`--maxkb=500`) — catches accidental
+      asset commits before they pollute consumer clones.
+    - `shellcheck` over `scripts/*.sh` — surfaces scripting bugs in
+      `post_apm_install.sh`, `sync_*.sh`, `ensure_*.sh` before they
+      ship.
+    - **Local hook:** `skill-frontmatter-required` — every `SKILL.md`
+      must open with YAML frontmatter that has `name:` and
+      `description:`. Catches the v0.41.3-class regression where the
+      orchestrator's frontmatter description silently lost a persona.
+- **VERIFIED:** existing source files all pass — no fmt churn in
+  this release. The hooks are preventative for future commits.
+- **CLARIFY (no code change):** `scripts/post_apm_install.sh` already
+  ignores `generated_at`-only diffs in `apm.lock.yaml` and restores
+  byte-identical pre-install snapshot when semantic content is
+  unchanged (added v0.28.0). Consumers should NOT need
+  `KUBERLY_SKIP_APM_SYNC=1` for routine commits or version bumps —
+  the hook handles `apm-cli`'s timestamp churn cleanly. The env-var
+  remains as an emergency escape, not a default.
+- **BUMP:** apm.yml 0.41.3 → 0.41.4.
+
 ## v0.41.3 — 2026-05-06
 
 Orchestrator persona-roster bugfix.
