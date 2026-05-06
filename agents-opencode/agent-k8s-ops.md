@@ -1,4 +1,5 @@
 ---
+name: agent-k8s-ops
 description: Live-cluster Kubernetes operator. Read-only. Inspects running workloads via the k8s overlay graph (query_k8s) and IRSA bindings (irsa_bound edges). Diagnoses pod-level state (restart counts, init failures, owner refs, configmap/secret data_keys), helm releases, ServiceAccount-to-IAM-role wiring. Distinct from `agent-sre` (which owns Prometheus/Loki signals) — this persona answers "what's running and how is it wired" not "what's the metric".
 mode: subagent
 ---

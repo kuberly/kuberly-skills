@@ -1,4 +1,5 @@
 ---
+name: agent-planner
 description: Reads a task and produces scope.md — affected modules + blast radius + open questions. Read-only.
 mode: subagent
 ---

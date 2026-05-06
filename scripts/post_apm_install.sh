@@ -143,6 +143,25 @@ for f in opencode.json .mcp.json .cursor/mcp.json .cursor/hooks.json .claude/set
   _eof_newline_fix "$ROOT/$f"
 done
 
+# 5b. Same fix for APM-deployed skill SKILL.md files that upstream packages
+# ship without a trailing newline. The known offender is the **caveman**
+# package (https://github.com/JuliusBrussee/caveman v1.6.x): its SKILL.md
+# files end at the last `.` with no `\n`, which causes a flap loop the moment
+# a consumer adds them to git — pre-commit's `end-of-file-fixer` rewrites
+# them, the next `apm install` redeploys the unfixed upstream version, and
+# they conflict on the next commit. Normalizing here means consumers can
+# either commit the trailing-newline version (idempotent) or exclude these
+# paths from `end-of-file-fixer` (precedent in kuberly-stack's
+# `.pre-commit-config.yaml`); both work.
+#
+# Glob walks every runtime's skill root, so this covers Claude Code,
+# Cursor, opencode (v0.42.0+), and the .github/skills/ pack.
+for skill_root in .claude/skills .cursor/skills .github/skills .opencode/skills; do
+  while IFS= read -r -d '' skill_file; do
+    _eof_newline_fix "$skill_file"
+  done < <(find "$ROOT/$skill_root" -maxdepth 3 -name 'SKILL.md' -path '*/caveman*/*' -print0 2>/dev/null)
+done
+
 # 6. Lockfile drift report — only if caller passed KUBERLY_LOCK_BEFORE_PATH.
 # Ignore generated_at for *comparison*. If semantic content is unchanged but
 # bytes differ (usually generated_at), restore the snapshot so pre-commit does

@@ -1,4 +1,5 @@
 ---
+name: pr-reviewer
 description: Diff-only reviewer. Combines cold (correctness on the diff text alone) and in-context (scope/decisions alignment) into ONE pass. Read tool is forbidden — use git diff -U10 only.
 mode: subagent
 ---

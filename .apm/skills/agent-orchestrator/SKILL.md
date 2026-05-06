@@ -105,7 +105,15 @@ Personas declare a minimal `tools:` subset in their frontmatter — they pay sch
 
 ## Persona roster
 
-Personas are defined at `.claude/agents/<name>.md` in the consumer repo (deployed via `apm install` + `scripts/sync_agents.sh`). Invoke each via `Agent({subagent_type: "<name>", prompt: ...})`.
+Personas are defined at `.claude/agents/<name>.md`, `.cursor/agents/<name>.md`, and (v0.42.0+) `.opencode/agents/<name>.md` in the consumer repo, all deployed via `apm install` + `scripts/sync_agents.sh`. The body of each persona is identical across runtimes; only the YAML frontmatter dialect differs (`tools:` string for Claude Code / Cursor, `mode: subagent` for opencode). Invocation syntax is runtime-specific:
+
+| Runtime | Invocation | Parallel fanout |
+|---|---|---|
+| **Claude Code** | `Agent({subagent_type: "<name>", prompt: ...})` from the orchestrator | Multiple `Agent({...})` calls in **one assistant message** run concurrently |
+| **Cursor** | Same `Agent({...})` syntax — Cursor reuses Claude Code's subagent ABI | Same — multiple calls in one message |
+| **opencode** (v0.42.0+) | The primary session uses opencode's **Task tool** (`task <name> "<prompt>"`) or **`@<name>` mention** in chat to dispatch a subagent | Multiple Task invocations in one assistant turn run concurrently; subagents create **child sessions** the user can navigate via `session_child_first` / `session_child_cycle` |
+
+The protocol below is written in Claude Code syntax; substitute the opencode equivalent (`task <name> ...`) when running under opencode. The shared filesystem session under `.agents/prompts/<session>/` is the inter-agent message bus regardless of runtime.
 
 | Persona | Use for | Writes |
 |---|---|---|
@@ -267,11 +275,16 @@ For GCP / Azure, point at `clouds/gcp/modules/<module>/` or `clouds/azure/module
 
 ## Distribution
 
-Persona definitions live in **`kuberly-skills`** (this package) at `agents/<name>.md`. APM ships them inside `apm_modules/kuberly/kuberly-skills/agents/` after `apm install`. The consumer repo's `scripts/sync_agents.sh` (also from this package) copies them into `.claude/agents/<name>.md`. Wire that script into the consumer's `ensure-apm-skills` pre-commit hook so personas stay synced on every install.
+Persona definitions live in **`kuberly-skills`** (this package). Two parallel source trees, byte-identical bodies, frontmatter dialect differs:
+
+- `agents/<name>.md` — Claude Code / Cursor frontmatter (`name:` + comma-separated `tools:` string).
+- `agents-opencode/<name>.md` (v0.42.0+) — opencode frontmatter (`name:` + `mode: subagent`, no `tools:` string — opencode's schema rejects it).
+
+APM ships both trees inside `apm_modules/kuberly/kuberly-skills/` after `apm install`. The consumer repo's `scripts/sync_agents.sh` (also from this package) copies the right tree into each runtime's agent root: `.claude/agents/`, `.cursor/agents/`, and `.opencode/agents/`. Wire that script into the consumer's `ensure-apm-skills` pre-commit hook so personas stay synced on every install.
 
 **Hooks, MCP server, and persona subagents are auto-wired by APM + sidecar sync scripts** (v0.10.5+):
 
-- **Persona subagents** — `scripts/sync_agents.sh` copies `agents/*.md` into both `.claude/agents/` and `.cursor/agents/` so Claude Code and Cursor pick them up.
+- **Persona subagents** — `scripts/sync_agents.sh` copies `agents/*.md` into `.claude/agents/` + `.cursor/agents/` and `agents-opencode/*.md` into `.opencode/agents/` so Claude Code, Cursor, and opencode all pick them up.
 - **Hooks + MCP** — `scripts/sync_claude_config.py` merges canonical entries (pointing at the apm cache path) into all four runtime config files: `.claude/settings.json`, `.mcp.json`, `.cursor/hooks.json`, `.cursor/mcp.json`. Idempotent. Preserves user-authored entries that don't reference the apm cache.
 - **Slash commands** — `scripts/sync_agent_commands.sh` copies `.apm/cursor/commands/*.md` into `.cursor/commands/` and `.claude/commands/` after `apm install` (single source in **kuberly-skills**; do not fork-edit those paths long-term). Default pack is customer-oriented **`/kub-*`** (repo locate, plan review, graph refresh, PR draft, apply checklist, observability triage, stack context) — not OpenSpec IDE macros.
 

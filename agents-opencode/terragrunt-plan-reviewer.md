@@ -1,4 +1,5 @@
 ---
+name: terragrunt-plan-reviewer
 description: Reviews `terragrunt run plan` output posted by the kuberly platform as PR or commit comments — verifies the plan matches the intent in scope.md, flags surprise resource changes, and signs off (or refuses to sign off) before apply.
 mode: subagent
 ---

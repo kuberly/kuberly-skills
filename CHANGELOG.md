@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.42.1 — 2026-05-07
+
+Three follow-ups on top of v0.42.0's opencode work, in response to flap
+patterns surfaced by the first kuberly-stack consumer bump:
+
+- **FIX: `post_apm_install.sh` now normalizes EOF newlines on
+  APM-deployed `**/skills/caveman*/SKILL.md` files**, not just on the 5
+  apm-managed JSON config files (the v0.41.5 fix). The `caveman` package
+  ships its `SKILL.md` files without a trailing newline; once a consumer
+  added them to git, pre-commit's `end-of-file-fixer` rewrote them, the
+  next `apm install` redeployed the unfixed upstream version, and they
+  conflicted on the next commit (a silent rollback in pre-commit's stash
+  logic). The new globbed loop walks all four runtime skill roots
+  (`.claude/`, `.cursor/`, `.github/`, `.opencode/skills/caveman*/`) and
+  appends a single `\n` only if missing — same idempotent shape as
+  section 5. Consumers can now either commit the trailing-newline
+  version (no flap) or keep the existing `.pre-commit-config.yaml`
+  caveman excludes (also no flap); both paths work.
+- **NEW: `agents-opencode/*.md` restore the `name:` frontmatter field.**
+  v0.42.0 dropped `name:` because opencode derives the agent name from
+  the filename — but tests confirm opencode tolerates `name:` cleanly
+  and ignores it when redundant. Restoring it keeps every persona file
+  byte-identical to its `agents/*.md` Claude Code counterpart on the
+  `name:` and `description:` lines (only `tools:` vs `mode:` differs),
+  which simplifies cross-runtime diff review.
+- **DOCS: `agent-orchestrator` SKILL.md now describes runtime-specific
+  invocation syntax.** A new table under "Persona roster" maps each of
+  Claude Code, Cursor, and opencode to its dispatch ABI (Claude Code's
+  `Agent({subagent_type: ...})` vs opencode's Task tool / `@<name>`
+  mention) and documents that opencode subagents create child sessions
+  the user can navigate via opencode's session shortcuts. The
+  Distribution section also names `agents-opencode/` explicitly so
+  consumers know there are two parallel source trees.
+- **BUMP:** `apm.yml` 0.42.0 → 0.42.1.
+
+Consumer migration: bump the apm.yml pin to `#v0.42.1` and run
+`apm install --update`. The new EOF-normalization runs idempotently;
+on consumers that already excluded `.opencode/skills/caveman*/` from
+`end-of-file-fixer` the visible behavior is unchanged.
+
 ## v0.42.0 — 2026-05-07
 
 First-class **opencode** support: the persona subagents now ship in a second

@@ -1,4 +1,5 @@
 ---
+name: agent-infra-ops
 description: Implements infra changes — edits HCL/JSON/CUE, runs pre-commit + hclfmt + tflint. NO terragrunt/tofu plan or init (CI runs those).
 mode: subagent
 ---

@@ -1,4 +1,5 @@
 ---
+name: agent-sre
 description: Diagnoses incidents from logs, CloudTrail, Loki, Prometheus. Read-only on infra; writes diagnosis.md.
 mode: subagent
 ---

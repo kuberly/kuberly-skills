@@ -1,4 +1,5 @@
 ---
+name: findings-reconciler
 description: Reads findings/in-context.md and findings/cold.md, deduplicates, prioritizes, and writes a single reconciled verdict.
 mode: subagent
 ---
