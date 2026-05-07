@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.44.0 — 2026-05-08
+
+Builds on v0.43.0's dual-source `agent-k8s-ops` by pushing the same
+"live cluster reads via the kuberly-ai-agent MCP" pattern down into
+the cross-cutting playbook skills, so the runtime persona and the
+human-facing skill catalog stay aligned.
+
+- **CHANGE: `.apm/skills/eks-observability-stack/SKILL.md`** —
+  new "Live cluster reads via the **`kuberly-ai-agent`** MCP" section
+  enumerating the K8s tools shipped by the embedded
+  `kubernetes-mcp-server` and **when each one beats the equivalent
+  Prometheus / Loki call**:
+  - `pods_list_in_namespace` / `pods_get` for "is it running right now"
+  - `pods_log previous=true` for pre-restart container logs (the
+    dying instance's last lines that often never reach Loki)
+  - `pods_top` / `nodes_top` for instant CPU / mem (needs metrics-server)
+  - `events_list` for `OOMKilled` / `BackOff` / `FailedScheduling`
+  - `nodes_stats_summary` for **PSI metrics** (cgroup v2 pressure
+    stalls — node-level confirmation of saturation)
+  - `resources_list` / `resources_get` for Karpenter
+    `NodeClaim` / `NodePool` and generic CRDs
+
+  Plus the explicit fallback note: `kubectl` paths still apply when
+  the MCP isn't wired into the runtime.
+
+- **CHANGE: `.apm/skills/kubernetes-finops-workloads/SKILL.md`** —
+  new "The three numbers that drive every right-sizing decision"
+  section codifying the **declared / live / allocatable** trio:
+  1. **Declared request** (cold graph or live `pods_get`)
+  2. **Live usage** (`pods_top` + `nodes_top`, requires metrics-server)
+  3. **Allocatable** (`resources_get kind=Node`)
+
+  Headroom = `allocatable − max(sum_of_requests, live_usage)`.
+  Two columns in the report: **request-based** (scheduler's view) +
+  **live** (reality). Live snapshots stay triage-only; sizing
+  decisions still drop to the 24h Prometheus path.
+
+- **CHANGE: `.apm/cursor/commands/kub-obs-triage.md`** — adds a
+  symptom→tool-call **decision tree** for the 9 most common incident
+  shapes (CrashLoop, OOM, slow request, 5xx surge, "something is
+  slow", capacity, Karpenter churn, scrape job dropped, deploy
+  failed). Each row gives **first / second / third call** with
+  exact tool names from the `kuberly-ai-agent` + `kuberly-platform`
+  MCPs, and the kubectl fallback when no MCP is present.
+
 ## v0.43.0 — 2026-05-08
 
 - **CHANGE:** **`agents/agent-k8s-ops.md`** — promotes the persona to **dual

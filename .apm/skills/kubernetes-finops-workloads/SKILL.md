@@ -11,6 +11,18 @@ Use this skill when the goal is **cost / stability tuning**: find **who burns th
 
 Pair with **`eks-observability-stack`** for where **Prometheus** and **Grafana** usually live and how to reach the cluster.
 
+## The three numbers that drive every right-sizing decision
+
+For any workload, **three values** are NOT the same and you need all three:
+
+1. **Declared request** — `.spec.containers[*].resources.requests.{cpu,memory}` per pod. Sum across pods on a node = **scheduler's commitment**. Source: cold k8s overlay graph (**`query_k8s`** via **`kuberly-platform`** MCP) or live (**`pods_get`** / **`resources_list kind=Pod`** via **`kuberly-ai-agent`** MCP).
+2. **Live usage** — what the container is using **right now**. Source: **`pods_top`** + **`nodes_top`** via **`kuberly-ai-agent`** MCP (requires metrics-server). Bursty; one snapshot is a sample, not a trend.
+3. **Allocatable** — what the kubelet says the node has after system reservations. `.status.allocatable.{cpu,memory}` per Node. Source: **`resources_get kind=Node`** via **`kuberly-ai-agent`** MCP, or `query_k8s` cold.
+
+**Headroom per node** = `allocatable − max(sum_of_requests, live_usage)`. If headroom is negative, the kubelet is overcommitted and you're one OOM away from eviction. Surface in your report as two columns: **request-based headroom** (scheduler's view) and **live headroom** (reality's view).
+
+Live snapshots are for **gut-check / triage**. For sizing **decisions**, drop down to the 24-hour Prometheus path below — bursts hide in instant samples.
+
 ## Preconditions
 
 - **`kubectl`** context points at the **correct** cluster (see **`eks-observability-stack`** for EKS auth).
