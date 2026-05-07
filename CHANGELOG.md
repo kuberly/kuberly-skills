@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.43.0 — 2026-05-08
+
+- **CHANGE:** **`agents/agent-k8s-ops.md`** — promotes the persona to **dual
+  source** (cold k8s overlay graph **and** live cluster via the in-cluster
+  `kuberly-ai-agent` MCP). Adds the live-cluster tool surface as a first-class
+  source: `pods_list`, `pods_list_in_namespace`, `pods_get`, `pods_log`
+  (incl. `previous=true`), `pods_top`, `events_list`, `nodes_top`,
+  `nodes_log`, `nodes_stats_summary`, `resources_list`, `resources_get`,
+  `namespaces_list`, `configuration_view`. Removes the prior "no direct
+  kubectl" hard rule (the upstream `--read-only --disable-destructive`
+  posture replaces it). Mirrors the consumer-side wiring note from
+  `agent-sre.md`: extend `tools:` with `mcp__kuberly-ai-agent__*` per cluster.
+- **NEW:** **Common questions → tool recipes** section in
+  `agent-k8s-ops.md` covering the patterns that come up most:
+  - **Karpenter capacity** — split nodes by NodeClaim / non-Karpenter EC2 /
+    Fargate (label `eks.amazonaws.com/compute-type=fargate`). Per-NodePool
+    counts via `karpenter.sh/v1` `NodeClaim` / `NodePool`.
+  - **Pod-to-node placement** — group `pods_list` (or `query_k8s(kind=Pod)`)
+    by `.spec.nodeName`.
+  - **Resource accounting** — three numbers, three columns: declared
+    requests (`.spec.containers[*].resources.requests`), live usage
+    (`pods_top` / `nodes_top`), allocatable (`.status.allocatable`).
+    Headroom = `allocatable − max(sum_of_requests, live_usage)`. Surfaces
+    the over-/under-provisioning gap and routes to
+    `kubernetes-finops-workloads`.
+  - **Recent change** — `events_list` filtered by reason
+    (`OOMKilled`, `BackOff`, `FailedScheduling`, `NodeNotReady`, `Killing`).
+- **CHANGE:** Workload-graph template in `k8s-state.md` gains rows for live
+  data (`Restart count — live now` via `pods_list`, `Last 30m events` via
+  `events_list`, `Live CPU / mem (top)` via `pods_top`). Cold-graph rows
+  are unchanged.
+- **CHANGE:** Citation rule extended — every row cites either a graph
+  node id / edge / overlay field (cold) **or** a tool call signature
+  (`pods_list(namespace=…, labelSelector=…)`) for live reads.
+
 ## v0.42.3 — 2026-05-08
 
 One-line bug fix on top of v0.42.1's caveman EOF normalizer (skipping the
