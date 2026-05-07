@@ -1,0 +1,22 @@
+[project]
+name = "kuberly-graph"
+version = "0.1.0"
+description = "FastMCP microservice exposing a multi-layer Kuberly knowledge graph (cold IaC + live k8s/argo + logs/metrics/traces) over MCP."
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=1.27.0,<2.0.0",
+  "rustworkx>=0.16.0,<1.0.0",
+  "lancedb>=0.13.0,<1.0.0",
+  "sentence-transformers>=3.0.0,<4.0.0",
+  "pyarrow>=17.0.0,<22.0.0",
+]
+
+[project.scripts]
+kuberly-graph = "kuberly_graph.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
