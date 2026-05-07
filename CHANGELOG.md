@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.42.2 — 2026-05-07
+
+- **NEW:** **`mcp/ai-agent-tool/README.md`** — integration doc for the
+  in-cluster **`ai-agent-tool`** MCP server (read-only Kubernetes / Loki /
+  Prometheus / Tempo investigations). Documents the tools, prompts, and the
+  Cursor / Claude Code wiring snippets. The MCP is **not** auto-declared in
+  `apm.yml` because its URL is per-cluster.
+- **CHANGE:** **`agents/agent-sre.md`** — promotes **`kuberly-ai-agent`** MCP
+  (the new ai-agent-tool) to first-class for runtime cluster signal; the
+  shell-command path (`aws`/`kubectl`/`logcli`) is now an explicit fallback,
+  not the primary route. Removes the "kuberly-observability MCP roadmap"
+  note since it's now shipping as `ai-agent-tool`.
+- **BUMP:** apm.yml 0.33.0 → 0.42.2 (bringing version field in line with the
+  released tag stream; consumers in `kuberly-stack` were already pinned at
+  `v0.42.1`).
+
 ## v0.33.0 — 2026-05-06
 
 - **CHANGE:** **`graph.html`** — graph tab uses **concentric** layout only (built-in
