@@ -4,3 +4,4 @@ from . import query  # noqa: F401
 from . import regenerate  # noqa: F401
 from . import semantic  # noqa: F401
 from . import analytics  # noqa: F401
+from . import fusion  # noqa: F401
