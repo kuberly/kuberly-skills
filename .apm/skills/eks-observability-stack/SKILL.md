@@ -16,6 +16,21 @@ description: >-
 | **Loki** | **`loki`** | Log aggregation; check `kubectl -n loki get pods,svc`. |
 | **Tempo** | **`tempo`** | Trace backend; correlate with Grafana datasources. |
 
+## Live cluster reads via the **`kuberly-ai-agent`** MCP
+
+When the cluster has the **in-cluster `ai-agent-tool`** MCP installed (see **`mcp/ai-agent-tool/README.md`**), prefer its **structured K8s tools** for current-state questions instead of Prometheus / Loki:
+
+| Tool | Use it for | Beats |
+|---|---|---|
+| **`pods_list_in_namespace`**, **`pods_get`** | "Is loki-ingester running? what's the restart count right now?" | `kubectl get pods` (no shell-out, returns JSON the agent can reason over) |
+| **`pods_log`** (incl. **`previous=true`**) | Pre-restart container logs after a crash | `query_logs` — Loki only has logs that shipped; the dying instance's last lines are usually here |
+| **`pods_top`** / **`nodes_top`** | Live CPU / memory **right now** | `query_metrics` — instant gauge, no PromQL needed; requires metrics-server |
+| **`events_list`** | "What happened in the last 30 min?" — `OOMKilled`, `BackOff`, `FailedScheduling`, `NodeNotReady` | grepping Loki for k8s events |
+| **`nodes_stats_summary`** | PSI (cgroup v2 pressure stalls) + per-pod kubelet stats; node-level `memory.psi` confirms saturation | metrics that may not be scraped frequently enough |
+| **`resources_list`**, **`resources_get`** | Karpenter **`NodeClaim`** / **`NodePool`**, generic CRDs | `kubectl get <kind>` |
+
+When the **MCP is not** wired into the runtime, fall back to **`kubectl`** (`kubectl get`, `kubectl describe`, `kubectl logs --previous`, `kubectl top`) and the Prometheus / Loki paths below.
+
 ## Credentials
 
 - **Helm / operator secrets** (admin passwords, object storage credentials) usually live in the **same namespace** as the workload or in **`external-secrets`** / **`secrets`** patterns — list with `kubectl get secret -n <ns>`.
