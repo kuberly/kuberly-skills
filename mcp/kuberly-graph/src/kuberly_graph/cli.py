@@ -91,9 +91,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_serve.set_defaults(fn=_cmd_serve)
 
-    p_call = sub.add_parser("call", help="Spawn an embedded server and call one tool")
-    p_call.add_argument("tool", help="Tool name (e.g. regenerate_layer)")
-    p_call.add_argument("--args", default=None, help="JSON object of arguments")
+    p_call = sub.add_parser(
+        "call",
+        help="Spawn an embedded server and call one tool",
+        epilog=(
+            "Quick refresh after `aws sso login` + `kubectl` + ai-agent-tool MCP wiring:\n"
+            "  kuberly-graph call regenerate_all\n"
+            "Single layer: kuberly-graph call regenerate_layer --args '{\"layer\":\"k8s\"}'"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_call.add_argument("tool", help="Tool name (e.g. regenerate_all, regenerate_layer)")
+    p_call.add_argument(
+        "--args",
+        default=None,
+        help="JSON object of arguments (default: {} — many tools take no args)",
+    )
     p_call.add_argument("--repo", default=os.environ.get("KUBERLY_REPO", "."))
     p_call.add_argument(
         "--persist-dir",

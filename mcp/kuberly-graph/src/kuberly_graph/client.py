@@ -113,7 +113,11 @@ async def _open_session(endpoint: dict, runner):
         if endpoint.get("url"):
             from mcp.client.streamable_http import streamablehttp_client  # type: ignore[import-not-found]
 
-            async with streamablehttp_client(endpoint["url"]) as ctx:
+            kwargs: dict[str, Any] = {}
+            headers = endpoint.get("headers")
+            if isinstance(headers, dict) and headers:
+                kwargs["headers"] = headers
+            async with streamablehttp_client(endpoint["url"], **kwargs) as ctx:
                 read, write = ctx[0], ctx[1]
                 return await _run(read, write)
         else:
