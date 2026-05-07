@@ -155,8 +155,9 @@ done
 # `.pre-commit-config.yaml`); both work.
 #
 # Glob walks every runtime's skill root, so this covers Claude Code,
-# Cursor, opencode (v0.42.0+), and the .github/skills/ pack.
-for skill_root in .claude/skills .cursor/skills .github/skills .opencode/skills; do
+# Cursor, opencode (v0.42.0+), the .github/skills/ pack, and the .agents/
+# tree apm-cli writes to for runtime-agnostic deployment (added v0.42.3).
+for skill_root in .agents/skills .claude/skills .cursor/skills .github/skills .opencode/skills; do
   while IFS= read -r -d '' skill_file; do
     _eof_newline_fix "$skill_file"
   done < <(find "$ROOT/$skill_root" -maxdepth 3 -name 'SKILL.md' -path '*/caveman*/*' -print0 2>/dev/null)

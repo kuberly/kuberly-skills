@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.42.3 — 2026-05-08
+
+One-line bug fix on top of v0.42.1's caveman EOF normalizer (skipping the
+parallel v0.42.2 release tagged from `main`, which did not include the
+v0.42.1 EOF work — branches diverged):
+
+- **FIX: `post_apm_install.sh` `_eof_newline_fix` loop now also walks
+  `.agents/skills/`** in addition to `.claude/skills/`, `.cursor/skills/`,
+  `.github/skills/`, and `.opencode/skills/`. apm-cli writes runtime-
+  agnostic skills to `.agents/skills/<name>/SKILL.md` (the canonical
+  location for opencode-aware consumers since v0.42.0), so the v0.42.1
+  normalizer silently skipped that path. Caveman SKILL.md still flapped
+  on every consumer commit because pre-commit's `end-of-file-fixer`
+  rewrote `.agents/skills/caveman*/SKILL.md` and the next `apm install`
+  redeployed the unfixed upstream copy. Adding `.agents/skills` as the
+  first entry in the `skill_root` for-loop makes the normalizer cover
+  every runtime root apm-cli emits today.
+
+This release does NOT include the ai-agent-tool MCP integration doc
+shipped in `main`'s `v0.42.2` (commit fe6b38d). That work lives on
+`origin/main` and will be re-merged into the opencode-support lineage
+in a future release; consumers needing both the EOF fix and the ai-
+agent-tool MCP plumbing should pin v0.42.3 here and vendor the
+ai-agent-tool module directly (kuberly-stack pattern).
+
 ## v0.42.1 — 2026-05-07
 
 Three follow-ups on top of v0.42.0's opencode work, in response to flap
