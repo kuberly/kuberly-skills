@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.55.0 — 2026-05-08
+
+Adds a single-entrypoint overlay refresh script. The kuberly-platform
+MCP refuses to start when `.kuberly/graph.json` is missing and silently
+returns 0 results from `query_resources` / `query_k8s` / `find_docs`
+when their overlays haven't been generated. Forks have been hand-running
+four different scripts to recover; this collapses them into one.
+
+- **NEW: `scripts/refresh_kuberly_overlays.sh`** — sequenced runner for
+  all four overlay producers. Always rebuilds the static graph; runs
+  `state_graph generate-all --resources` only when AWS creds resolve;
+  iterates envs from `components/<env>/shared-infra.json` and runs
+  `k8s_graph generate --env <env>` only against kubectl contexts that
+  actually answer; finishes with `docs_graph generate` (incremental,
+  optional `--embed` via `KUBERLY_DOCS_EMBED`). Credential-gated layers
+  soft-skip with a `[overlays]` warning so the script always exits 0
+  when the static layer is healthy. Flags: `--full`, `--no-state`,
+  `--no-k8s`, `--no-docs`, `--env <name>`, `--modules <csv>`.
+- **Idiom matches `regenerate_docs_overlay.sh`** — invoked by the
+  consumer with `bash apm_modules/.../scripts/refresh_kuberly_overlays.sh`,
+  picks up `${REPO_ROOT}/.venv-mcp/bin/python3` when present, no
+  installation step beyond `apm install`.
+
+No code changes to `kuberly_platform.py` or any overlay schema. Pure
+addition. Forks already on v0.54.0 can repin without re-testing.
+
 ## v0.54.0 — 2026-05-08
 
 Patch — `session_list` compact renderer crashed on dict-shaped file entries
