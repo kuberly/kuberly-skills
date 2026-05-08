@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.50.1 — 2026-05-08
+
+Fold S3 state extraction inline — drop sidecar JSON.
+
+Phase 8H landed state extraction as a standalone module
+(`state_extract.py`) that wrote a `.kuberly/state_<env>.json` sidecar,
+and `StateLayer` then re-parsed that JSON. That was a wasteful two-step
+indirection, inconsistent with every other layer (which writes nodes /
+edges directly to the LanceDB store via its `scan()`).
+
+- **CHG: `StateLayer.scan()` is now self-contained.** boto3 S3 fetch +
+  tfstate parsing live inside `layers/state.py`. Per-env soft-degrade on
+  missing `shared-infra.json` / no AWS creds / `ClientError`; per-module
+  soft-degrade on `NoSuchKey` / corrupt JSON. New node ids:
+  `tf_state_module:<env>/<rel>` + `tf_state_resource:<env>/<rel>/<addr>`.
+  New cross-layer edges: `module:<provider>/<name> -> tf_state_module`
+  (`has_state`), `tf_state_module -> tf_state_resource` (`contains`),
+  `tf_state_resource -> aws:<service>:<id>` (`tracks`, best-effort match
+  against AwsLayer ids cached in ctx).
+- **DEL: `kuberly_graph/state_extract.py`** — gone. No more sidecar
+  writer.
+- **DEL: `extract_state_sidecar` MCP tool** — operators just call
+  `regenerate_layer state` (or `regenerate_all`). Tool count: 51 -> 50.
+- **DEL: `auto_extract_state` ctx flag** in `regenerate_graph()` —
+  extraction is intrinsic to the layer scan now.
+- **DEL: `.kuberly/state_<env>.json`** sidecar — never written; never
+  read.
+
+Verified on Traigent dev (account 340334787933, eu-west-1):
+`regenerate_layer state` -> **992 nodes / 1091 edges** (Phase 8H
+baseline was 824 / 944; the extra count comes from the new
+`tf_state_module` per-module nodes + `has_state` cross-layer edges).
+`tools/list` = **50**, `list_layers` length = **25** (unchanged).
+No `.kuberly/state_*.json` written. `graph_stats` total =
+**7442 nodes / 5461 edges**.
+
 ## v0.50.0 — 2026-05-08
 
 Phase 8H: TreeSitterLayer + S3 state extractor + Loki / Tempo response

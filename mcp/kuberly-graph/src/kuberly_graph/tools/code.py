@@ -1,4 +1,4 @@
-"""Phase 8H — TreeSitter + state extractor tools.
+"""Phase 8H — TreeSitter graph queries.
 
   * ``find_resource_callers`` — BFS from an HCL resource id along
     ``uses_var`` / ``refs`` edges to find every variable, output, or other
@@ -6,8 +6,10 @@
   * ``module_io_summary`` — per-module counts of variables / outputs /
     resources / data / locals from TreeSitterLayer.
   * ``find_yaml_manifest_kind`` — lookup ``yaml_manifest:*`` nodes by Kind.
-  * ``extract_state_sidecar`` — pull every module's tfstate from S3 into
-    ``.kuberly/state_<env>.json`` so :class:`StateLayer` has data to ingest.
+
+(v0.50.1: ``extract_state_sidecar`` was removed. State extraction is now
+intrinsic to :class:`StateLayer.scan` — call ``regenerate_layer state`` or
+``regenerate_all`` instead.)
 """
 
 from __future__ import annotations
@@ -16,7 +18,6 @@ from collections import defaultdict, deque
 from pathlib import Path
 
 from ..server import SERVER_CONFIG, mcp
-from ..state_extract import detect_envs, extract_states_from_s3
 from ..store import open_store
 
 
@@ -179,42 +180,3 @@ def find_yaml_manifest_kind(
     return out
 
 
-# ---- State sidecar ----------------------------------------------------------
-
-
-@mcp.tool()
-def extract_state_sidecar(
-    env: str | None = None,
-    region: str = "eu-west-1",
-    repo_root: str | None = None,
-    persist_dir: str | None = None,
-) -> dict:
-    """Pull every module's Terraform/OpenTofu tfstate from S3 into
-    ``.kuberly/state_<env>.json`` (the side-car StateLayer reads).
-
-    When ``env`` is omitted, we pick the first directory under
-    ``components/`` (single-env forks like Traigent dev).
-
-    Soft-degrades when boto3 is missing or AWS creds are unset; returns
-    ``{path, modules_extracted, modules_skipped, errors, bucket}``.
-    """
-    repo = _resolve_repo(repo_root)
-    persist = _resolve_persist(persist_dir)
-    target_env = env
-    if not target_env:
-        envs = detect_envs(repo)
-        if not envs:
-            return {
-                "path": "",
-                "modules_extracted": 0,
-                "modules_skipped": 0,
-                "errors": ["no components/<env>/ directory found"],
-                "bucket": "",
-            }
-        target_env = envs[0]
-    return extract_states_from_s3(
-        repo_root=repo,
-        env=target_env,
-        region=region,
-        persist_dir=persist,
-    )

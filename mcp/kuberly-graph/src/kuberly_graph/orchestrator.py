@@ -47,7 +47,6 @@ def regenerate_graph(
     traces_window: str | None = None,
     traces_limit: int | None = None,
     extra_ctx: dict | None = None,
-    auto_extract_state: bool = True,
 ) -> dict:
     start = _dt.datetime.now()
     repo = Path(repo_root).resolve()
@@ -67,32 +66,9 @@ def regenerate_graph(
             if p.is_dir() and not p.name.startswith(".")
         )
 
-    # Phase 8H: when ``state`` is part of this run, auto-pull each env's
-    # tfstate side-car from S3 first so StateLayer has data to ingest.
-    state_extract_summary: dict | None = None
-    if auto_extract_state and ("state" in target_names) and envs_seed:
-        try:
-            from .state_extract import extract_states_from_s3 as _extract
-            summary = _extract(
-                repo_root=str(repo),
-                env=envs_seed[0],
-                region=str(
-                    (extra_ctx or {}).get("aws_region")
-                    or "eu-west-1"
-                ),
-                persist_dir=str(persist),
-            )
-            state_extract_summary = summary
-            if verbose:
-                print(
-                    f"  [auto_extract_state] env={envs_seed[0]} "
-                    f"extracted={summary.get('modules_extracted', 0)} "
-                    f"skipped={summary.get('modules_skipped', 0)}"
-                )
-        except Exception as exc:  # noqa: BLE001 — best-effort
-            if verbose:
-                print(f"  [auto_extract_state] failed: {exc}")
-            state_extract_summary = {"error": str(exc)}
+    # v0.50.1: state extraction is intrinsic to ``StateLayer.scan()`` now.
+    # No more ``auto_extract_state`` flag, no sidecar JSON — every layer
+    # writes nodes/edges directly to the LanceDB store.
 
     ctx: dict[str, Any] = {
         "repo_root": str(repo),
@@ -180,8 +156,6 @@ def regenerate_graph(
         "mode": store.mode,
         "persist_dir": str(persist),
     }
-    if state_extract_summary is not None:
-        out["state_extract"] = state_extract_summary
     return out
 
 
