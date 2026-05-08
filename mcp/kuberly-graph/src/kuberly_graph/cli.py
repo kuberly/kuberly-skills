@@ -52,7 +52,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         register_dashboard(mcp)
         mcp_path = getattr(mcp.settings, "streamable_http_path", "/mcp")
         print(
-            f"kuberly-graph MCP listening on http://{args.host}:{args.port}{mcp_path}",
+            f"kuberly-platform MCP listening on http://{args.host}:{args.port}{mcp_path}",
             file=sys.stderr,
         )
         print(
@@ -112,7 +112,7 @@ def _cmd_version(_args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="kuberly-graph")
+    parser = argparse.ArgumentParser(prog="kuberly-platform")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_serve = sub.add_parser("serve", help="Run the FastMCP server")
@@ -132,8 +132,8 @@ def main(argv: list[str] | None = None) -> int:
         help="Spawn an embedded server and call one tool",
         epilog=(
             "Quick refresh after `aws sso login` + `kubectl` + ai-agent-tool MCP wiring:\n"
-            "  kuberly-graph call regenerate_all\n"
-            "Single layer: kuberly-graph call regenerate_layer --args '{\"layer\":\"k8s\"}'"
+            "  kuberly-platform call regenerate_all\n"
+            "Single layer: kuberly-platform call regenerate_layer --args '{\"layer\":\"k8s\"}'"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

@@ -1,8 +1,13 @@
-# kuberly-platform MCP (stdio)
+# Legacy kuberly-platform MCP (stdio)
+
+This stdio script is kept for compatibility. The consolidated `kuberly-platform`
+MCP entrypoint now lives in `mcp/kuberly-graph` and exposes the platform graph,
+heuristics, dashboard APIs, and live `ai-agent-tool` handoff from one FastMCP
+server.
 
 Python **Model Context Protocol** server and **`generate`** CLI for Terragrunt/OpenTofu monorepos (`blast_radius`, `drift`, persona-orchestration tools, etc.).
 
-**Consumers:** after `apm install`, `scripts/sync_mcp.sh` copies this directory into the infra repo at `scripts/mcp/kuberly-platform/`. Configure **Cursor** (`.cursor/mcp.json`) and **Claude Code** (`.mcp.json`) to run:
+**Legacy consumers:** after `apm install`, `scripts/sync_mcp.sh` copies this directory into the infra repo at `scripts/mcp/kuberly-platform/`. Existing **Cursor** (`.cursor/mcp.json`) and **Claude Code** (`.mcp.json`) configs may still run:
 
 `python3 scripts/mcp/kuberly-platform/kuberly_platform.py mcp --repo .`
 

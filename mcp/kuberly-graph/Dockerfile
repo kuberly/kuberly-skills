@@ -12,5 +12,5 @@ COPY src ./src
 RUN pip install --no-cache-dir /wheels/*.whl && pip install --no-cache-dir .
 ENV KUBERLY_REPO=/srv/repo
 EXPOSE 8765
-ENTRYPOINT ["kuberly-graph"]
+ENTRYPOINT ["kuberly-platform"]
 CMD ["serve", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8765"]

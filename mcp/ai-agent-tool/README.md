@@ -102,14 +102,22 @@ the `ai-agent-tool-secret` Kubernetes Secret in the deployment namespace
 (`kuberly` by default). For routine SRE use, fetch it via the standard
 secrets workflow for the target cluster — do not check it into a repo.
 
-## Relationship to the other MCPs in this package
+## Relationship to the consolidated Kuberly MCP
 
-- `kuberly-platform` — repo-graph queries (cross-repo deps, blast radius,
-  doc index). Source of truth for "what depends on this", not for runtime.
-- `kuberly-state` — generated state snapshot of the org's deployments.
-- `infra-router` — routes infra-shaped questions across this package.
-- **`ai-agent-tool` (this doc)** — runtime cluster signal. Use **after** the
-  graph MCPs have answered "what is the implicated component" and you need
-  to look at logs / metrics / traces / live K8s state.
+Agents should use `kuberly-platform` as the primary MCP. Its `troubleshoot` tool
+starts with graph context, blast radius, ownership, and persisted overlays, then
+calls **`ai-agent-tool`** only when live runtime signal is needed.
 
-The `agent-sre` persona is the natural caller of all four.
+For non-trivial questions, call `kuberly-platform.platform_index` first. It acts
+as the graph index/router and tells the agent whether to stay inside graph tools
+or proceed to `troubleshoot` for a possible live `ai-agent-tool` handoff.
+
+- `kuberly-platform` — consolidated agent-facing MCP and graph-first
+  troubleshooting entrypoint.
+- **`ai-agent-tool` (this doc)** — downstream runtime cluster signal for logs,
+  metrics, traces, and live Kubernetes reads.
+- legacy repo-graph stdio code — kept for compatibility while graph
+  functionality moves behind the consolidated `kuberly-platform` MCP.
+
+The `agent-sre` persona should normally call `kuberly-platform.platform_index`,
+then `kuberly-platform.troubleshoot` only for runtime-shaped incidents.

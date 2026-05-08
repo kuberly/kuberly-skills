@@ -36,7 +36,7 @@ export function Header({ statsLabel }: HeaderProps) {
             fill="#1677ff"
           />
         </svg>
-        <span className="font-medium text-text">kuberly-graph</span>
+        <span className="font-medium text-text">kuberly-platform</span>
         <span className="text-xs text-text-muted">live multi-layer knowledge graph</span>
         <span className="pill-soft border-accent-blue/40 text-accent-blue/90">v0.52.0</span>
       </div>

@@ -19,7 +19,7 @@ SERVER_CONFIG: dict[str, Any] = {
 }
 
 
-mcp = FastMCP("kuberly-graph")
+mcp = FastMCP("kuberly-platform")
 
 
 def configure(repo_root: str | None = None, persist_dir: str | None = None) -> None:

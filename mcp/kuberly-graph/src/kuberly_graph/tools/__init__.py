@@ -12,3 +12,5 @@ from . import meta  # noqa: F401
 from . import aws  # noqa: F401
 from . import code  # noqa: F401  (Phase 8H: TreeSitter + state-sidecar tools)
 from . import super as super_  # noqa: F401  (Phase 8L: 5 fusion super-tools)
+from . import platform  # noqa: F401  (first-call index/router over all graph layers)
+from . import troubleshoot  # noqa: F401  (consolidated graph-first SRE entrypoint)

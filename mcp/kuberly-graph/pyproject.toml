@@ -1,7 +1,7 @@
 [project]
-name = "kuberly-graph"
+name = "kuberly-platform"
 version = "0.53.0"
-description = "FastMCP microservice exposing a multi-layer Kuberly knowledge graph (cold IaC + live k8s/argo + logs/metrics/traces) over MCP."
+description = "FastMCP entrypoint for the Kuberly platform graph, heuristics, and live troubleshooting handoff."
 requires-python = ">=3.10"
 dependencies = [
   "mcp>=1.27.0,<2.0.0",
@@ -18,8 +18,9 @@ dependencies = [
 ]
 
 [project.scripts]
+kuberly-platform = "kuberly_graph.cli:main"
 kuberly-graph = "kuberly_graph.cli:main"
-# v0.56.0+: friendly alias for `kuberly-graph call regenerate_all`
+# v0.56.0+: friendly alias for `kuberly-platform call regenerate_all`
 # (the one subcommand consumers run by hand after apm install).
 kuberly-graphs = "kuberly_graph.refresh_cli:main"
 

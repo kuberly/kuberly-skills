@@ -1,6 +1,6 @@
-# kuberly-graph-ui
+# kuberly-platform-ui
 
-Standalone SPA for the kuberly-graph live multi-layer knowledge graph. Replaces the vanilla
+Standalone SPA for the kuberly-platform live multi-layer knowledge graph. Replaces the vanilla
 `dashboard/static/` HTML+JS bundle that was glued onto the FastMCP Starlette app.
 
 ```
@@ -51,11 +51,11 @@ npm install
 npm run dev          # Vite on :5173, proxies /api → 127.0.0.1:8000
 ```
 
-In another shell, run the kuberly-graph MCP server in streamable-http mode:
+In another shell, run the kuberly-platform MCP server in streamable-http mode:
 
 ```bash
 cd mcp/kuberly-graph
-.venv/bin/kuberly-graph serve --transport streamable-http --host 127.0.0.1 --port 8000
+.venv/bin/kuberly-platform serve --transport streamable-http --host 127.0.0.1 --port 8000
 ```
 
 The Vite dev server proxies `/api/*` to that backend, so the SPA talks to it as if same-origin.
@@ -72,7 +72,7 @@ VITE_API_BASE=http://other-graph.internal:8000 npm run dev
 npm run build       # outputs to dist/, ready to drop into nginx
 docker build -t kuberly-graph-ui:dev .
 docker run --rm -p 8080:8080 \
-    -e KUBERLY_GRAPH_BACKEND=http://kuberly-graph:8000 \
+    -e KUBERLY_GRAPH_BACKEND=http://kuberly-platform:8000 \
     kuberly-graph-ui:dev
 ```
 
@@ -83,14 +83,14 @@ The `entrypoint.sh` runs `envsubst` over `nginx.conf.template` at container star
 ```bash
 helm install graph-ui ./helm/kuberly-graph-ui \
     --set image.tag=main-<sha> \
-    --set backend.url=http://kuberly-graph.monitoring.svc.cluster.local:8000
+    --set backend.url=http://kuberly-platform.monitoring.svc.cluster.local:8000
 ```
 
 The chart ships a Deployment + Service + (optional) Ingress. Default Service is `ClusterIP` on port 80; flip `ingress.enabled=true` and pass `ingress.hosts` to expose externally.
 
 ## CORS
 
-`/api/v1/*` responses on the kuberly-graph backend always carry CORS headers. The default is `Access-Control-Allow-Origin: *`; set `DASHBOARD_CORS_ORIGINS=https://graph.example.com,http://localhost:5173` on the backend to lock it down to specific origins.
+`/api/v1/*` responses on the kuberly-platform backend always carry CORS headers. The default is `Access-Control-Allow-Origin: *`; set `DASHBOARD_CORS_ORIGINS=https://graph.example.com,http://localhost:5173` on the backend to lock it down to specific origins.
 
 ## Endpoints consumed
 

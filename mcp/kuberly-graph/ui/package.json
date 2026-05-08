@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Standalone SPA for the kuberly-graph dashboard. Calls the kuberly-graph MCP server's /api/v1/* HTTP endpoints; ships as a static bundle (Docker + nginx in prod).",
+  "description": "Standalone SPA for the kuberly-platform dashboard. Calls the kuberly-platform MCP server's /api/v1/* HTTP endpoints; ships as a static bundle (Docker + nginx in prod).",
   "scripts": {
     "dev": "vite",
     "build": "tsgo -p tsconfig.app.json && vite build",

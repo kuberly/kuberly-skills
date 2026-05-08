@@ -1,8 +1,8 @@
-# Multi-stage build for the kuberly-graph SPA.
+# Multi-stage build for the kuberly-platform SPA.
 #
 # Stage 1: install deps + Vite build → /app/dist (static).
 # Stage 2: nginx alpine serves dist/, proxies /api/* and /dashboard to the
-#          kuberly-graph MCP server (configurable at deploy time via the
+#          kuberly-platform MCP server (configurable at deploy time via the
 #          KUBERLY_GRAPH_BACKEND env var consumed by entrypoint.sh).
 
 # ---------- Stage 1: build ----------
@@ -34,9 +34,9 @@ RUN chmod +x /docker-entrypoint.d/40-template-backend.sh
 # Vite output
 COPY --from=build /app/dist /usr/share/nginx/html
 
-# In-cluster default points at the Service DNS for kuberly-graph; override
+# In-cluster default points at the Service DNS for kuberly-platform; override
 # in the Deployment env when deploying elsewhere.
-ENV KUBERLY_GRAPH_BACKEND=http://kuberly-graph.monitoring.svc.cluster.local:8000
+ENV KUBERLY_GRAPH_BACKEND=http://kuberly-platform.monitoring.svc.cluster.local:8000
 
 EXPOSE 8080
 

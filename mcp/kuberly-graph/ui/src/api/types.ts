@@ -1,4 +1,4 @@
-// Types mirror the JSON responses from the kuberly-graph dashboard API
+// Types mirror the JSON responses from the kuberly-platform dashboard API
 // (see mcp/kuberly-graph/src/kuberly_graph/dashboard/api.py). They are not
 // auto-generated — when an endpoint shape changes, update the matching type
 // here. Endpoints are versioned at /api/v1/*.

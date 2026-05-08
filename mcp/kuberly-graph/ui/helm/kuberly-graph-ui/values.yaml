@@ -11,9 +11,9 @@ service:
   targetPort: 8080
 
 # URL the nginx reverse-proxy will forward /api/* and /dashboard to. The
-# default points at the in-cluster kuberly-graph Service; override per env.
+# default points at the in-cluster kuberly-platform Service; override per env.
 backend:
-  url: http://kuberly-graph.monitoring.svc.cluster.local:8000
+  url: http://kuberly-platform.monitoring.svc.cluster.local:8000
 
 ingress:
   enabled: false

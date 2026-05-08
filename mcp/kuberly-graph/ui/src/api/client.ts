@@ -1,4 +1,4 @@
-// Thin fetch wrapper around the kuberly-graph dashboard API. In dev Vite
+// Thin fetch wrapper around the kuberly-platform dashboard API. In dev Vite
 // proxies /api → http://127.0.0.1:8000; in prod nginx does the same.
 //
 // Design notes:

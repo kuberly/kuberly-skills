@@ -10,7 +10,7 @@ Selection rule (in order):
   1. Entry whose name == "ai-agent-tool" or contains "ai-agent" (HTTP first,
      stdio second).
   2. Any entry with `"type": "http"` whose URL doesn't look like the
-     kuberly-graph itself or kuberly-platform.
+     kuberly-platform itself or the old kuberly-graph alias.
   3. Otherwise None.
 
 Returned shape:
@@ -75,7 +75,10 @@ def _resolve_headers(raw: dict | None) -> dict:
 
 
 def _looks_like_self(url: str | None, name: str) -> bool:
-    """Skip kuberly-graph / kuberly-platform — they're not the live cluster."""
+    """Skip kuberly-platform / old kuberly-graph entries.
+
+    They are graph entrypoints, not live cluster MCPs.
+    """
     lower_name = name.lower()
     if "kuberly-graph" in lower_name or "kuberly-platform" in lower_name:
         return True
@@ -118,7 +121,7 @@ def discover_live_mcp(repo_root: str | Path) -> dict | None:
 
     Prefers HTTP entries whose name matches `ai-agent-tool` (or contains
     `ai-agent`); falls back to any HTTP entry that doesn't look like
-    kuberly-graph/kuberly-platform; finally any usable stdio entry under the
+    kuberly-platform/kuberly-graph; finally any usable stdio entry under the
     same naming rule. Returns the endpoint dict or None.
 
     Logs to stderr (not stdout — stdout is reserved for tool JSON output).

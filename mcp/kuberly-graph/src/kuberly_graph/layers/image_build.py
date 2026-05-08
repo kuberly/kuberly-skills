@@ -110,7 +110,7 @@ def _gha_request(url: str, token: str, timeout: float = 10.0) -> dict | list | N
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "kuberly-graph-image-build-layer/1.0",
+            "User-Agent": "kuberly-platform-image-build-layer/1.0",
         },
     )
     try:

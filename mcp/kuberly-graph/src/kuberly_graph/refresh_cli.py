@@ -1,6 +1,6 @@
-"""kuberly-graphs — friendly alias for `kuberly-graph call regenerate_all`.
+"""kuberly-graphs — friendly alias for `kuberly-platform call regenerate_all`.
 
-The full CLI (`kuberly-graph`) exposes serve / call / version, which is the
+The full CLI (`kuberly-platform`) exposes serve / call / version, which is the
 right shape for an MCP server but a confusing UX for "I just want to
 refresh the graph". This file ships a small companion entrypoint with one
 subcommand — `kuberly-graphs refresh` — that consumers can run after
@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="kuberly-graphs",
         description=(
             "Refresh the kuberly knowledge graph (LanceDB store at "
-            "<repo>/.kuberly/lance/). Wraps `kuberly-graph call regenerate_all`."
+            "<repo>/.kuberly/lance/). Wraps `kuberly-platform call regenerate_all`."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)

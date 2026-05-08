@@ -881,7 +881,7 @@ function switchTab(tab) {
 // ---- Empty banner / refresh -------------------------------------------
 function wireEmptyBanner() {
   $("#empty-copy")?.addEventListener("click", () => {
-    navigator.clipboard?.writeText("kuberly-graph call regenerate_all").catch(() => {});
+    navigator.clipboard?.writeText("kuberly-platform call regenerate_all").catch(() => {});
     $("#empty-copy").textContent = "copied";
     setTimeout(() => { $("#empty-copy").textContent = "copy"; }, 1500);
   });
