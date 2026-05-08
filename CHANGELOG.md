@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.47.0 — 2026-05-08
+
+Dashboard rewrite + persist_dir resolution fix.
+
+- **FEAT: dashboard UI rewrite** — two-tab vanilla HTML/JS/CSS app inspired
+  by the stage5 `graph.html` reference: Geist + JetBrains Mono fonts, dark
+  slate background, blue accent, coloured "dots" per node category. The
+  Dashboard tab shows a per-layer overlays strip, five KPI cards, and an
+  AWS architecture-tile section (AWS-shaped resources grouped by service).
+  The Graph tab renders the full graph in 3D via `3d-force-graph@1.73.0`
+  with filter chips per category (IAC FILES / TG STATE / K8S / APPLICATIONS
+  / CI/CD / CUE / DOCS / LIVE / AWS / DEPS / META), search highlight,
+  group-by selector (category / layer / type), click-to-detail panel that
+  pulls `/api/v1/nodes/<id>/neighbors` and renders a Mermaid neighbourhood
+  diagram. CDN libs only — no Python deps added, no build pipeline.
+- **FEAT: `/api/v1/graph` REST endpoint** — additive endpoint that returns
+  the full nodes+edges payload (default 5000-node cap) the 3D viz needs,
+  with a derived `category` field per node mapping each layer/type to one
+  of 11 buckets (`iac_files`, `tg_state`, `k8s_resources`, `applications`,
+  `ci_cd`, `cue`, `docs`, `live_observability`, `aws`, `dependency`,
+  `meta`). MCP tool surface unchanged at 45.
+- **FIX: persist_dir mismatch** — when the user ran `kuberly-graph serve
+  --repo <path>` from a CWD other than `<path>`, `--persist-dir` (default
+  `.kuberly`) resolved against the *server* CWD instead of `<path>`. The
+  dashboard then read from an empty `<cwd>/.kuberly` while
+  `regenerate_all` had written to `<repo>/.kuberly` — surfacing as
+  "graph store appears empty" against an actual 1012-node graph.
+  `cli._resolve_persist_dir` now anchors relative `--persist-dir` paths
+  against `--repo`, and the resolved absolute path is logged on startup
+  (`dashboard reading from: ...`). `dashboard/api.py` no longer re-resolves
+  against request-time CWD.
+
 ## v0.46.0 — 2026-05-08
 
 Cluster-driven Kubernetes API discovery + a meta-graph layer that turns the

@@ -12,10 +12,31 @@ from typing import Any
 from . import __version__
 
 
+def _resolve_persist_dir(repo: str, persist_dir: str) -> str:
+    """Resolve the absolute persist_dir, anchoring relative paths against ``repo``.
+
+    Historically ``--persist-dir`` defaulted to the literal string ".kuberly"
+    which then resolved against the *server's* CWD — so running ``serve`` from
+    ``/tmp`` while pointing ``--repo`` at a populated graph caused the dashboard
+    to silently read from ``/tmp/.kuberly`` (empty), even though
+    ``regenerate_all`` had written to ``<repo>/.kuberly``.
+
+    Fix: relative ``persist_dir`` paths are resolved against ``--repo``,
+    matching how ``regenerate_all`` resolves them inside ``orchestrator``.
+    """
+    from pathlib import Path
+
+    p = Path(persist_dir)
+    if not p.is_absolute():
+        p = Path(repo).resolve() / persist_dir
+    return str(p.resolve())
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     from .server import configure, mcp
 
-    configure(repo_root=args.repo, persist_dir=args.persist_dir)
+    persist = _resolve_persist_dir(args.repo, args.persist_dir)
+    configure(repo_root=args.repo, persist_dir=persist)
 
     transport = args.transport
     if transport == "stdio":
@@ -38,6 +59,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             f"dashboard at  http://{args.host}:{args.port}/dashboard",
             file=sys.stderr,
         )
+        print(f"dashboard reading from: {persist}", file=sys.stderr)
         mcp.run(transport="streamable-http")
     else:
         print(f"unknown transport {transport}", file=sys.stderr)

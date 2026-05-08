@@ -4,6 +4,14 @@ Each handler is a thin wrapper around an existing MCP tool function (or a
 direct GraphStore query). We call the underlying Python functions in-
 process — there is no MCP roundtrip — so this is cheap and free of any
 client/transport coupling.
+
+v0.47.0:
+- ``_persist_dir`` reads from ``SERVER_CONFIG`` only — never re-resolves
+  against the request-time CWD. ``cli._cmd_serve`` writes the absolute path
+  via ``configure(...)`` so downstream calls are deterministic regardless
+  of where the user launched the server from.
+- New ``graph_endpoint`` returns the full nodes+edges payload for the 3D
+  force-directed visualization, with a derived ``category`` field per node.
 """
 
 from __future__ import annotations
@@ -20,7 +28,15 @@ from ..store import open_store
 
 
 def _persist_dir() -> Path:
-    return Path(SERVER_CONFIG.get("persist_dir", ".kuberly")).resolve()
+    """Return the absolute persist_dir resolved by ``cli._cmd_serve``.
+
+    NB: do NOT call ``.resolve()`` here — that would re-anchor a relative
+    string against the current process CWD, which is exactly the bug we
+    fixed in v0.47.0. ``cli._resolve_persist_dir`` always writes an
+    absolute string into ``SERVER_CONFIG["persist_dir"]``.
+    """
+    raw = SERVER_CONFIG.get("persist_dir", ".kuberly")
+    return Path(raw)
 
 
 def _int_param(request: Request, name: str, default: int) -> int:
@@ -75,6 +91,200 @@ async def stats_endpoint(_request: Request) -> JSONResponse:
         return _ok(store.stats())
     except Exception as exc:  # pragma: no cover — defensive
         return _err(f"stats query failed: {exc}", 500)
+
+
+# ---------------------------------------------------------------------------
+# Category mapping for the 3D viz colour scheme
+# ---------------------------------------------------------------------------
+#
+# Each node gets a *category* string driving its colour in the front-end.
+# Categories (and the colours they map to in app.js):
+#   iac_files         #1677ff (blue)   — code, modules, terragrunt files
+#   tg_state          #ff9900 (orange) — terraform state / cloud resource
+#   k8s_resources     #ff5552 (red)    — k8s_resource, crd, namespace, pod
+#   docs              #9da3ad (gray)
+#   cue               #a259ff (purple) — schema/cue
+#   ci_cd             #3ddc84 (green)  — github actions, workflows, image builds
+#   applications      #ff4f9c (pink)   — argocd app / helm release / rendered apps
+#   live_observability#f5b800 (yellow) — logs/metrics/traces/alerts/profiles
+#   aws               #ff9900          — Phase 8F native AWS scanner output
+#   dependency        #c0c4cc          — dep / module-dep nodes
+#   meta              #ffffff          — meta-graph self-describing nodes
+
+
+_LAYER_TO_CATEGORY = {
+    "code": "iac_files",
+    "static": "iac_files",
+    "iac": "iac_files",
+    "terragrunt": "iac_files",
+    "state": "tg_state",
+    "tg_state": "tg_state",
+    "tofu_state": "tg_state",
+    "k8s": "k8s_resources",
+    "kubernetes": "k8s_resources",
+    "docs": "docs",
+    "doc": "docs",
+    "cue": "cue",
+    "schema": "cue",
+    "cue_schema": "cue",
+    "ci_cd": "ci_cd",
+    "image_build": "ci_cd",
+    "github_actions": "ci_cd",
+    "applications": "applications",
+    "rendered": "applications",
+    "rendered_apps": "applications",
+    "logs": "live_observability",
+    "metrics": "live_observability",
+    "traces": "live_observability",
+    "alerts": "live_observability",
+    "live": "live_observability",
+    "live_observability": "live_observability",
+    "profiles": "live_observability",
+    "compliance": "live_observability",
+    "cost": "live_observability",
+    "dns": "live_observability",
+    "secrets": "live_observability",
+    "aws": "aws",
+    "aws_network": "aws",
+    "aws_iam": "aws",
+    "aws_compute": "aws",
+    "aws_storage": "aws",
+    "aws_rds": "aws",
+    "aws_s3": "aws",
+    "dependency": "dependency",
+    "deps": "dependency",
+    "meta": "meta",
+}
+
+_TYPE_TO_CATEGORY = {
+    # k8s
+    "k8s_resource": "k8s_resources",
+    "crd": "k8s_resources",
+    "namespace": "k8s_resources",
+    "pod": "k8s_resources",
+    "node": "k8s_resources",
+    "service": "k8s_resources",
+    "deployment": "k8s_resources",
+    # iac
+    "module": "iac_files",
+    "component": "iac_files",
+    "terragrunt_root": "iac_files",
+    "tg_file": "iac_files",
+    # state
+    "resource": "tg_state",
+    "tg_state": "tg_state",
+    # apps
+    "application": "applications",
+    "argo_app": "applications",
+    "helm_release": "applications",
+    # docs
+    "doc": "docs",
+    "docs": "docs",
+    # observability
+    "log_stream": "live_observability",
+    "metric": "live_observability",
+    "trace": "live_observability",
+    "alert": "live_observability",
+    # ci/cd
+    "image": "ci_cd",
+    "image_build": "ci_cd",
+    "workflow": "ci_cd",
+    # cue
+    "cue_def": "cue",
+    "schema": "cue",
+    # meta
+    "meta_layer": "meta",
+}
+
+
+def _categorize(node: dict) -> str:
+    """Pick a colour category for a node. Layer dominates; type fills gaps."""
+    layer = (node.get("layer") or "").strip()
+    if layer in _LAYER_TO_CATEGORY:
+        return _LAYER_TO_CATEGORY[layer]
+    ntype = (node.get("type") or "").strip()
+    if ntype in _TYPE_TO_CATEGORY:
+        return _TYPE_TO_CATEGORY[ntype]
+    # heuristic fallbacks
+    if layer.startswith("aws"):
+        return "aws"
+    if layer.startswith("k8s"):
+        return "k8s_resources"
+    if "doc" in layer:
+        return "docs"
+    return "dependency"
+
+
+# ---------------------------------------------------------------------------
+# /api/v1/graph — full nodes+edges payload for the 3D viz
+# ---------------------------------------------------------------------------
+
+
+async def graph_endpoint(request: Request) -> JSONResponse:
+    """Return ``{nodes:[...], edges:[...]}`` for the 3D force-graph viz.
+
+    Query params:
+      layer  optional layer filter (matches node.layer)
+      type   optional type filter (matches node.type)
+      limit  cap on returned nodes (default 5000)
+    """
+    layer = _str_param(request, "layer")
+    type_ = _str_param(request, "type")
+    limit = max(1, _int_param(request, "limit", 5000))
+
+    try:
+        store = open_store(_persist_dir())
+        all_n = store.all_nodes(layer=layer)
+        all_e = store.all_edges(layer=layer)
+    except Exception as exc:
+        return _err(f"graph query failed: {exc}", 500)
+
+    nodes_out: list[dict] = []
+    seen: set[str] = set()
+    for n in all_n:
+        if not isinstance(n, dict):
+            continue
+        if type_ and n.get("type") != type_:
+            continue
+        nid = n.get("id")
+        if not nid or nid in seen:
+            continue
+        seen.add(nid)
+        nodes_out.append(
+            {
+                "id": nid,
+                "type": n.get("type", ""),
+                "layer": n.get("layer", ""),
+                "label": n.get("label") or nid,
+                "category": _categorize(n),
+            }
+        )
+        if len(nodes_out) >= limit:
+            break
+
+    node_ids = {n["id"] for n in nodes_out}
+    edges_out: list[dict] = []
+    for e in all_e:
+        if not isinstance(e, dict):
+            continue
+        s = e.get("source")
+        t = e.get("target")
+        if s in node_ids and t in node_ids:
+            edges_out.append(
+                {"source": s, "target": t, "relation": e.get("relation", "")}
+            )
+
+    return _ok(
+        {
+            "layer": layer,
+            "type": type_,
+            "limit": limit,
+            "node_count": len(nodes_out),
+            "edge_count": len(edges_out),
+            "nodes": nodes_out,
+            "edges": edges_out,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

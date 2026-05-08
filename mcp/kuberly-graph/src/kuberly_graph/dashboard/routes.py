@@ -59,6 +59,7 @@ def register_dashboard(mcp_app) -> None:
     # ---------- JSON API ----------
     mcp_app.custom_route("/api/v1/layers", methods=["GET"])(api.layers_endpoint)
     mcp_app.custom_route("/api/v1/stats", methods=["GET"])(api.stats_endpoint)
+    mcp_app.custom_route("/api/v1/graph", methods=["GET"])(api.graph_endpoint)
     mcp_app.custom_route("/api/v1/nodes", methods=["GET"])(api.nodes_endpoint)
     mcp_app.custom_route("/api/v1/nodes/{node_id:path}/neighbors", methods=["GET"])(
         api.node_neighbors_endpoint

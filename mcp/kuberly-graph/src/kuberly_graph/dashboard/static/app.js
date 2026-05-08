@@ -1,377 +1,548 @@
 // kuberly-graph dashboard SPA — vanilla JS, no build pipeline.
+//
+// Two tabs:
+//   - dashboard: overlays strip + key facts + AWS architecture tiles
+//   - graph: 3D force-directed (3d-force-graph) with filter chips, search,
+//     click-to-detail panel that fetches /api/v1/nodes/<id>/neighbors and
+//     renders a Mermaid neighbourhood diagram.
+//
+// All visual tokens come from style.css :root; this file does the data
+// glue + DOM wiring.
+
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
 
-mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose" });
+mermaid.initialize({
+  startOnLoad: false,
+  theme: "dark",
+  securityLevel: "loose",
+  fontFamily: "Geist, system-ui, sans-serif",
+});
 
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-
-const state = {
-  layers: [],
-  selectedLayer: null,
-  selectedNodeId: null,
+// ---- category palette (mirror style.css :root) -------------------------
+const CATEGORY_COLORS = {
+  iac_files:          "#1677ff",
+  tg_state:           "#ff9900",
+  k8s_resources:      "#ff5552",
+  docs:               "#9da3ad",
+  cue:                "#a259ff",
+  ci_cd:              "#3ddc84",
+  applications:       "#ff4f9c",
+  live_observability: "#f5b800",
+  aws:                "#ff9900",
+  dependency:         "#c0c4cc",
+  meta:               "#ffffff",
 };
 
-// ---------- HTTP helpers ----------
-async function fetchJson(path) {
-  const r = await fetch(path);
-  if (!r.ok) {
-    const text = await r.text();
-    throw new Error(`HTTP ${r.status}: ${text}`);
+const CATEGORY_LABELS = {
+  iac_files:          "IAC FILES",
+  tg_state:           "TG STATE",
+  k8s_resources:      "K8S",
+  docs:               "DOCS",
+  cue:                "CUE",
+  ci_cd:              "CI/CD",
+  applications:       "APPLICATIONS",
+  live_observability: "LIVE",
+  aws:                "AWS",
+  dependency:         "DEPS",
+  meta:               "META",
+};
+
+const CATEGORY_ORDER = [
+  "iac_files", "tg_state", "k8s_resources", "applications",
+  "ci_cd", "cue", "docs", "live_observability", "aws",
+  "dependency", "meta",
+];
+
+// ---- state -------------------------------------------------------------
+const STATE = {
+  stats: null,
+  layers: [],
+  graph: { nodes: [], edges: [] },
+  byCategory: new Map(),
+  byId: new Map(),
+  activeCategories: new Set(CATEGORY_ORDER),  // all on by default
+  selected: null,
+  groupBy: "category",
+  search: "",
+  Graph3D: null,
+};
+
+// ---- helpers -----------------------------------------------------------
+function $(sel, root = document) { return root.querySelector(sel); }
+function $$(sel, root = document) { return Array.from(root.querySelectorAll(sel)); }
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else if (k === "html") e.innerHTML = v;
+    else if (k.startsWith("on") && typeof v === "function") e.addEventListener(k.slice(2), v);
+    else if (v !== undefined && v !== null) e.setAttribute(k, v);
   }
+  for (const kid of kids) {
+    if (kid == null) continue;
+    e.appendChild(typeof kid === "string" ? document.createTextNode(kid) : kid);
+  }
+  return e;
+}
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;").replaceAll("\"", "&quot;");
+}
+async function fetchJSON(url) {
+  const r = await fetch(url, { credentials: "same-origin" });
+  if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`);
   return r.json();
 }
 
-function escapeHtml(s) {
-  if (s === null || s === undefined) return "";
-  return String(s)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+// ---- bootstrap ---------------------------------------------------------
+async function init() {
+  wireTabs();
+  wireEmptyBanner();
+  wireSidebar();
+  wireGraphControls();
+
+  await Promise.all([loadStats(), loadLayers()]);
+  // Don't pull the full graph until the user opens the Graph tab — but we
+  // also need it for the architecture-tile counts on the dashboard.
+  await loadGraph();
+  renderDashboard();
+  renderChips();
 }
 
-// ---------- tab switching ----------
-function setupTabs() {
-  $$("a[data-tab]").forEach((a) => {
-    a.addEventListener("click", (ev) => {
-      ev.preventDefault();
-      const tab = a.dataset.tab;
-      $$("a[data-tab]").forEach((x) => x.classList.remove("active"));
-      $$(".tab").forEach((x) => x.classList.remove("active"));
-      a.classList.add("active");
-      const panel = $(`#tab-${tab}`);
-      if (panel) panel.classList.add("active");
-    });
-  });
-}
+document.addEventListener("DOMContentLoaded", init);
 
-// ---------- summary / layers ----------
-async function loadOverview() {
-  let layers = [];
-  let stats = {};
+// ---- API loaders -------------------------------------------------------
+async function loadStats() {
   try {
-    layers = await fetchJson("/api/v1/layers");
-  } catch (e) {
-    showError("layers", e);
+    STATE.stats = await fetchJSON("/api/v1/stats");
+  } catch (exc) {
+    console.error("stats fetch failed", exc);
+    STATE.stats = { total_nodes: 0, total_edges: 0, per_layer: {} };
   }
+  $("#footer-persist").textContent = STATE.stats.persist_dir || "?";
+  if ((STATE.stats.total_nodes || 0) === 0) {
+    $("#empty-banner").classList.remove("hidden");
+  }
+}
+
+async function loadLayers() {
   try {
-    stats = await fetchJson("/api/v1/stats");
-  } catch (e) {
-    showError("stats", e);
+    const arr = await fetchJSON("/api/v1/layers");
+    STATE.layers = Array.isArray(arr) ? arr : [];
+  } catch (exc) {
+    console.error("layers fetch failed", exc);
+    STATE.layers = [];
   }
-  state.layers = Array.isArray(layers) ? layers : [];
-  renderLayerSidebar();
-  renderSummaryCards(stats);
-  populateLayerSelects();
-  toggleEmptyBanner(layers, stats);
 }
 
-function toggleEmptyBanner(layers, stats) {
-  const total = (stats && stats.totals && stats.totals.nodes) || 0;
-  const banner = $("#empty-banner");
-  if (!banner) return;
-  if (total === 0) banner.classList.remove("hidden");
-  else banner.classList.add("hidden");
-}
-
-function renderLayerSidebar() {
-  const list = $("#layer-list");
-  if (state.layers.length === 0) {
-    list.innerHTML = '<li class="muted">no layers yet</li>';
-    return;
+async function loadGraph() {
+  try {
+    const data = await fetchJSON("/api/v1/graph?limit=5000");
+    STATE.graph = { nodes: data.nodes || [], edges: data.edges || [] };
+    STATE.byId = new Map(STATE.graph.nodes.map(n => [n.id, n]));
+    STATE.byCategory = new Map();
+    for (const n of STATE.graph.nodes) {
+      const c = n.category || "dependency";
+      if (!STATE.byCategory.has(c)) STATE.byCategory.set(c, []);
+      STATE.byCategory.get(c).push(n);
+    }
+  } catch (exc) {
+    console.error("graph fetch failed", exc);
+    STATE.graph = { nodes: [], edges: [] };
   }
-  list.innerHTML = "";
-  // 'all' pseudo-entry first
-  const liAll = document.createElement("li");
-  const aAll = document.createElement("a");
-  aAll.href = "#";
-  aAll.dataset.layer = "";
-  aAll.textContent = "all layers";
-  if (state.selectedLayer === null) aAll.classList.add("selected");
-  aAll.addEventListener("click", (e) => { e.preventDefault(); selectLayer(null); });
-  liAll.appendChild(aAll);
-  list.appendChild(liAll);
-
-  state.layers.forEach((l) => {
-    const li = document.createElement("li");
-    const a = document.createElement("a");
-    a.href = "#";
-    a.dataset.layer = l.name;
-    a.innerHTML = `${escapeHtml(l.name)} <span class="layer-pill">${l.node_count}n</span>`;
-    if (state.selectedLayer === l.name) a.classList.add("selected");
-    a.addEventListener("click", (e) => { e.preventDefault(); selectLayer(l.name); });
-    li.appendChild(a);
-    list.appendChild(li);
-  });
 }
 
-function selectLayer(name) {
-  state.selectedLayer = name;
-  renderLayerSidebar();
-  $("#filter-layer").value = name || "";
-  // switch to nodes tab
-  $('a[data-tab="nodes"]').click();
-  loadNodes();
+// ---- Dashboard rendering ----------------------------------------------
+function renderDashboard() {
+  renderOverlaysStrip();
+  renderKeyFacts();
+  renderArchTiles();
 }
 
-function renderSummaryCards(stats) {
-  const host = $("#summary-cards");
+function renderOverlaysStrip() {
+  const host = $("#overlays-strip");
   host.innerHTML = "";
-  if (!stats || !stats.per_layer) {
-    host.innerHTML = '<div class="card muted">no stats available — populate the graph and refresh</div>';
+  // Build per-layer summary from stats.per_layer (authoritative) ∪ layers list.
+  const per = (STATE.stats && STATE.stats.per_layer) || {};
+  const seen = new Set();
+  const rows = [];
+  for (const [layer, info] of Object.entries(per)) {
+    rows.push({ layer, nodes: info.nodes || 0 });
+    seen.add(layer);
+  }
+  for (const row of STATE.layers) {
+    if (!row) continue;
+    const name = row.layer || row.name;
+    if (!name || seen.has(name)) continue;
+    rows.push({ layer: name, nodes: row.nodes || row.node_count || 0 });
+  }
+  rows.sort((a, b) => b.nodes - a.nodes);
+  if (!rows.length) {
+    host.innerHTML = '<span class="muted">no layers populated yet</span>';
     return;
   }
-  // totals card
-  const totals = stats.totals || {};
-  host.appendChild(card("totals", `<div class="row"><span>nodes</span><b>${totals.nodes ?? 0}</b></div>
-                                   <div class="row"><span>edges</span><b>${totals.edges ?? 0}</b></div>
-                                   <div class="row"><span>layers</span><b>${state.layers.length}</b></div>`));
-  // per-layer cards (sorted by node_count desc)
-  const layersByCount = state.layers.slice().sort((a, b) => (b.node_count || 0) - (a.node_count || 0));
-  layersByCount.forEach((l) => {
-    const refresh = l.last_refresh ? new Date(l.last_refresh).toLocaleString() : "never";
-    host.appendChild(card(l.name, `
-      <div class="row"><span>type</span><span class="muted">${escapeHtml(l.type)}</span></div>
-      <div class="row"><span>nodes</span><b>${l.node_count}</b></div>
-      <div class="row"><span>edges</span><b>${l.edge_count}</b></div>
-      <div class="row"><span>last refresh</span><span class="muted">${escapeHtml(refresh)}</span></div>
-    `));
-  });
+  for (const row of rows) {
+    const cat = layerToCategory(row.layer);
+    const dot = el("span", { class: "dot" });
+    dot.style.background = CATEGORY_COLORS[cat] || "#888";
+    host.appendChild(el(
+      "span", { class: "overlay-chip", title: row.layer },
+      dot,
+      el("span", { class: "name" }, row.layer),
+      el("span", { class: "ct" }, String(row.nodes)),
+    ));
+  }
 }
 
-function card(title, body) {
-  const el = document.createElement("div");
-  el.className = "card";
-  el.innerHTML = `<h3>${escapeHtml(title)}</h3>${body}`;
-  return el;
+function layerToCategory(layer) {
+  // Mirrors api._categorize — the front-end falls back when the backend
+  // didn't ship a category (e.g. older nodes). For the overlays strip we
+  // categorise by layer alone.
+  const map = {
+    code: "iac_files", static: "iac_files", iac: "iac_files",
+    terragrunt: "iac_files",
+    state: "tg_state", tg_state: "tg_state", tofu_state: "tg_state",
+    k8s: "k8s_resources", kubernetes: "k8s_resources",
+    docs: "docs", doc: "docs",
+    cue: "cue", schema: "cue", cue_schema: "cue",
+    ci_cd: "ci_cd", image_build: "ci_cd", github_actions: "ci_cd",
+    applications: "applications", rendered: "applications", rendered_apps: "applications",
+    logs: "live_observability", metrics: "live_observability",
+    traces: "live_observability", alerts: "live_observability",
+    live: "live_observability", live_observability: "live_observability",
+    profiles: "live_observability", compliance: "live_observability",
+    cost: "live_observability", dns: "live_observability", secrets: "live_observability",
+    aws: "aws", aws_network: "aws", aws_iam: "aws",
+    aws_compute: "aws", aws_storage: "aws", aws_rds: "aws", aws_s3: "aws",
+    dependency: "dependency", deps: "dependency",
+    meta: "meta",
+  };
+  if (map[layer]) return map[layer];
+  if (layer && layer.startsWith("aws")) return "aws";
+  if (layer && layer.startsWith("k8s")) return "k8s_resources";
+  return "dependency";
 }
 
-function populateLayerSelects() {
-  ["#filter-layer", "#anom-layer"].forEach((sel) => {
-    const el = $(sel);
-    if (!el) return;
-    const cur = el.value;
-    el.innerHTML = '<option value="">(any)</option>';
-    state.layers.forEach((l) => {
-      const opt = document.createElement("option");
-      opt.value = l.name;
-      opt.textContent = `${l.name} (${l.node_count})`;
-      el.appendChild(opt);
-    });
-    if (cur) el.value = cur;
-  });
-}
-
-// ---------- nodes tab ----------
-async function loadNodes() {
-  const layer = $("#filter-layer").value;
-  const type = $("#filter-type").value.trim();
-  const name = $("#filter-name").value.trim();
-  const limit = $("#filter-limit").value || "50";
-  const params = new URLSearchParams();
-  if (layer) params.set("layer", layer);
-  if (type) params.set("type", type);
-  if (name) params.set("name", name);
-  params.set("limit", limit);
-  const tbody = $("#node-table tbody");
-  tbody.innerHTML = '<tr><td colspan="4" class="muted">loading…</td></tr>';
-  try {
-    const data = await fetchJson(`/api/v1/nodes?${params.toString()}`);
-    const rows = data.nodes || [];
-    if (rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="4" class="muted">no matches</td></tr>';
-      return;
+function renderKeyFacts() {
+  // Best-effort derivation. Real values land in Phase 8F when AWS scanner
+  // ships native fields; until then we mine what's already in the graph.
+  let k8sVer = "—";
+  for (const n of STATE.graph.nodes) {
+    if ((n.type || "").toLowerCase() === "node" || (n.id || "").startsWith("k8s_node:")) {
+      const v = (n.label || "").match(/v?\d+\.\d+\.\d+/);
+      if (v) { k8sVer = v[0]; break; }
     }
-    tbody.innerHTML = "";
-    rows.forEach((n) => {
-      const tr = document.createElement("tr");
-      tr.dataset.id = n.id;
-      tr.innerHTML = `<td>${escapeHtml(n.id)}</td>
-                      <td>${escapeHtml(n.type ?? "")}</td>
-                      <td>${escapeHtml(n.layer ?? "")}</td>
-                      <td>${escapeHtml(n.label ?? "")}</td>`;
-      tr.addEventListener("click", () => selectNode(n.id));
-      tbody.appendChild(tr);
+  }
+  const apps = (STATE.byCategory.get("applications") || []).length;
+  $("#kpi-k8s").textContent = k8sVer;
+  $("#kpi-apps").textContent = apps > 0 ? String(apps) : "—";
+  // db / cache / public — leave em-dash; real wiring in Phase 8F.
+}
+
+function renderArchTiles() {
+  const host = $("#arch-tiles");
+  host.innerHTML = "";
+  // Group AWS-shaped nodes by service. AWS-shaped = category "aws" OR
+  // category "tg_state" with id matching ^aws_<svc>_.
+  const aws = (STATE.byCategory.get("aws") || []);
+  const tg  = (STATE.byCategory.get("tg_state") || []);
+  const buckets = new Map();
+  function bucketize(node, svc) {
+    if (!buckets.has(svc)) buckets.set(svc, []);
+    buckets.get(svc).push(node);
+  }
+  for (const n of aws) {
+    const svc = (n.type || "").replace(/^aws_/, "").toUpperCase() || "AWS";
+    bucketize(n, svc);
+  }
+  for (const n of tg) {
+    const m = String(n.id || "").match(/(?:^|[:./])aws_([a-z0-9_]+?)(?:_|\.|$)/);
+    if (m) bucketize(n, m[1].toUpperCase());
+  }
+  if (buckets.size === 0) {
+    host.innerHTML = `<div class="arch-empty muted">No AWS scanner data yet. Phase 8F will populate this section with native AWS resources (VPC, EKS, RDS, S3, IAM, …) — for now, AWS-shaped resources are inferred from terraform state.</div>`;
+    return;
+  }
+  // Render top tiles by count.
+  const sorted = Array.from(buckets.entries()).sort((a, b) => b[1].length - a[1].length);
+  for (const [svc, nodes] of sorted.slice(0, 18)) {
+    const sample = nodes[0];
+    const tile = el("div", {
+      class: "arch-tile",
+      onclick: () => {
+        // Switch to graph tab filtered by these nodes' category.
+        switchTab("graph");
+        STATE.activeCategories.clear();
+        STATE.activeCategories.add(sample.category || "tg_state");
+        STATE.search = svc.toLowerCase();
+        $("#search").value = svc.toLowerCase();
+        renderChips();
+        renderGraph();
+      },
+    },
+      el("div", { class: "head" },
+        el("span", { class: "svc" }, svc),
+        el("span", { class: "ct" }, String(nodes.length)),
+      ),
+      el("div", { class: "sample" }, sample.label || sample.id),
+    );
+    host.appendChild(tile);
+  }
+}
+
+// ---- Graph (3D) --------------------------------------------------------
+function ensureForceGraph() {
+  if (STATE.Graph3D) return STATE.Graph3D;
+  if (typeof ForceGraph3D !== "function") return null;
+  const host = $("#graph-3d");
+  STATE.Graph3D = ForceGraph3D({ controlType: "orbit" })(host)
+    .backgroundColor("#090b0d")
+    .width(host.clientWidth)
+    .height(host.clientHeight)
+    .nodeId("id")
+    .nodeLabel(n => `<div style="font-family:Geist,system-ui,sans-serif;font-size:12px;padding:6px 8px;background:rgba(20,24,30,0.95);border:1px solid rgba(255,255,255,0.18);border-radius:6px;color:#fff;">${escapeHtml(n.label || n.id)}<br><span style="opacity:0.6;font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;">${escapeHtml(n.type || "")} · ${escapeHtml(n.layer || "")}</span></div>`)
+    .nodeRelSize(5)
+    .nodeOpacity(1.0)
+    .nodeColor(nodeColorFn)
+    .nodeResolution(12)
+    .linkColor(() => "rgba(255,255,255,0.10)")
+    .linkOpacity(0.7)
+    .linkWidth(1.0)
+    .linkDirectionalParticles(1)
+    .linkDirectionalParticleSpeed(0.005)
+    .linkDirectionalParticleWidth(2.0)
+    .enableNodeDrag(true)
+    .cooldownTime(15000)
+    .warmupTicks(60)
+    .onNodeClick(onNodeClick)
+    .onBackgroundClick(() => closeSidebar());
+
+  if (STATE.Graph3D.d3Force) {
+    const c = STATE.Graph3D.d3Force("charge");
+    if (c && c.strength) c.strength(-50);
+    const l = STATE.Graph3D.d3Force("link");
+    if (l && l.distance) l.distance(40);
+  }
+
+  window.addEventListener("resize", () => {
+    if (!STATE.Graph3D) return;
+    STATE.Graph3D.width(host.clientWidth).height(host.clientHeight);
+  });
+  return STATE.Graph3D;
+}
+
+function nodeColorFn(node) {
+  if (STATE.search) {
+    const q = STATE.search.toLowerCase();
+    const hit = (node.id || "").toLowerCase().includes(q) ||
+                (node.label || "").toLowerCase().includes(q);
+    if (hit) return "#ffffff";
+    return "rgba(255,255,255,0.10)";
+  }
+  if (STATE.groupBy === "layer") {
+    return CATEGORY_COLORS[layerToCategory(node.layer || "")] || "#888";
+  }
+  if (STATE.groupBy === "type") {
+    // hash type → palette
+    const palette = ["#1677ff", "#ff9900", "#ff5552", "#a259ff", "#3ddc84", "#ff4f9c", "#f5b800", "#9da3ad", "#c0c4cc"];
+    let h = 0; const s = node.type || "";
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return palette[Math.abs(h) % palette.length];
+  }
+  return CATEGORY_COLORS[node.category] || "#888";
+}
+
+function visibleGraphData() {
+  const nodes = STATE.graph.nodes.filter(n => STATE.activeCategories.has(n.category || "dependency"));
+  const visIds = new Set(nodes.map(n => n.id));
+  const edges = STATE.graph.edges.filter(e => visIds.has(e.source) && visIds.has(e.target))
+                                 .map(e => ({ source: e.source, target: e.target, relation: e.relation }));
+  return { nodes: nodes.map(n => ({ ...n })), links: edges };
+}
+
+function renderGraph() {
+  const G = ensureForceGraph();
+  if (!G) return;
+  const data = visibleGraphData();
+  G.graphData(data);
+  G.nodeColor(nodeColorFn);
+  if (G.d3ReheatSimulation) G.d3ReheatSimulation();
+  $("#stats").textContent = `${data.nodes.length} nodes · ${data.links.length} edges`;
+  const empty = data.nodes.length === 0;
+  $("#graph-empty-hint").classList.toggle("hidden", !empty);
+}
+
+function renderChips() {
+  const host = $("#graph-chips");
+  host.innerHTML = "";
+  for (const cat of CATEGORY_ORDER) {
+    const list = STATE.byCategory.get(cat) || [];
+    if (list.length === 0 && cat !== "aws") continue;
+    const on = STATE.activeCategories.has(cat);
+    const chip = el("span", {
+      class: `chip ${on ? "on" : "off"}`,
+      "data-cat": cat,
+      onclick: () => {
+        if (STATE.activeCategories.has(cat)) STATE.activeCategories.delete(cat);
+        else STATE.activeCategories.add(cat);
+        renderChips();
+        renderGraph();
+      },
     });
-  } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="4" class="muted">error: ${escapeHtml(e.message)}</td></tr>`;
+    const dot = el("span", { class: "dot" });
+    dot.style.background = CATEGORY_COLORS[cat];
+    chip.appendChild(dot);
+    chip.appendChild(el("span", {}, CATEGORY_LABELS[cat] || cat.toUpperCase()));
+    chip.appendChild(el("span", { class: "ct" }, String(list.length)));
+    host.appendChild(chip);
   }
 }
 
-async function selectNode(id) {
-  state.selectedNodeId = id;
-  $$("#node-table tbody tr").forEach((tr) => {
-    tr.classList.toggle("selected", tr.dataset.id === id);
-  });
-  const pane = $("#node-detail");
-  pane.innerHTML = '<p class="muted">loading…</p>';
-  try {
-    const enc = encodeURIComponent(id);
-    const [detail, neighbors] = await Promise.all([
-      fetchJson(`/api/v1/nodes/${enc}`),
-      fetchJson(`/api/v1/nodes/${enc}/neighbors`),
-    ]);
-    const node = detail.node || {};
-    const inc = neighbors.incoming || [];
-    const out = neighbors.outgoing || [];
-    pane.innerHTML = `
-      <h3>${escapeHtml(node.label || node.id || id)}</h3>
-      <div class="muted">${escapeHtml(node.type || "")} · ${escapeHtml(node.layer || "")}</div>
-      <pre>${escapeHtml(JSON.stringify(node, null, 2))}</pre>
-      <h3>incoming (${inc.length})</h3>
-      <ul>${inc.slice(0, 25).map((e) => `<li>${escapeHtml(e.relation)} ← ${escapeHtml(e.source)}</li>`).join("")}</ul>
-      <h3>outgoing (${out.length})</h3>
-      <ul>${out.slice(0, 25).map((e) => `<li>${escapeHtml(e.relation)} → ${escapeHtml(e.target)}</li>`).join("")}</ul>
-      <h3>neighbourhood</h3>
-      <div class="mermaid-host" id="node-mermaid"></div>
-    `;
-    renderNodeMermaid(node, inc, out);
-  } catch (e) {
-    pane.innerHTML = `<p class="muted">error: ${escapeHtml(e.message)}</p>`;
+// ---- Sidebar (node detail) --------------------------------------------
+async function onNodeClick(node) {
+  STATE.selected = node.id;
+  openSidebar(node);
+  STATE.Graph3D.cameraPosition(
+    { x: node.x, y: node.y, z: (node.z || 0) + 220 }, node, 800
+  );
+}
+
+function openSidebar(node) {
+  const body = $("#sidebar-body");
+  body.innerHTML = "";
+  body.appendChild(el("h3", {}, node.label || node.id));
+  body.appendChild(el("div", { class: "meta" }, `${node.type || "?"} · ${node.layer || "?"}`));
+
+  const kv = el("div", { class: "kv" });
+  for (const [k, v] of [["id", node.id], ["type", node.type], ["layer", node.layer], ["category", node.category]]) {
+    kv.appendChild(el("span", { class: "k" }, k));
+    kv.appendChild(el("span", { class: "v" }, String(v ?? "")));
   }
-}
+  body.appendChild(el("div", { class: "section-title" }, "metadata"));
+  body.appendChild(kv);
 
-function safeId(s) {
-  return "n_" + String(s).replace(/[^A-Za-z0-9]/g, "_").slice(0, 80);
-}
+  body.appendChild(el("div", { class: "section-title" }, "neighbors"));
+  const ul = el("ul", { class: "neighbors" }, el("li", { class: "muted" }, "loading…"));
+  body.appendChild(ul);
 
-async function renderNodeMermaid(node, inc, out) {
-  const host = $("#node-mermaid");
-  if (!host) return;
-  const lines = ["graph LR"];
-  const center = safeId(node.id);
-  const centerLabel = (node.label || node.id || "").replace(/"/g, "'").slice(0, 40);
-  lines.push(`  ${center}["${centerLabel}"]:::center`);
-  inc.slice(0, 10).forEach((e) => {
-    const id = safeId(e.source);
-    const lbl = (e.label || e.source).replace(/"/g, "'").slice(0, 40);
-    lines.push(`  ${id}["${lbl}"] -->|${e.relation || ""}| ${center}`);
-  });
-  out.slice(0, 10).forEach((e) => {
-    const id = safeId(e.target);
-    const lbl = (e.label || e.target).replace(/"/g, "'").slice(0, 40);
-    lines.push(`  ${center} -->|${e.relation || ""}| ${id}["${lbl}"]`);
-  });
-  lines.push("  classDef center fill:#fde68a,stroke:#92400e,stroke-width:2px;");
-  try {
-    const { svg } = await mermaid.render("graph_node_" + Date.now(), lines.join("\n"));
-    host.innerHTML = svg;
-  } catch (e) {
-    host.textContent = "mermaid render error: " + e.message;
-  }
-}
+  body.appendChild(el("div", { class: "section-title" }, "neighbourhood"));
+  const mhost = el("div", { class: "mermaid-host" }, "loading…");
+  body.appendChild(mhost);
 
-// ---------- search ----------
-function setupSearch() {
-  const box = $("#search-box");
-  let debounce;
-  box.addEventListener("input", () => {
-    clearTimeout(debounce);
-    const q = box.value.trim();
-    if (q.length < 2) {
-      $("#search-results").innerHTML = "";
-      return;
-    }
-    debounce = setTimeout(() => runSearch(q), 250);
-  });
-}
+  $("#sidebar").classList.add("open");
 
-async function runSearch(q) {
-  const ul = $("#search-results");
-  ul.innerHTML = '<li class="muted">searching…</li>';
-  try {
-    const data = await fetchJson(`/api/v1/search?q=${encodeURIComponent(q)}&limit=15`);
-    const hits = data.hits || [];
-    if (hits.length === 0) { ul.innerHTML = '<li class="muted">no hits</li>'; return; }
+  // Async fill
+  fetchJSON(`/api/v1/nodes/${encodeURIComponent(node.id)}/neighbors`).then(j => {
     ul.innerHTML = "";
-    hits.forEach((h) => {
-      const li = document.createElement("li");
-      li.innerHTML = `${escapeHtml(h.label || h.id)} <span class="layer-pill">${escapeHtml(h.layer || "?")}</span>`;
-      li.addEventListener("click", () => {
-        $('a[data-tab="nodes"]').click();
-        selectNode(h.id);
-      });
-      ul.appendChild(li);
-    });
-  } catch (e) {
-    ul.innerHTML = `<li class="muted">error: ${escapeHtml(e.message)}</li>`;
-  }
-}
-
-// ---------- anomalies ----------
-async function loadAnomalies() {
-  const layer = $("#anom-layer").value;
-  const limit = $("#anom-limit").value || "20";
-  const params = new URLSearchParams();
-  if (layer) params.set("layer", layer);
-  params.set("limit", limit);
-  const tbody = $("#anomaly-table tbody");
-  tbody.innerHTML = '<tr><td colspan="5" class="muted">loading…</td></tr>';
-  try {
-    const data = await fetchJson(`/api/v1/anomalies?${params.toString()}`);
-    const rows = data.anomalies || [];
-    if (rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="muted">no anomalies (or layers not populated)</td></tr>';
-      return;
-    }
-    tbody.innerHTML = "";
-    rows.forEach((r) => {
-      const tr = document.createElement("tr");
-      tr.dataset.id = r.id;
-      tr.innerHTML = `<td>${escapeHtml(r.score)}</td>
-                      <td>${escapeHtml(r.id)}</td>
-                      <td>${escapeHtml(r.type ?? "")}</td>
-                      <td>${escapeHtml(r.layer ?? "")}</td>
-                      <td>${escapeHtml(r.why ?? "")}</td>`;
-      tr.addEventListener("click", () => {
-        $('a[data-tab="nodes"]').click();
-        selectNode(r.id);
-      });
-      tbody.appendChild(tr);
-    });
-  } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="5" class="muted">error: ${escapeHtml(e.message)}</td></tr>`;
-  }
-}
-
-// ---------- service one-pager ----------
-async function loadService() {
-  const name = $("#svc-name").value.trim();
-  const env = $("#svc-env").value.trim();
-  if (!name) return;
-  $("#svc-json").textContent = "loading…";
-  $("#svc-mermaid").innerHTML = "";
-  try {
-    const enc = encodeURIComponent(name);
-    const params = env ? `?env=${encodeURIComponent(env)}` : "";
-    const profile = await fetchJson(`/api/v1/service/${enc}${params}`);
-    $("#svc-json").textContent = JSON.stringify(profile, null, 2);
-    const merm = await fetchJson(`/api/v1/service/${enc}/mermaid${params}`);
-    if (merm && merm.mermaid) {
-      try {
-        const { svg } = await mermaid.render("graph_svc_" + Date.now(), merm.mermaid);
-        $("#svc-mermaid").innerHTML = svg;
-      } catch (e) {
-        $("#svc-mermaid").textContent = "mermaid render error: " + e.message;
+    const all = [
+      ...(j.incoming || []).map(x => ({ ...x, dir: "in", peer: x.source })),
+      ...(j.outgoing || []).map(x => ({ ...x, dir: "out", peer: x.target })),
+    ];
+    if (!all.length) {
+      ul.appendChild(el("li", { class: "muted" }, "no neighbors"));
+    } else {
+      for (const e of all.slice(0, 60)) {
+        const arrow = e.dir === "in" ? "←" : "→";
+        const li = el("li", {
+          onclick: () => {
+            const peer = STATE.byId.get(e.peer);
+            if (peer) onNodeClick(peer);
+          },
+        },
+          el("span", { class: "rel" }, `${arrow} ${e.relation || "rel"}`),
+          el("span", {}, e.label || e.peer),
+        );
+        ul.appendChild(li);
       }
     }
-  } catch (e) {
-    $("#svc-json").textContent = "error: " + e.message;
+    return j;
+  }).then(async (j) => {
+    if (!j) return;
+    // Build a tiny mermaid neighbourhood from incoming+outgoing.
+    const id = node.id;
+    const lines = ["graph LR"];
+    const safe = (s) => `n${(s || "").replace(/[^a-zA-Z0-9_]/g, "_")}`;
+    lines.push(`${safe(id)}([${(node.label || id).slice(0, 28)}])`);
+    for (const e of (j.incoming || []).slice(0, 20)) {
+      lines.push(`${safe(e.source)}([${(e.label || e.source).slice(0, 24)}]) -->|${e.relation || ""}| ${safe(id)}`);
+    }
+    for (const e of (j.outgoing || []).slice(0, 20)) {
+      lines.push(`${safe(id)} -->|${e.relation || ""}| ${safe(e.target)}([${(e.label || e.target).slice(0, 24)}])`);
+    }
+    try {
+      const { svg } = await mermaid.render(`m_${Date.now()}`, lines.join("\n"));
+      mhost.innerHTML = svg;
+    } catch (exc) {
+      mhost.textContent = `mermaid render failed: ${exc.message}`;
+    }
+  }).catch(exc => {
+    ul.innerHTML = `<li class="muted">neighbor fetch failed: ${escapeHtml(exc.message)}</li>`;
+  });
+}
+
+function closeSidebar() {
+  $("#sidebar").classList.remove("open");
+  STATE.selected = null;
+  if (STATE.Graph3D) STATE.Graph3D.nodeColor(nodeColorFn);
+}
+
+// ---- Tabs --------------------------------------------------------------
+function wireTabs() {
+  for (const btn of $$(".tabs button")) {
+    btn.addEventListener("click", () => switchTab(btn.dataset.tab));
   }
 }
 
-// ---------- bootstrap ----------
-function showError(scope, e) {
-  console.error(scope, e);
+function switchTab(tab) {
+  for (const btn of $$(".tabs button")) {
+    btn.classList.toggle("active", btn.dataset.tab === tab);
+  }
+  document.body.classList.toggle("view-graph", tab === "graph");
+  document.body.classList.toggle("view-dashboard", tab === "dashboard");
+  $("#view-graph").hidden = tab !== "graph";
+
+  if (tab === "graph") {
+    // First time → init the force graph and zoom.
+    setTimeout(() => {
+      const G = ensureForceGraph();
+      if (G) {
+        renderGraph();
+        setTimeout(() => G.zoomToFit(800, 60), 600);
+      }
+    }, 50);
+  }
 }
 
-function setupHandlers() {
-  $("#btn-refresh").addEventListener("click", () => loadOverview());
-  $("#btn-apply-filter").addEventListener("click", loadNodes);
-  $("#btn-load-anomalies").addEventListener("click", loadAnomalies);
-  $("#btn-load-service").addEventListener("click", loadService);
+// ---- Empty banner / refresh -------------------------------------------
+function wireEmptyBanner() {
+  $("#empty-copy")?.addEventListener("click", () => {
+    navigator.clipboard?.writeText("kuberly-graph call regenerate_all").catch(() => {});
+    $("#empty-copy").textContent = "copied";
+    setTimeout(() => { $("#empty-copy").textContent = "copy"; }, 1500);
+  });
+  $("#empty-refresh")?.addEventListener("click", () => location.reload());
 }
 
-setupTabs();
-setupSearch();
-setupHandlers();
-loadOverview();
+function wireSidebar() {
+  $("#sidebar-close")?.addEventListener("click", closeSidebar);
+}
+
+function wireGraphControls() {
+  $("#search").addEventListener("input", (e) => {
+    STATE.search = e.target.value || "";
+    if (STATE.Graph3D) STATE.Graph3D.nodeColor(nodeColorFn);
+    $("#stats").textContent = `${STATE.graph.nodes.length} nodes · ${STATE.graph.edges.length} edges${STATE.search ? " · search: " + STATE.search : ""}`;
+  });
+  $("#graph-group-by").addEventListener("change", (e) => {
+    STATE.groupBy = e.target.value;
+    if (STATE.Graph3D) STATE.Graph3D.nodeColor(nodeColorFn);
+  });
+  $("#filters-reset").addEventListener("click", () => {
+    STATE.activeCategories = new Set(CATEGORY_ORDER);
+    STATE.search = "";
+    $("#search").value = "";
+    renderChips();
+    renderGraph();
+  });
+}
