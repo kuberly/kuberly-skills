@@ -147,6 +147,11 @@ def regenerate_layer(
     aws_account_id: str | None = None,
     cost_lookback_months: int | None = None,
     compliance_required_tags: list[str] | None = None,
+    enable_gha_enrichment: bool | None = None,
+    github_repos: list[str] | None = None,
+    github_token: str | None = None,
+    enable_ecr_enrichment: bool | None = None,
+    aws_region: str | None = None,
 ) -> dict:
     """Re-run one layer's scanner. Convenience wrapper around
     `regenerate_graph(layers=[layer])`.
@@ -154,6 +159,20 @@ def regenerate_layer(
     Phase 7D knobs (all optional):
       * ``aws_account_id`` / ``cost_lookback_months`` — CostLayer.
       * ``compliance_required_tags`` — ComplianceLayer R003 input.
+
+    Phase 7E knobs (image_build only — all optional, all opt-in):
+      * ``enable_gha_enrichment`` — emit ``commit`` + ``workflow_run`` nodes
+        via GitHub REST API. Requires ``github_token`` (or
+        ``GITHUB_TOKEN`` / ``KUBERLY_GITHUB_TOKEN`` env). Soft-degrades
+        when token absent.
+      * ``github_repos`` — explicit ``["owner/repo", ...]`` list. When
+        omitted, auto-discovered from ECR repository names.
+      * ``github_token`` — explicit token; falls back to env vars.
+      * ``enable_ecr_enrichment`` — enrich ``ecr_repo`` nodes
+        (scan-on-push, lifecycle, immutability) and emit
+        ``image_scan_finding`` for HIGH/CRITICAL CVEs via boto3.
+        Soft-degrades when boto3 / AWS creds absent.
+      * ``aws_region`` — defaults to ``AWS_REGION`` env / ``us-east-1``.
     """
     endpoint = build_mcp_endpoint(mcp_url, mcp_stdio)
     extra: dict = {}
@@ -163,6 +182,16 @@ def regenerate_layer(
         extra["cost_lookback_months"] = int(cost_lookback_months)
     if compliance_required_tags:
         extra["compliance_required_tags"] = list(compliance_required_tags)
+    if enable_gha_enrichment is not None:
+        extra["enable_gha_enrichment"] = bool(enable_gha_enrichment)
+    if github_repos:
+        extra["github_repos"] = list(github_repos)
+    if github_token:
+        extra["github_token"] = str(github_token)
+    if enable_ecr_enrichment is not None:
+        extra["enable_ecr_enrichment"] = bool(enable_ecr_enrichment)
+    if aws_region:
+        extra["aws_region"] = str(aws_region)
     return regenerate_layer_op(
         layer=layer,
         repo_root=_resolve_repo(repo_root),
