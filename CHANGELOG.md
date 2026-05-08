@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.51.0 — 2026-05-08
+
+Observability layers actually populate; rendered apps inline.
+
+Phase 8H shipped logs / metrics / traces collection that was
+technically wired but sparse on the live cluster (`metrics=0`,
+`logs=24`, `traces=4`) because the upstream MCP wrapper had no
+Prom / Loki / Tempo URL configured. v0.51.0 adds a guaranteed
+fallback path: when MCP returns `isError` / 0 results we shell out
+to `kubectl port-forward` and hit the in-cluster service directly.
+All three layers share one `contextlib.contextmanager` that owns
+the subprocess lifecycle, so every PF dies on layer-end (no
+orphaned port-forwards). Same architectural principle as v0.50.1's
+state-inline: every layer writes nodes / edges straight to the
+store; no sidecars.
+
+- **NEW: `layers/_pf.py`** — shared `kubectl_port_forward()` ctx
+  manager + tiny stdlib HTTP helpers. Single cleanup invariant for
+  every observability layer.
+- **CHG: `MetricsLayer.scan()`** — try MCP first; on 0 results /
+  `isError`, kubectl-PF to `svc/prometheus-kube-prometheus-prometheus
+  -n monitoring 9090` and scrape `/api/v1/label/__name__/values` +
+  `/api/v1/metadata` + `/api/v1/targets`. `metrics_use_kubectl_pf`
+  now defaults to **on**. Soft-degrades when kubectl missing / no
+  current-context / PF can't bind. `metrics_top_n` default raised
+  200 -> 1000.
+- **CHG: `LogsLayer.scan()`** — discover labels first via Loki
+  `/loki/api/v1/label/namespace/values` then iterate per-namespace
+  LogQL. PF target: `svc/loki-gateway -n monitoring 80`. Per-ns cap
+  via new `logs_per_namespace_limit` ctx (default 1000 lines).
+- **CHG: `TracesLayer.scan()`** — 3-path service discovery
+  (existing app ids -> Prom `traces_spanmetrics_calls_total` ->
+  k8s `Service` names) augmented with a Tempo
+  `/api/search/tag/service.name/values` lookup over the PF.
+  Per-service trace fetch via `/api/search?tags=service.name=<svc>`.
+  PF target: `svc/tempo-query-frontend -n monitoring 3200`.
+- **CHG: `RenderedLayer.scan()`** — `cue` is now invoked inline.
+  Discover apps under `applications/<env>/*.json`, stage each JSON
+  via `cue import` into `cue/`, run `cue cmd -t instance=<env>
+  -t app=<name> dump .`, parse the multi-doc YAML, emit
+  `app_render:` + `rendered_resource:` nodes. Drop the
+  `.kuberly/rendered_apps_<env>.json` sidecar entirely. Soft-
+  degrades when cue absent / no `cue/` dir / `applications/`
+  missing / cue runs fail.
+
+Tool count unchanged at **50**. Layer count unchanged at **25**.
+
 ## v0.50.1 — 2026-05-08
 
 Fold S3 state extraction inline — drop sidecar JSON.

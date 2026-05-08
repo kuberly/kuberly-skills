@@ -1,138 +1,36 @@
-"""MetricsLayer — Prometheus metric metadata + scrape topology."""
+"""MetricsLayer — Prometheus metric metadata + scrape topology.
+
+v0.51.0: kubectl port-forward fallback is now the **default** path when the
+upstream MCP wrapper has no Prom URL wired (Phase 8H landed it as opt-in
+which produced 0 nodes on the live cluster). Order of operations:
+
+  1. If ``mcp_endpoint`` is set, try ``query_metrics`` + ``prom_get_targets``.
+  2. If those return ``isError`` / ``None`` / 0 series AND
+     ``metrics_use_kubectl_pf`` is not explicitly false, spin up a
+     ``kubectl port-forward`` to ``svc/prometheus-kube-prometheus-prometheus``
+     and scrape ``/api/v1/label/__name__/values`` + ``/api/v1/metadata`` +
+     ``/api/v1/targets`` directly.
+  3. Subprocess cleanup is owned by ``layers/_pf.py`` (try/finally + drain).
+
+Soft-degrade: if kubectl is missing OR no current-context OR PF fails to
+bind, log a single warning and return the existing-MCP result (which may be
+empty).
+"""
 
 from __future__ import annotations
 
-import contextlib
 import datetime as _dt
-import shutil
-import subprocess
 import sys
-import time
 from collections import defaultdict
 
 from .base import Layer
-
-
-@contextlib.contextmanager
-def _kubectl_port_forward(
-    namespace: str,
-    service: str,
-    remote_port: int,
-    *,
-    kubectl: str | None = None,
-    timeout_s: float = 8.0,
-):
-    """Spin up `kubectl port-forward -n <ns> svc/<svc> 0:<remote_port>` in a
-    subprocess and yield the local port the kernel allocated.
-
-    Captures stderr (kubectl writes "Forwarding from 127.0.0.1:<port> ->
-    <remote_port>" there) to discover the random local port. Kills the
-    process on context exit.
-    """
-    bin_path = kubectl or shutil.which("kubectl")
-    if not bin_path:
-        raise RuntimeError("kubectl not found on PATH")
-    cmd = [
-        bin_path,
-        "port-forward",
-        "-n",
-        namespace,
-        f"svc/{service}",
-        f"0:{int(remote_port)}",
-    ]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-    )
-    local_port = 0
-    deadline = time.monotonic() + timeout_s
-    try:
-        while time.monotonic() < deadline:
-            if proc.poll() is not None:
-                err = (proc.stderr.read() if proc.stderr else "") or ""
-                raise RuntimeError(f"kubectl port-forward exited early: {err[:300]}")
-            line = ""
-            if proc.stdout is not None:
-                # Both newer and older kubectl print to stdout; some versions
-                # use stderr. Probe both with a short non-blocking peek.
-                try:
-                    import select
-
-                    r, _, _ = select.select([proc.stdout, proc.stderr], [], [], 0.2)
-                    for stream in r:
-                        line = stream.readline() or ""
-                        if line:
-                            break
-                except Exception:
-                    line = proc.stdout.readline() or ""
-            if not line:
-                continue
-            # Forwarding from 127.0.0.1:54321 -> 9090
-            idx = line.find("127.0.0.1:")
-            if idx >= 0:
-                tail = line[idx + len("127.0.0.1:") :]
-                port_str = ""
-                for ch in tail:
-                    if ch.isdigit():
-                        port_str += ch
-                    else:
-                        break
-                if port_str.isdigit():
-                    local_port = int(port_str)
-                    break
-        if not local_port:
-            raise RuntimeError("kubectl port-forward did not announce a local port")
-        yield local_port
-    finally:
-        try:
-            proc.terminate()
-            try:
-                proc.wait(timeout=3)
-            except Exception:
-                proc.kill()
-        except Exception:
-            pass
-
-
-def _prom_kubectl_pf_query(
-    promql: str,
-    *,
-    namespace: str,
-    service: str,
-    remote_port: int,
-    timeout_s: float = 10.0,
-) -> dict | None:
-    """Run a single PromQL instant query through a kubectl-port-forwarded
-    Prometheus. Returns the decoded ``{"status": "success", "data": {...}}``
-    or ``None`` on failure. Kills the port-forward on exit.
-    """
-    try:
-        import urllib.parse
-        import urllib.request
-        import json as _json
-    except Exception:
-        return None
-    try:
-        with _kubectl_port_forward(
-            namespace, service, remote_port
-        ) as local_port:
-            qs = urllib.parse.urlencode({"query": promql})
-            url = f"http://127.0.0.1:{local_port}/api/v1/query?{qs}"
-            req = urllib.request.Request(url, headers={"Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-                body = resp.read().decode("utf-8", errors="replace")
-            try:
-                return _json.loads(body)
-            except Exception:
-                return None
-    except Exception as exc:
-        print(
-            f"  [MetricsLayer] kubectl-pf query failed: {exc}", file=sys.stderr
-        )
-        return None
+from ._pf import (
+    _have_current_context,
+    _have_kubectl,
+    http_get_json_qs,
+    kubectl_port_forward,
+    warn,
+)
 
 
 def _extract_metric_names(payload) -> list[tuple[str, int]]:
@@ -266,6 +164,94 @@ def _match_module_for_job(job: str, existing_module_ids: set[str]) -> str:
     return candidates[0] if len(candidates) == 1 else ""
 
 
+def _scrape_prom_via_pf(
+    *,
+    namespace: str,
+    service: str,
+    port: int,
+    top_n: int,
+    verbose: bool,
+) -> tuple[list[tuple[str, int]], dict[str, dict], list[dict]]:
+    """Spin up kubectl-pf to Prometheus and pull names + metadata + targets.
+
+    Returns ``(metric_rows, meta_lookup, targets)``. Empty triple on failure.
+    All HTTP calls happen inside the contextmanager so the subprocess dies
+    on any exception path.
+    """
+    metric_rows: list[tuple[str, int]] = []
+    meta_lookup: dict[str, dict] = {}
+    targets: list[dict] = []
+    try:
+        with kubectl_port_forward(namespace, service, port) as local_port:
+            base = f"http://127.0.0.1:{local_port}"
+            # 1) every metric name
+            names_payload = http_get_json_qs(
+                base, "/api/v1/label/__name__/values"
+            )
+            names: list[str] = []
+            if isinstance(names_payload, dict):
+                data = names_payload.get("data") or []
+                if isinstance(data, list):
+                    names = [str(x) for x in data if isinstance(x, str)]
+            if verbose:
+                print(
+                    f"  [MetricsLayer] pf: /api/v1/label/__name__/values → "
+                    f"{len(names)} metric names"
+                )
+            # Heuristic series-count: rank by series cardinality via the
+            # cheap query ``count by (__name__) ({__name__!=""})``. If the
+            # query is heavy on this Prom we fall back to an even-weight
+            # ranking (1 per name).
+            cardinality: dict[str, int] = {}
+            count_payload = http_get_json_qs(
+                base,
+                "/api/v1/query",
+                {"query": 'count by (__name__) ({__name__!=""})'},
+            )
+            for nm, cnt in _extract_metric_names(count_payload):
+                cardinality[nm] = max(int(cnt), cardinality.get(nm, 0))
+            for nm in names:
+                if nm not in cardinality:
+                    cardinality[nm] = 1
+            metric_rows = sorted(
+                cardinality.items(), key=lambda kv: (-kv[1], kv[0])
+            )[: max(0, top_n)]
+
+            # 2) /metadata — Prom returns the full table in one shot. Cap to
+            # the top_n metric names so we don't bloat memory on very wide
+            # clusters.
+            meta_payload = http_get_json_qs(base, "/api/v1/metadata")
+            if isinstance(meta_payload, dict):
+                meta_data = meta_payload.get("data") or {}
+                if isinstance(meta_data, dict):
+                    target_names = {nm for nm, _ in metric_rows}
+                    for mn, entries in meta_data.items():
+                        if mn not in target_names:
+                            continue
+                        if isinstance(entries, list) and entries:
+                            first = entries[0] if isinstance(entries[0], dict) else {}
+                            meta_lookup[mn] = {
+                                "metric_type": str(first.get("type") or "unknown"),
+                                "help": str(first.get("help") or "")[:200],
+                            }
+
+            # 3) /targets — active scrape jobs.
+            tgt_payload = http_get_json_qs(
+                base, "/api/v1/targets", {"state": "active"}
+            )
+            targets = _extract_targets(tgt_payload)
+            if verbose:
+                print(
+                    f"  [MetricsLayer] pf: /api/v1/metadata → "
+                    f"{len(meta_lookup)} entries; /api/v1/targets → "
+                    f"{len(targets)} targets"
+                )
+    except Exception as exc:
+        warn(f"  [MetricsLayer] kubectl-pf path failed: {exc} — soft-degrade")
+        return [], {}, []
+    return metric_rows, meta_lookup, targets
+
+
 class MetricsLayer(Layer):
     name = "metrics"
     refresh_trigger = "interval:10m"
@@ -273,17 +259,12 @@ class MetricsLayer(Layer):
     def scan(self, ctx: dict) -> tuple[list[dict], list[dict]]:
         endpoint = ctx.get("mcp_endpoint")
         verbose = bool(ctx.get("verbose"))
-        # Phase 8H: kubectl-pf fallback is gated by an opt-in flag so the
-        # default path stays pure-MCP. When the operator passes
-        # ``metrics_use_kubectl_pf=true`` and no usable endpoint is around,
-        # we shell out to kubectl-port-forward and hit Prom directly.
-        use_pf = bool(ctx.get("metrics_use_kubectl_pf"))
-        if not endpoint and not use_pf:
-            if verbose:
-                print("  [MetricsLayer] skip — no mcp_endpoint in ctx")
-            return [], []
+        # v0.51.0: default to ON. Operator can disable explicitly with
+        # ``metrics_use_kubectl_pf=false``.
+        use_pf_flag = ctx.get("metrics_use_kubectl_pf")
+        use_pf = (use_pf_flag is None) or bool(use_pf_flag)
 
-        top_n = int(ctx.get("metrics_top_n") or 200)
+        top_n = int(ctx.get("metrics_top_n") or 1000)
         existing_app_ids: set[str] = set(ctx.get("_existing_app_ids", set()))
         existing_module_ids: set[str] = set(
             ctx.get("_existing_module_ids", set())
@@ -293,14 +274,16 @@ class MetricsLayer(Layer):
 
         promql = 'count by (__name__) ({__name__!=""})'
         metric_rows: list[tuple[str, int]] = []
-        payload = None
+        meta_lookup: dict[str, dict] = {}
+        targets: list[dict] = []
+        mcp_payload = None
+
+        # 1) MCP-first (Phase 8H code path).
         if endpoint is not None:
             try:
-                payload = _call_tool_sync(
+                mcp_payload = _call_tool_sync(
                     endpoint,
                     "query_metrics",
-                    # Send both the v0.45.1 wrapper key (``promql``) and the
-                    # legacy key (``query``) so we match either flavour.
                     {"promql": promql, "query": promql},
                 )
             except ConnectionError:
@@ -310,81 +293,97 @@ class MetricsLayer(Layer):
                     print(
                         f"  [MetricsLayer] query_metrics failed: {exc} — soft-degrade"
                     )
-                payload = {"error": str(exc)}
+                mcp_payload = {"error": str(exc)}
 
-        # When the MCP-side Prom upstream is blank (Tempo/Prom/Loki MCP
-        # wrapper unwired), opt-in kubectl-pf path probes the in-cluster
-        # Prom directly.
-        mcp_failed = (
-            payload is None
-            or (isinstance(payload, dict) and payload.get("error"))
-        )
-        if use_pf and mcp_failed:
-            ns = ctx.get("metrics_pf_namespace") or "monitoring"
-            svc = (
-                ctx.get("metrics_pf_service")
-                or "prometheus-kube-prometheus-prometheus"
-            )
-            port = int(ctx.get("metrics_pf_port") or 9090)
-            if verbose:
-                print(
-                    f"  [MetricsLayer] kubectl-pf fallback to "
-                    f"svc/{ns}/{svc}:{port}"
+            if isinstance(mcp_payload, dict) and mcp_payload.get("error"):
+                if verbose:
+                    print(
+                        f"  [MetricsLayer] MCP query_metrics error: "
+                        f"{mcp_payload['error']}"
+                    )
+            elif mcp_payload is not None:
+                metric_rows = _extract_metric_names(mcp_payload)
+
+            if endpoint is not None:
+                try:
+                    t_payload = _call_tool_sync(
+                        endpoint, "prom_get_targets", {"state": "active"}
+                    )
+                except ConnectionError:
+                    raise
+                except Exception as exc:
+                    if verbose:
+                        print(
+                            f"  [MetricsLayer] prom_get_targets unavailable: "
+                            f"{exc} — soft-degrade"
+                        )
+                    t_payload = None
+                if isinstance(t_payload, dict) and t_payload.get("error"):
+                    if verbose:
+                        print(
+                            f"  [MetricsLayer] prom_get_targets error: "
+                            f"{t_payload['error']}"
+                        )
+                elif t_payload is not None:
+                    targets = _extract_targets(t_payload)
+
+        mcp_yielded_metrics = bool(metric_rows)
+        mcp_yielded_targets = bool(targets)
+
+        # 2) kubectl-pf fallback when MCP came back empty.
+        if use_pf and not (mcp_yielded_metrics and mcp_yielded_targets):
+            if not _have_kubectl():
+                warn(
+                    "  [MetricsLayer] kubectl-pf fallback skipped — kubectl "
+                    "not on PATH"
                 )
-            pf_payload = _prom_kubectl_pf_query(
-                promql,
-                namespace=ns,
-                service=svc,
-                remote_port=port,
-            )
-            if pf_payload is not None:
-                payload = pf_payload
-
-        if isinstance(payload, dict) and payload.get("error"):
-            if verbose:
-                print(f"  [MetricsLayer] query_metrics error: {payload['error']}")
-        elif payload is not None:
-            metric_rows = _extract_metric_names(payload)
+            elif not _have_current_context():
+                warn(
+                    "  [MetricsLayer] kubectl-pf fallback skipped — no "
+                    "current-context"
+                )
+            else:
+                ns = ctx.get("metrics_pf_namespace") or "monitoring"
+                svc = (
+                    ctx.get("metrics_pf_service")
+                    or "prometheus-kube-prometheus-prometheus"
+                )
+                port = int(ctx.get("metrics_pf_port") or 9090)
+                if verbose:
+                    print(
+                        f"  [MetricsLayer] kubectl-pf fallback to "
+                        f"svc/{ns}/{svc}:{port}"
+                    )
+                pf_metrics, pf_meta, pf_targets = _scrape_prom_via_pf(
+                    namespace=ns,
+                    service=svc,
+                    port=port,
+                    top_n=top_n,
+                    verbose=verbose,
+                )
+                if pf_metrics:
+                    metric_rows = pf_metrics
+                if pf_meta:
+                    meta_lookup.update(pf_meta)
+                if pf_targets:
+                    targets = pf_targets
 
         metric_rows.sort(key=lambda kv: (-kv[1], kv[0]))
         metric_rows = metric_rows[: max(0, top_n)]
 
         if verbose:
             print(
-                f"  [MetricsLayer] enumerated {len(metric_rows)} metric names (top_n={top_n})"
+                f"  [MetricsLayer] enumerated {len(metric_rows)} metric names "
+                f"(top_n={top_n})"
+            )
+            print(
+                f"  [MetricsLayer] discovered {len(targets)} scrape targets"
             )
 
-        targets: list[dict] = []
-        try:
-            t_payload = _call_tool_sync(
-                endpoint, "prom_get_targets", {"state": "active"}
-            )
-        except ConnectionError:
-            raise
-        except Exception as exc:
-            if verbose:
-                print(
-                    f"  [MetricsLayer] prom_get_targets unavailable: {exc} — soft-degrade"
-                )
-            t_payload = None
-
-        if isinstance(t_payload, dict) and t_payload.get("error"):
-            if verbose:
-                print(
-                    f"  [MetricsLayer] prom_get_targets error: {t_payload['error']}"
-                )
-        elif t_payload is not None:
-            targets = _extract_targets(t_payload)
-
-        if verbose:
-            print(f"  [MetricsLayer] discovered {len(targets)} scrape targets")
-
-        # Per-metric metadata (mode=metadata) is unsupported by the
-        # ai-agent-tool wrapper — it'd just emit isError per call. Skip it
-        # when we have no metric rows; otherwise still try (some wrappers do
-        # support it) but never raise.
-        meta_lookup: dict[str, dict] = {}
-        if metric_rows:
+        # If MCP gave us metric names but no metadata, optionally probe the
+        # legacy /metadata-via-MCP path. Only when we don't already have
+        # entries from the kubectl-pf scan.
+        if endpoint is not None and metric_rows and not meta_lookup:
             for mname, _ in metric_rows[:50]:
                 try:
                     m_payload = _call_tool_sync(

@@ -1,11 +1,58 @@
-"""TracesLayer — Tempo service/operation aggregation."""
+"""TracesLayer — Tempo service/operation aggregation.
+
+v0.51.0: 3-path service discovery (Tempo ``/api/search/tags`` for the
+``service.name`` tag, Prom ``traces_spanmetrics_calls_total`` labels, k8s
+``Service`` names). Per-service trace fetch. When MCP path fails, falls
+back to ``kubectl port-forward svc/tempo-query-frontend -n monitoring 3200``
+and hits ``/api/search?tags=service.name=<svc>`` directly.
+"""
 
 from __future__ import annotations
 
 import datetime as _dt
+import json as _json
 from collections import defaultdict
+from pathlib import Path
 
 from .base import Layer
+from ._pf import (
+    _have_current_context,
+    _have_kubectl,
+    http_get_json_qs,
+    kubectl_port_forward,
+    warn,
+)
+
+
+def _discover_tempo_tenant(repo_root, envs: list[str]) -> str:
+    """Tempo on kuberly clusters runs multi-tenant — same X-Scope-OrgID
+    convention as Loki. Tenant id = ``org_slug`` from
+    ``components/<env>/shared-infra.json``. Walks the JSON tree because
+    the slug lives at different depths across kuberly-stack revisions.
+    """
+    from .logs import _walk_for_org_slug
+
+    rr = Path(repo_root)
+    comp_dir = rr / "components"
+    if not comp_dir.exists():
+        return ""
+    candidates = list(envs) if envs else sorted(
+        p.name
+        for p in comp_dir.iterdir()
+        if p.is_dir() and not p.name.startswith(".")
+    )
+    for env in candidates:
+        si = comp_dir / env / "shared-infra.json"
+        if not si.exists():
+            continue
+        try:
+            data = _json.loads(si.read_text())
+        except Exception:
+            continue
+        slug = _walk_for_org_slug(data)
+        if slug:
+            return slug
+    return ""
 
 
 def _percentiles_ms(durations_ms: list[float]) -> tuple[float, float, float]:
@@ -342,10 +389,9 @@ class TracesLayer(Layer):
     def scan(self, ctx: dict) -> tuple[list[dict], list[dict]]:
         endpoint = ctx.get("mcp_endpoint")
         verbose = bool(ctx.get("verbose"))
-        if not endpoint:
-            if verbose:
-                print("  [TracesLayer] skip — no mcp_endpoint in ctx")
-            return [], []
+        # v0.51.0: don't early-return when no MCP — kubectl-pf path may still
+        # work. Track whether we have an MCP endpoint to decide whether to
+        # try MCP first.
 
         window = str(ctx.get("traces_window") or "1h")
         limit = int(ctx.get("traces_limit") or 500)
@@ -381,7 +427,7 @@ class TracesLayer(Layer):
                 seen_seed.add(name)
                 seed_services.append(name)
 
-        if not seed_services:
+        if endpoint is not None and not seed_services:
             # Fallback A: ask Prometheus for service names from spanmetrics.
             try:
                 pm = _call_tool_sync(
@@ -441,88 +487,250 @@ class TracesLayer(Layer):
                 f"(first 5: {seed_services[:5]})"
             )
 
-        # Build per-service queries.
-        queries: list[tuple[str, dict]] = []
-        for svc in seed_services[:200]:
-            queries.append(
-                (
-                    svc,
-                    {
-                        "service": svc,
-                        "since": window,
-                        "limit": max(1, int(limit)),
-                    },
-                )
-            )
-        if not queries:
-            # Last-ditch: TraceQL with no filter so the operator sees the
-            # actual upstream error in stderr.
-            queries.append(
-                ("", {"query": "{}", "limit": max(1, int(limit)), "since": window})
-            )
-
-        for env, args in queries:
-            try:
-                payload = _call_tool_sync(endpoint, "query_traces", args)
-            except ConnectionError:
-                raise
-            except Exception as exc:
-                if verbose:
-                    print(
-                        f"  [TracesLayer] query_traces(env={env!r}) failed: {exc} — soft-degrade"
+        # 1) MCP per-service queries.
+        if endpoint is not None:
+            queries: list[tuple[str, dict]] = []
+            for svc in seed_services[:200]:
+                queries.append(
+                    (
+                        svc,
+                        {
+                            "service": svc,
+                            "since": window,
+                            "limit": max(1, int(limit)),
+                        },
                     )
-                continue
-            if isinstance(payload, dict) and payload.get("error"):
-                err_text = str(payload.get("error") or "").lower()
-                if (
-                    "service is required" in err_text
-                    or "trace_id" in err_text
-                    or "service" in err_text
-                ):
+                )
+            if not queries:
+                # Last-ditch: TraceQL with no filter so the operator sees the
+                # actual upstream error in stderr.
+                queries.append(
+                    (
+                        "",
+                        {
+                            "query": "{}",
+                            "limit": max(1, int(limit)),
+                            "since": window,
+                        },
+                    )
+                )
+
+            for env, args in queries:
+                try:
+                    payload = _call_tool_sync(endpoint, "query_traces", args)
+                except ConnectionError:
+                    raise
+                except Exception as exc:
                     if verbose:
                         print(
-                            f"  [TracesLayer] env={env!r} wrapper requires service — "
-                            f"falling back to per-service queries (seed n={len(seed_services)})"
+                            f"  [TracesLayer] query_traces(env={env!r}) "
+                            f"failed: {exc} — soft-degrade"
                         )
-                    for svc in seed_services[:50]:
-                        try:
-                            sub = _call_tool_sync(
-                                endpoint,
-                                "query_traces",
-                                {
-                                    "service": svc,
-                                    "since": window,
-                                    "limit": max(1, int(limit)),
-                                },
-                            )
-                        except ConnectionError:
-                            raise
-                        except Exception:
-                            continue
-                        if isinstance(sub, dict) and sub.get("error"):
-                            continue
-                        for sp in _iter_trace_spans(sub):
-                            all_spans.append(sp)
-                            tid = sp.get("_trace_id") or ""
-                            if tid:
-                                traces_seen_total.add(tid)
                     continue
+                if isinstance(payload, dict) and payload.get("error"):
+                    err_text = str(payload.get("error") or "").lower()
+                    if (
+                        "service is required" in err_text
+                        or "trace_id" in err_text
+                        or "service" in err_text
+                    ):
+                        if verbose:
+                            print(
+                                f"  [TracesLayer] env={env!r} wrapper "
+                                f"requires service — falling back to "
+                                f"per-service queries (seed "
+                                f"n={len(seed_services)})"
+                            )
+                        for svc in seed_services[:50]:
+                            try:
+                                sub = _call_tool_sync(
+                                    endpoint,
+                                    "query_traces",
+                                    {
+                                        "service": svc,
+                                        "since": window,
+                                        "limit": max(1, int(limit)),
+                                    },
+                                )
+                            except ConnectionError:
+                                raise
+                            except Exception:
+                                continue
+                            if isinstance(sub, dict) and sub.get("error"):
+                                continue
+                            for sp in _iter_trace_spans(sub):
+                                all_spans.append(sp)
+                                tid = sp.get("_trace_id") or ""
+                                if tid:
+                                    traces_seen_total.add(tid)
+                        continue
+                    if verbose:
+                        print(
+                            f"  [TracesLayer] env={env!r} error: "
+                            f"{payload['error']} — soft-degrade"
+                        )
+                    continue
+                spans_added = 0
+                for sp in _iter_trace_spans(payload):
+                    all_spans.append(sp)
+                    spans_added += 1
+                    tid = sp.get("_trace_id") or ""
+                    if tid:
+                        traces_seen_total.add(tid)
                 if verbose:
                     print(
-                        f"  [TracesLayer] env={env!r} error: {payload['error']} — soft-degrade"
+                        f"  [TracesLayer] env={env!r} ingested "
+                        f"{spans_added} spans"
                     )
-                continue
-            spans_added = 0
-            for sp in _iter_trace_spans(payload):
-                all_spans.append(sp)
-                spans_added += 1
-                tid = sp.get("_trace_id") or ""
-                if tid:
-                    traces_seen_total.add(tid)
-            if verbose:
-                print(
-                    f"  [TracesLayer] env={env!r} ingested {spans_added} spans"
+
+        # 2) v0.51.0: kubectl-pf fallback when MCP gave us nothing.
+        if not all_spans:
+            if not _have_kubectl():
+                warn("  [TracesLayer] kubectl-pf skipped — kubectl not on PATH")
+            elif not _have_current_context():
+                warn(
+                    "  [TracesLayer] kubectl-pf skipped — no current-context"
                 )
+            else:
+                pf_namespace = ctx.get("traces_pf_namespace") or "monitoring"
+                pf_service = (
+                    ctx.get("traces_pf_service") or "tempo-query-frontend"
+                )
+                pf_port = int(ctx.get("traces_pf_port") or 3200)
+                # Tempo on kuberly clusters also runs multi-tenant.
+                tenant = (
+                    ctx.get("tempo_tenant")
+                    or ctx.get("traces_tenant")
+                    or _discover_tempo_tenant(
+                        ctx.get("repo_root", "."), envs
+                    )
+                )
+                headers = (
+                    {"X-Scope-OrgID": tenant} if tenant else None
+                )
+                if verbose:
+                    print(
+                        f"  [TracesLayer] kubectl-pf fallback to "
+                        f"svc/{pf_namespace}/{pf_service}:{pf_port} "
+                        f"(tenant={tenant or '<none>'})"
+                    )
+                try:
+                    with kubectl_port_forward(
+                        pf_namespace, pf_service, pf_port
+                    ) as local_port:
+                        base = f"http://127.0.0.1:{local_port}"
+
+                        # Path A: enrich seed_services from
+                        # /api/search/tag/service.name/values (Tempo's tag
+                        # discovery API).
+                        tag_payload = http_get_json_qs(
+                            base,
+                            "/api/search/tag/service.name/values",
+                            headers=headers,
+                        )
+                        tag_values: list[str] = []
+                        if isinstance(tag_payload, dict):
+                            tag_values = [
+                                str(x)
+                                for x in (tag_payload.get("tagValues") or [])
+                                if isinstance(x, str)
+                            ]
+                        for v in tag_values:
+                            if v not in seen_seed:
+                                seen_seed.add(v)
+                                seed_services.append(v)
+                        if verbose:
+                            print(
+                                f"  [TracesLayer] pf: tempo /api/search/tag/"
+                                f"service.name/values → {len(tag_values)} "
+                                f"values; total seed n={len(seed_services)}"
+                            )
+
+                        # Path B: per-service trace fetch.
+                        for svc in seed_services[:200]:
+                            payload = http_get_json_qs(
+                                base,
+                                "/api/search",
+                                {
+                                    "tags": f"service.name={svc}",
+                                    "limit": max(1, int(limit)),
+                                },
+                                headers=headers,
+                            )
+                            if not isinstance(payload, dict):
+                                continue
+                            spans_added = 0
+                            # Tempo's /api/search returns ``traces[]`` summary
+                            # entries with rootServiceName / rootTraceName /
+                            # startTimeUnixNano / durationMs but **no inner
+                            # spans**. Synthesize one span per trace so the
+                            # aggregator can build service / operation nodes.
+                            traces_arr = payload.get("traces") or []
+                            if isinstance(traces_arr, list):
+                                for tr in traces_arr:
+                                    if not isinstance(tr, dict):
+                                        continue
+                                    tid = (
+                                        tr.get("traceID")
+                                        or tr.get("trace_id")
+                                        or ""
+                                    )
+                                    root_svc = (
+                                        tr.get("rootServiceName") or svc
+                                    )
+                                    root_op = (
+                                        tr.get("rootTraceName") or "root"
+                                    )
+                                    dur_ms = tr.get("durationMs")
+                                    start_ns = tr.get("startTimeUnixNano")
+                                    end_ns = None
+                                    if isinstance(dur_ms, (int, float)) and start_ns:
+                                        try:
+                                            end_ns = int(start_ns) + int(
+                                                float(dur_ms) * 1_000_000
+                                            )
+                                        except Exception:
+                                            end_ns = None
+                                    sp = {
+                                        "_trace_id": tid,
+                                        "_resource_attrs": {
+                                            "service.name": root_svc,
+                                        },
+                                        "name": root_op,
+                                        "spanId": tid[:16] if tid else "",
+                                        "startTimeUnixNano": str(start_ns)
+                                        if start_ns
+                                        else "",
+                                        "endTimeUnixNano": str(end_ns)
+                                        if end_ns
+                                        else "",
+                                    }
+                                    all_spans.append(sp)
+                                    spans_added += 1
+                                    if tid:
+                                        traces_seen_total.add(tid)
+                            # Also iterate via the OTLP/spanSet path in case
+                            # Tempo did include spans (some versions do).
+                            for sp in _iter_trace_spans(payload):
+                                rattrs = sp.get("_resource_attrs") or {}
+                                if "service.name" not in rattrs:
+                                    rattrs["service.name"] = svc
+                                    sp["_resource_attrs"] = rattrs
+                                all_spans.append(sp)
+                                spans_added += 1
+                                tid = sp.get("_trace_id") or ""
+                                if tid:
+                                    traces_seen_total.add(tid)
+                            if verbose and spans_added:
+                                print(
+                                    f"  [TracesLayer] pf: svc={svc} "
+                                    f"ingested {spans_added} spans"
+                                )
+                except Exception as exc:
+                    warn(
+                        f"  [TracesLayer] kubectl-pf path failed: {exc} "
+                        f"— soft-degrade"
+                    )
 
         if not all_spans:
             if verbose:
