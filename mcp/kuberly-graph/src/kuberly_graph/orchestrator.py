@@ -46,6 +46,7 @@ def regenerate_graph(
     metrics_top_n: int | None = None,
     traces_window: str | None = None,
     traces_limit: int | None = None,
+    extra_ctx: dict | None = None,
 ) -> dict:
     start = _dt.datetime.now()
     repo = Path(repo_root).resolve()
@@ -81,6 +82,8 @@ def regenerate_graph(
         # without re-opening the store.
         "graph_store": store,
     }
+    if extra_ctx:
+        ctx.update(extra_ctx)
     per_layer: dict[str, dict] = {}
     cold_graph: KuberlyGraph | None = None
 
@@ -161,6 +164,7 @@ def regenerate_layer_op(
     metrics_top_n: int | None = None,
     traces_window: str | None = None,
     traces_limit: int | None = None,
+    extra_ctx: dict | None = None,
 ) -> dict:
     return regenerate_graph(
         repo_root=repo_root,
@@ -172,6 +176,7 @@ def regenerate_layer_op(
         metrics_top_n=metrics_top_n,
         traces_window=traces_window,
         traces_limit=traces_limit,
+        extra_ctx=extra_ctx,
     )
 
 
@@ -196,6 +201,12 @@ def list_layers_summary(persist_dir: str = ".kuberly") -> list[dict]:
         "iam": "derived",
         "image_build": "derived",
         "storage": "derived",
+        # Phase 7D — DNS/Secrets/Cost/Alert/Compliance.
+        "dns": "derived",
+        "secrets": "derived",
+        "cost": "live",
+        "alert": "derived",
+        "compliance": "derived",
         "dependency": "meta",
     }
     out: list[dict] = []

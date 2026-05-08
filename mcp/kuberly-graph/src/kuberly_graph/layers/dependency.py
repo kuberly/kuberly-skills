@@ -311,6 +311,40 @@ class DependencyLayer(Layer):
                     continue
                 _emit(pod["id"], pvc_node["id"], "mounts")
 
+        # ---- Pod → Secret / ConfigMap consumption — Phase 7D extension ----------
+        # K8sLayer materializes envFrom / valueFrom / volumes references on
+        # workload nodes via ``secret_refs`` / ``configmap_refs`` (added in
+        # Phase 7D). Walk those lists and emit one consume edge per ref.
+        for kind in ("Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "ReplicaSet"):
+            for n in k8s_by_kind.get(kind, []):
+                ns = str(n.get("namespace") or "")
+                for sec_name in (n.get("secret_refs") or []) if isinstance(n.get("secret_refs"), list) else []:
+                    if not isinstance(sec_name, str) or not sec_name:
+                        continue
+                    secret_node = k8s_by_id.get(("Secret", ns, sec_name))
+                    if secret_node is None:
+                        continue
+                    _emit(n["id"], secret_node["id"], "consumes_secret")
+                for cm_name in (n.get("configmap_refs") or []) if isinstance(n.get("configmap_refs"), list) else []:
+                    if not isinstance(cm_name, str) or not cm_name:
+                        continue
+                    cm_node = k8s_by_id.get(("ConfigMap", ns, cm_name))
+                    if cm_node is None:
+                        continue
+                    _emit(n["id"], cm_node["id"], "consumes_configmap")
+
+        # ---- Ingress → dns_record (resolved_by) — Phase 7D extension ------------
+        # DnsLayer emits dns_record→k8s_resource(Ingress) `points_to` edges for
+        # any Route53 alias whose hostname matches an ingress LB hostname. Mirror
+        # the inverse direction so service_dns_chain can walk it cleanly.
+        for e in all_edges:
+            if e.get("relation") != "points_to":
+                continue
+            src = str(e.get("source") or "")
+            tgt = str(e.get("target") or "")
+            if src.startswith("dns_record:") and tgt.startswith("k8s_resource:"):
+                _emit(tgt, src, "resolved_by")
+
         # ---- rendered_resource → k8s_resource ------------------------------------
         for rr in nodes_by_type.get("rendered_resource", []):
             kind = str(rr.get("kind") or "")

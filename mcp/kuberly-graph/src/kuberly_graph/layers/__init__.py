@@ -6,13 +6,17 @@ from __future__ import annotations
 
 from graphlib import TopologicalSorter
 
+from .alert import AlertLayer
 from .applications import ApplicationsLayer
 from .argo import ArgoLayer
 from .base import Layer
 from .cold import ColdLayer
 from .code import CodeLayer
 from .components import ComponentsLayer
+from .compliance import ComplianceLayer
+from .cost import CostLayer
 from .dependency import DependencyLayer
+from .dns import DnsLayer
 from .iam import IAMLayer
 from .image_build import ImageBuildLayer
 from .k8s import K8sLayer
@@ -20,6 +24,7 @@ from .logs import LogsLayer
 from .metrics import MetricsLayer
 from .network import NetworkLayer
 from .rendered import RenderedLayer
+from .secrets import SecretsLayer
 from .state import StateLayer
 from .storage import StorageLayer
 from .traces import TracesLayer
@@ -42,6 +47,13 @@ LAYERS: list[Layer] = [
     IAMLayer(),
     ImageBuildLayer(),
     StorageLayer(),
+    # Phase 7D structural extractors. Order matters only relative to
+    # DependencyLayer (last) — the topo sort handles inter-7D ordering.
+    DnsLayer(),
+    SecretsLayer(),
+    CostLayer(),
+    AlertLayer(),
+    ComplianceLayer(),
     # DependencyLayer derives cross-layer edges from whatever is already in
     # the GraphStore — must run last.
     DependencyLayer(),
@@ -100,6 +112,12 @@ _LAYER_PRECEDES: dict[str, set[str]] = {
     "iam": {"state", "k8s"},
     "image_build": {"k8s"},
     "storage": {"state", "k8s"},
+    # Phase 7D structural extractors.
+    "dns": {"state", "k8s"},
+    "secrets": {"state", "k8s"},
+    "cost": {"state"},
+    "alert": {"k8s", "metrics"},
+    "compliance": {"state", "k8s", "iam", "network"},
     # DependencyLayer reads the populated store — make every other leaf
     # layer that's part of this run finish first.
     "dependency": {
@@ -117,6 +135,11 @@ _LAYER_PRECEDES: dict[str, set[str]] = {
         "iam",
         "image_build",
         "storage",
+        "dns",
+        "secrets",
+        "cost",
+        "alert",
+        "compliance",
     },
 }
 

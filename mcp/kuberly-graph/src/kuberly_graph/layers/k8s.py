@@ -26,6 +26,12 @@ DEFAULT_K8S_KINDS: list[tuple[str, str]] = [
     ("v1", "PersistentVolume"),
     ("v1", "PersistentVolumeClaim"),
     ("storage.k8s.io/v1", "StorageClass"),
+    # Phase 7D — Alert + Secret CRDs.
+    ("monitoring.coreos.com/v1", "PrometheusRule"),
+    ("monitoring.coreos.com/v1", "ServiceMonitor"),
+    ("external-secrets.io/v1beta1", "ExternalSecret"),
+    ("external-secrets.io/v1beta1", "SecretStore"),
+    ("external-secrets.io/v1beta1", "ClusterSecretStore"),
 ]
 
 
@@ -114,6 +120,82 @@ def _extract_pvc_binding(spec: dict) -> dict:
     return out
 
 
+def _extract_secret_configmap_refs(spec: dict) -> tuple[list[str], list[str]]:
+    """Return (secret_names, configmap_names) referenced by a pod-template spec.
+
+    Walks volumes[].secret / volumes[].configMap, containers[].envFrom[],
+    containers[].env[].valueFrom.{secretKeyRef,configMapKeyRef}. Defensive on
+    every shape — never raises.
+    """
+    if not isinstance(spec, dict):
+        return [], []
+    pod_spec = spec
+    template = spec.get("template")
+    if isinstance(template, dict) and isinstance(template.get("spec"), dict):
+        pod_spec = template["spec"]
+
+    secrets: list[str] = []
+    configmaps: list[str] = []
+    seen_secret: set[str] = set()
+    seen_cm: set[str] = set()
+
+    def _add_secret(name: str) -> None:
+        if name and name not in seen_secret:
+            seen_secret.add(name)
+            secrets.append(name)
+
+    def _add_cm(name: str) -> None:
+        if name and name not in seen_cm:
+            seen_cm.add(name)
+            configmaps.append(name)
+
+    vols = pod_spec.get("volumes")
+    if isinstance(vols, list):
+        for v in vols:
+            if not isinstance(v, dict):
+                continue
+            sec = v.get("secret")
+            if isinstance(sec, dict):
+                _add_secret(str(sec.get("secretName") or ""))
+            cm = v.get("configMap")
+            if isinstance(cm, dict):
+                _add_cm(str(cm.get("name") or ""))
+
+    for key in ("initContainers", "containers", "ephemeralContainers"):
+        items = pod_spec.get(key)
+        if not isinstance(items, list):
+            continue
+        for c in items:
+            if not isinstance(c, dict):
+                continue
+            envfrom = c.get("envFrom")
+            if isinstance(envfrom, list):
+                for ef in envfrom:
+                    if not isinstance(ef, dict):
+                        continue
+                    sref = ef.get("secretRef")
+                    if isinstance(sref, dict):
+                        _add_secret(str(sref.get("name") or ""))
+                    cref = ef.get("configMapRef")
+                    if isinstance(cref, dict):
+                        _add_cm(str(cref.get("name") or ""))
+            envs = c.get("env")
+            if isinstance(envs, list):
+                for e in envs:
+                    if not isinstance(e, dict):
+                        continue
+                    vf = e.get("valueFrom")
+                    if not isinstance(vf, dict):
+                        continue
+                    skr = vf.get("secretKeyRef")
+                    if isinstance(skr, dict):
+                        _add_secret(str(skr.get("name") or ""))
+                    cmkr = vf.get("configMapKeyRef")
+                    if isinstance(cmkr, dict):
+                        _add_cm(str(cmkr.get("name") or ""))
+    return secrets, configmaps
+
+
 class K8sLayer(Layer):
     name = "k8s"
     refresh_trigger = "on-event:k8s"
@@ -175,9 +257,12 @@ class K8sLayer(Layer):
                 # off the persisted node without re-fetching live data.
                 images: list[str] = []
                 pvc_claims: list[str] = []
+                secret_refs: list[str] = []
+                configmap_refs: list[str] = []
                 if kind in {"Deployment", "StatefulSet", "DaemonSet", "Job", "ReplicaSet", "Pod"}:
                     images = _extract_container_images(spec)
                     pvc_claims = _extract_pod_volume_claims(spec)
+                    secret_refs, configmap_refs = _extract_secret_configmap_refs(spec)
                 # Storage — capture binding/backing fields so StorageLayer can
                 # do PVC→PV and PV→EBS/EFS matching.
                 pv_backing: dict = {}
@@ -189,6 +274,28 @@ class K8sLayer(Layer):
                     pv_backing = _extract_pv_backing(spec)
                 if kind == "PersistentVolumeClaim":
                     pvc_binding = _extract_pvc_binding(spec)
+                # Persist a slim copy of `spec` for kinds that AlertLayer /
+                # ComplianceLayer / SecretsLayer want to introspect without
+                # re-fetching. We keep the raw dict — downstream walkers must
+                # be defensive (they already are).
+                spec_for_node = (
+                    spec
+                    if kind
+                    in {
+                        "PrometheusRule",
+                        "ServiceMonitor",
+                        "ExternalSecret",
+                        "SecretStore",
+                        "ClusterSecretStore",
+                        "Service",
+                        "Ingress",
+                        "Deployment",
+                        "StatefulSet",
+                        "DaemonSet",
+                        "Pod",
+                    }
+                    else {}
+                )
                 nodes.append(
                     {
                         "id": rid,
@@ -209,6 +316,9 @@ class K8sLayer(Layer):
                         "pvc_claims": pvc_claims,
                         "pv_backing": pv_backing,
                         "pvc_binding": pvc_binding,
+                        "secret_refs": secret_refs,
+                        "configmap_refs": configmap_refs,
+                        "spec": spec_for_node,
                     }
                 )
                 live_index[(kind, ns, name)] = rid

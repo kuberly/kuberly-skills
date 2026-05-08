@@ -144,11 +144,25 @@ def regenerate_layer(
     traces_limit: int | None = None,
     repo_root: str | None = None,
     persist_dir: str | None = None,
+    aws_account_id: str | None = None,
+    cost_lookback_months: int | None = None,
+    compliance_required_tags: list[str] | None = None,
 ) -> dict:
     """Re-run one layer's scanner. Convenience wrapper around
     `regenerate_graph(layers=[layer])`.
+
+    Phase 7D knobs (all optional):
+      * ``aws_account_id`` / ``cost_lookback_months`` — CostLayer.
+      * ``compliance_required_tags`` — ComplianceLayer R003 input.
     """
     endpoint = build_mcp_endpoint(mcp_url, mcp_stdio)
+    extra: dict = {}
+    if aws_account_id:
+        extra["aws_account_id"] = aws_account_id
+    if cost_lookback_months:
+        extra["cost_lookback_months"] = int(cost_lookback_months)
+    if compliance_required_tags:
+        extra["compliance_required_tags"] = list(compliance_required_tags)
     return regenerate_layer_op(
         layer=layer,
         repo_root=_resolve_repo(repo_root),
@@ -159,6 +173,7 @@ def regenerate_layer(
         metrics_top_n=metrics_top_n,
         traces_window=traces_window,
         traces_limit=traces_limit,
+        extra_ctx=extra or None,
     )
 
 
