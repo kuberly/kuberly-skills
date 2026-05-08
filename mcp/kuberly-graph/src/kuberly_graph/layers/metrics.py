@@ -163,14 +163,20 @@ class MetricsLayer(Layer):
         metric_rows: list[tuple[str, int]] = []
         try:
             payload = _call_tool_sync(
-                endpoint, "query_metrics", {"query": promql}
+                endpoint,
+                "query_metrics",
+                # Send both the v0.45.1 wrapper key (``promql``) and the
+                # legacy key (``query``) so we match either flavour.
+                {"promql": promql, "query": promql},
             )
         except ConnectionError:
             raise
         except Exception as exc:
-            raise ConnectionError(
-                f"MetricsLayer query_metrics failed: {exc}"
-            ) from exc
+            if verbose:
+                print(
+                    f"  [MetricsLayer] query_metrics failed: {exc} — soft-degrade"
+                )
+            payload = {"error": str(exc)}
 
         if isinstance(payload, dict) and payload.get("error"):
             if verbose:
@@ -211,6 +217,10 @@ class MetricsLayer(Layer):
         if verbose:
             print(f"  [MetricsLayer] discovered {len(targets)} scrape targets")
 
+        # Per-metric metadata (mode=metadata) is unsupported by the
+        # ai-agent-tool wrapper — it'd just emit isError per call. Skip it
+        # when we have no metric rows; otherwise still try (some wrappers do
+        # support it) but never raise.
         meta_lookup: dict[str, dict] = {}
         if metric_rows:
             for mname, _ in metric_rows[:50]:

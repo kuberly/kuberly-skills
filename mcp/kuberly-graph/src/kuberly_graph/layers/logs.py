@@ -185,24 +185,33 @@ class LogsLayer(Layer):
             list
         )
 
+        # NOTE: live MCPs in the wild expect ``logql`` / ``since`` / ``limit``
+        # (the ai-agent-tool wrapper) — not the legacy ``query`` / ``start``.
+        # We send both so old wrappers also work; extras are tolerated since
+        # the schemas are open.
         for env in envs:
             args = {
+                "logql": _logql_for_env(env),
+                "since": window,
+                "limit": limit,
+                # back-compat names
                 "query": _logql_for_env(env),
                 "start": f"-{window}",
-                "limit": limit,
             }
             try:
                 payload = _call_tool_sync(endpoint, "query_logs", args)
             except ConnectionError:
                 raise
             except Exception as exc:
-                raise ConnectionError(
-                    f"LogsLayer query_logs(env={env}) failed: {exc}"
-                ) from exc
+                if verbose:
+                    print(
+                        f"  [LogsLayer] env={env} query_logs failed: {exc} — soft-degrade"
+                    )
+                continue
             if isinstance(payload, dict) and payload.get("error"):
                 if verbose:
                     print(
-                        f"  [LogsLayer] env={env} query_logs error: {payload['error']}"
+                        f"  [LogsLayer] env={env} query_logs error: {payload['error']} — soft-degrade"
                     )
                 continue
 

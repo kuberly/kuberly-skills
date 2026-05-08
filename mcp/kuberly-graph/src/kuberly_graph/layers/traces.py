@@ -306,26 +306,46 @@ class TracesLayer(Layer):
 
         all_spans: list[dict] = []
         traces_seen_total: set = set()
-        queries: list[tuple[str, str]] = []
+        # Two query shapes coexist in the wild:
+        #   - legacy TraceQL via {"query": "{}"}
+        #   - ai-agent-tool wrapper which requires {"service": ...} or
+        #     {"trace_id": ...} and returns isError otherwise.
+        # We try the TraceQL form first; if it errors with a "service is
+        # required"-style message we fall back to scanning per-service
+        # using existing_app_ids as the seed list.
+        queries: list[tuple[str, dict]] = []
         if envs:
             for env in envs:
-                queries.append((env, _traceql_for_env(env)))
-        else:
-            queries.append(("", "{}"))
-
-        per_query_limit = max(1, int(limit))
-
-        for env, query in queries:
-            try:
-                payload = _call_tool_sync(
-                    endpoint,
-                    "query_traces",
-                    {
-                        "query": query,
-                        "limit": per_query_limit,
-                        "start": f"-{window}",
-                    },
+                queries.append(
+                    (
+                        env,
+                        {
+                            "query": _traceql_for_env(env),
+                            "limit": max(1, int(limit)),
+                            "start": f"-{window}",
+                            "since": window,
+                        },
+                    )
                 )
+        else:
+            queries.append(
+                ("", {"query": "{}", "limit": max(1, int(limit)), "since": window})
+            )
+
+        # Per-service fallback seed.
+        seed_services: list[str] = []
+        for app_id in existing_app_ids:
+            try:
+                _, body = app_id.split(":", 1)
+                _env, name = body.split("/", 1)
+                if name and name not in seed_services:
+                    seed_services.append(name)
+            except ValueError:
+                continue
+
+        for env, args in queries:
+            try:
+                payload = _call_tool_sync(endpoint, "query_traces", args)
             except ConnectionError:
                 raise
             except Exception as exc:
@@ -335,9 +355,43 @@ class TracesLayer(Layer):
                     )
                 continue
             if isinstance(payload, dict) and payload.get("error"):
+                err_text = str(payload.get("error") or "").lower()
+                if (
+                    "service is required" in err_text
+                    or "trace_id" in err_text
+                    or "service" in err_text
+                ):
+                    if verbose:
+                        print(
+                            f"  [TracesLayer] env={env!r} wrapper requires service — "
+                            f"falling back to per-service queries (seed n={len(seed_services)})"
+                        )
+                    for svc in seed_services[:50]:
+                        try:
+                            sub = _call_tool_sync(
+                                endpoint,
+                                "query_traces",
+                                {
+                                    "service": svc,
+                                    "since": window,
+                                    "limit": max(1, int(limit)),
+                                },
+                            )
+                        except ConnectionError:
+                            raise
+                        except Exception:
+                            continue
+                        if isinstance(sub, dict) and sub.get("error"):
+                            continue
+                        for sp in _iter_trace_spans(sub):
+                            all_spans.append(sp)
+                            tid = sp.get("_trace_id") or ""
+                            if tid:
+                                traces_seen_total.add(tid)
+                    continue
                 if verbose:
                     print(
-                        f"  [TracesLayer] env={env!r} error: {payload['error']}"
+                        f"  [TracesLayer] env={env!r} error: {payload['error']} — soft-degrade"
                     )
                 continue
             spans_added = 0

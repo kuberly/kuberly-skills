@@ -34,11 +34,28 @@ def _resolve_endpoint(
 ) -> tuple[dict | None, str | None]:
     """Pick endpoint: explicit args win; else auto-discover from .mcp.json.
 
+    When ``mcp_url`` is passed explicitly we still consult ``.mcp.json`` and
+    merge any matching ``headers`` (e.g. ``Authorization: Bearer ${VAR}``) so
+    the operator doesn't have to encode the bearer in the URL. The user's
+    explicit URL still wins; only the headers piggy-back.
+
     Returns (endpoint, label) where label is a human-readable string for the
     skipped_layers note ("auto-discovered http://..." / "no live MCP found").
     """
     if mcp_url or mcp_stdio:
-        endpoint = build_mcp_endpoint(mcp_url, mcp_stdio)
+        endpoint = build_mcp_endpoint(mcp_url, mcp_stdio) or {}
+        if mcp_url and not endpoint.get("headers"):
+            discovered = discover_live_mcp(repo_root)
+            if (
+                isinstance(discovered, dict)
+                and discovered.get("url") == mcp_url
+                and discovered.get("headers")
+            ):
+                endpoint["headers"] = discovered["headers"]
+                print(
+                    "  info: merged headers from .mcp.json into explicit mcp_url endpoint",
+                    file=sys.stderr,
+                )
         return endpoint, ("explicit url" if mcp_url else "explicit stdio")
     discovered = discover_live_mcp(repo_root)
     if discovered:
@@ -174,7 +191,8 @@ def regenerate_layer(
         Soft-degrades when boto3 / AWS creds absent.
       * ``aws_region`` — defaults to ``AWS_REGION`` env / ``us-east-1``.
     """
-    endpoint = build_mcp_endpoint(mcp_url, mcp_stdio)
+    repo = _resolve_repo(repo_root)
+    endpoint, _label = _resolve_endpoint(mcp_url, mcp_stdio, repo)
     extra: dict = {}
     if aws_account_id:
         extra["aws_account_id"] = aws_account_id
@@ -194,7 +212,7 @@ def regenerate_layer(
         extra["aws_region"] = str(aws_region)
     return regenerate_layer_op(
         layer=layer,
-        repo_root=_resolve_repo(repo_root),
+        repo_root=repo,
         persist_dir=_resolve_persist(persist_dir),
         mcp_endpoint=endpoint,
         logs_window=logs_window,

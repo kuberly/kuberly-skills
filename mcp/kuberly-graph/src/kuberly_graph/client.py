@@ -7,6 +7,18 @@ Two connection modes:
 
 Hard-fails on any connection error (re-raised as ConnectionError) so callers
 can sys.exit(1) with a clean message.
+
+v0.45.1: live MCP servers in the wild (notably the ai-agent-tool ->
+kubernetes-mcp-server upstream) return tool results as kubectl plaintext
+*tables*, not JSON. The previous parser only knew JSON, so every kubectl-style
+list came back as 0 rows. This module now:
+
+  - logs ``isError=true`` instead of swallowing it as empty,
+  - parses kubectl-table TextContent into [{apiVersion, kind, metadata: {...}}]
+    items so K8sLayer / ArgoLayer can populate from the live cluster, and
+  - falls back through tool aliases (``resources_list`` ->
+    ``pods_list``/``pods_list_in_namespace``/``namespaces_list``) when the
+    primary tool returns an error like "tool not found" or RBAC-forbidden.
 """
 
 from __future__ import annotations
@@ -14,7 +26,9 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
+import re
 import shlex
+import sys
 from typing import Any, Awaitable, Callable, TypeVar
 
 
@@ -72,11 +86,30 @@ def _validate_endpoint(endpoint: dict) -> None:
         )
 
 
+def _join_text_content(content: Any) -> str:
+    """Concatenate the text of every TextContent block in `content`."""
+    if not content:
+        return ""
+    parts: list[str] = []
+    for part in content:
+        text = getattr(part, "text", None)
+        if isinstance(text, str):
+            parts.append(text)
+    return "\n".join(parts)
+
+
 def _extract_json_from_call_result(result: Any) -> Any:
-    # FastMCP wraps non-string return values in `structuredContent` (MCP
-    # ≥1.27). When present, it's the canonical result — prefer it over the
-    # text content blocks (which split list-shaped results across one
-    # TextContent per item).
+    """Best-effort JSON extraction.
+
+    Order of preference:
+      1. ``structuredContent`` (FastMCP-native dict).
+      2. JSON-decoded text content (single block or list of blocks).
+      3. Raw concatenated text (fallback for plain-text responses).
+
+    NOTE: this helper does NOT distinguish ``isError=true`` from a normal
+    text response. Callers that need that distinction must use
+    :func:`_normalize_call_result` instead.
+    """
     structured = getattr(result, "structuredContent", None)
     if isinstance(structured, dict):
         if "result" in structured and len(structured) == 1:
@@ -109,6 +142,214 @@ def _extract_json_from_call_result(result: Any) -> Any:
         except (json.JSONDecodeError, TypeError):
             return text
     return None
+
+
+def _normalize_call_result(result: Any) -> dict:
+    """Return ``{is_error, error_text, payload, raw_text}``.
+
+    - ``is_error`` mirrors ``result.isError`` from the MCP spec.
+    - ``error_text`` is the concatenated text content when ``is_error``,
+      otherwise ``""``.
+    - ``payload`` is the JSON-decoded body when parseable, else the raw text,
+      else ``None``.
+    - ``raw_text`` is the joined plaintext of every TextContent block.
+    """
+    is_error = bool(getattr(result, "isError", False))
+    raw_text = _join_text_content(getattr(result, "content", None))
+    if is_error:
+        return {
+            "is_error": True,
+            "error_text": raw_text,
+            "payload": None,
+            "raw_text": raw_text,
+        }
+    payload = _extract_json_from_call_result(result)
+    return {
+        "is_error": False,
+        "error_text": "",
+        "payload": payload,
+        "raw_text": raw_text,
+    }
+
+
+# ---------------------------------------------------------------------------
+# kubectl-table parsing
+# ---------------------------------------------------------------------------
+#
+# The ai-agent-tool MCP wraps `manusa/kubernetes-mcp-server`, which only
+# returns plaintext tables (the same shape `kubectl get -o wide` produces).
+# We rebuild minimal {apiVersion, kind, metadata} dicts from those tables so
+# downstream layers don't need to know about transport-level shapes.
+
+
+_LABELS_RE = re.compile(r"([A-Za-z0-9_./\-]+)=([^,]*)")
+
+
+def _split_columns(line: str) -> list[str]:
+    """Split a header / data line on runs of >=2 spaces.
+
+    Single-column kubectl output uses 2+ spaces between columns; tabs are
+    converted up-stream. Trailing whitespace is stripped from each cell.
+    """
+    parts = re.split(r" {2,}|\t", line.rstrip())
+    return [p.strip() for p in parts if p.strip() != ""]
+
+
+def _column_offsets(header: str, names: list[str]) -> list[int]:
+    """Return the byte offset where each column header starts in ``header``.
+
+    Used so we can recover columns whose values themselves contain
+    embedded single spaces (e.g. STATUS = "Running", but LABELS = "k1=v1,k2=v2").
+    """
+    offsets: list[int] = []
+    cursor = 0
+    for name in names:
+        idx = header.find(name, cursor)
+        if idx < 0:
+            offsets.append(cursor)
+        else:
+            offsets.append(idx)
+            cursor = idx + len(name)
+    return offsets
+
+
+def _slice_by_offsets(line: str, offsets: list[int]) -> list[str]:
+    out: list[str] = []
+    n = len(offsets)
+    for i, start in enumerate(offsets):
+        end = offsets[i + 1] if i + 1 < n else None
+        cell = line[start:end] if end is not None else line[start:]
+        out.append(cell.strip())
+    return out
+
+
+def _parse_labels(cell: str) -> dict[str, str]:
+    if not cell or cell.strip() in {"<none>", ""}:
+        return {}
+    out: dict[str, str] = {}
+    for match in _LABELS_RE.finditer(cell):
+        key, val = match.group(1), match.group(2)
+        if key:
+            out[key] = val
+    return out
+
+
+def parse_kubectl_table(
+    text: str,
+    *,
+    default_api_version: str = "",
+    default_kind: str = "",
+) -> list[dict]:
+    """Parse a kubectl-style plaintext table into [{apiVersion, kind,
+    metadata: {name, namespace, labels}}].
+
+    Supports both the namespaced shape (NAMESPACE column present) and the
+    cluster-scoped shape (no NAMESPACE column). Header is the first non-blank
+    non-comment line; "No resources found." returns []. Unknown columns are
+    ignored — we only need name / namespace / labels / apiVersion / kind to
+    build graph nodes.
+
+    `default_api_version` / `default_kind` are used when the table lacks the
+    APIVERSION / KIND columns (rare; e.g. `kubectl get -ohelp` formats).
+    """
+    if not isinstance(text, str) or not text.strip():
+        return []
+
+    # Drop lines that look like CLI noise the wrapper sometimes prepends.
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip() != ""]
+    if not lines:
+        return []
+    if lines[0].strip().startswith("No resources found"):
+        return []
+
+    header = lines[0]
+    header_cols = _split_columns(header)
+    if not header_cols:
+        return []
+    offsets = _column_offsets(header, header_cols)
+
+    name_to_idx = {h.upper(): i for i, h in enumerate(header_cols)}
+    idx_name = name_to_idx.get("NAME")
+    if idx_name is None:
+        # Not a recognisable kubectl table — bail out empty rather than
+        # mis-parse arbitrary text.
+        return []
+    idx_ns = name_to_idx.get("NAMESPACE")
+    idx_apiv = name_to_idx.get("APIVERSION")
+    idx_kind = name_to_idx.get("KIND")
+    idx_labels = name_to_idx.get("LABELS")
+    idx_status = name_to_idx.get("STATUS")
+    idx_age = name_to_idx.get("AGE")
+    idx_node = name_to_idx.get("NODE")
+
+    out: list[dict] = []
+    for raw in lines[1:]:
+        cells = _slice_by_offsets(raw, offsets)
+        if len(cells) <= idx_name:
+            continue
+        name = cells[idx_name].strip()
+        if not name or name in {"<none>", ""}:
+            continue
+        ns = cells[idx_ns].strip() if idx_ns is not None else ""
+        if ns in {"<none>"}:
+            ns = ""
+        api_version = (
+            cells[idx_apiv].strip()
+            if idx_apiv is not None and idx_apiv < len(cells)
+            else default_api_version
+        )
+        kind = (
+            cells[idx_kind].strip()
+            if idx_kind is not None and idx_kind < len(cells)
+            else default_kind
+        )
+        labels_cell = (
+            cells[idx_labels]
+            if idx_labels is not None and idx_labels < len(cells)
+            else ""
+        )
+        labels = _parse_labels(labels_cell)
+        # Map kubectl AGE column to a synthetic creationTimestamp marker so
+        # downstream code that branches on metadata.creationTimestamp doesn't
+        # see uniformly empty strings.
+        age = (
+            cells[idx_age].strip()
+            if idx_age is not None and idx_age < len(cells)
+            else ""
+        )
+        node_name = (
+            cells[idx_node].strip()
+            if idx_node is not None and idx_node < len(cells)
+            else ""
+        )
+        if node_name in {"<none>", ""}:
+            node_name = ""
+        status = (
+            cells[idx_status].strip()
+            if idx_status is not None and idx_status < len(cells)
+            else ""
+        )
+        meta: dict = {
+            "name": name,
+            "namespace": ns,
+            "labels": labels,
+            "annotations": {},
+        }
+        if age:
+            meta["age"] = age
+        spec: dict = {}
+        if node_name and (kind == "Pod" or default_kind == "Pod"):
+            spec["nodeName"] = node_name
+        out.append(
+            {
+                "apiVersion": api_version or default_api_version,
+                "kind": kind or default_kind,
+                "metadata": meta,
+                "spec": spec,
+                "status": {"phase": status} if status else {},
+            }
+        )
+    return out
 
 
 def _resources_from_payload(payload: Any) -> list[dict]:
@@ -181,12 +422,58 @@ async def _open_session(endpoint: dict, runner):
         ) from exc
 
 
+# Sentinel set used by callers that want a single warning per missing tool /
+# unavailable upstream per scan, rather than a deluge.
+class _SeenWarn:
+    def __init__(self) -> None:
+        self.seen: set[str] = set()
+
+    def once(self, key: str, msg: str) -> None:
+        if key in self.seen:
+            return
+        self.seen.add(key)
+        print(msg, file=sys.stderr)
+
+
+def _looks_like_missing_tool(error_text: str) -> bool:
+    if not error_text:
+        return False
+    s = error_text.lower()
+    return (
+        "unknown tool" in s
+        or "tool not found" in s
+        or "no tool" in s
+        or "not implemented" in s
+    )
+
+
+def _looks_like_missing_kind(error_text: str) -> bool:
+    if not error_text:
+        return False
+    s = error_text.lower()
+    return (
+        "no matches for kind" in s
+        or "could not find the requested resource" in s
+        or "the server doesn't have a resource type" in s
+    )
+
+
+def _looks_like_forbidden(error_text: str) -> bool:
+    if not error_text:
+        return False
+    return "forbidden" in error_text.lower()
+
+
 async def call_mcp_tool(endpoint: dict, tool_name: str, arguments: dict) -> Any:
     """Generic MCP tool call.
 
-    Returns the parsed JSON content of the first TextContent block, or
-    `{"error": <message>}` if the tool itself raised. Raises ConnectionError
-    on transport failure.
+    Returns:
+      - the parsed JSON content of the first TextContent block,
+      - or the raw text when the response is plain text,
+      - or ``{"error": <message>}`` when the tool itself raised /
+        ``isError=true``.
+
+    Raises ``ConnectionError`` on transport failure.
     """
 
     async def _runner(session):
@@ -194,9 +481,30 @@ async def call_mcp_tool(endpoint: dict, tool_name: str, arguments: dict) -> Any:
             result = await session.call_tool(tool_name, arguments or {})
         except Exception as exc:
             return {"error": f"tool {tool_name} failed: {exc}"}
-        return _extract_json_from_call_result(result)
+        norm = _normalize_call_result(result)
+        if norm["is_error"]:
+            err = norm["error_text"] or f"tool {tool_name} returned isError"
+            print(
+                f"  warn: MCP {tool_name}({_compact_args(arguments)}) "
+                f"returned isError=true: {err[:300]}",
+                file=sys.stderr,
+            )
+            return {"error": err}
+        return norm["payload"]
 
     return await _open_session(endpoint, _runner)
+
+
+def _compact_args(args: dict | None) -> str:
+    if not args:
+        return ""
+    items = []
+    for k, v in args.items():
+        sval = str(v)
+        if len(sval) > 60:
+            sval = sval[:57] + "..."
+        items.append(f"{k}={sval}")
+    return ",".join(items)
 
 
 def call_tool(endpoint: dict, tool_name: str, arguments: dict) -> Any:
@@ -210,33 +518,176 @@ def call_tool(endpoint: dict, tool_name: str, arguments: dict) -> Any:
     return _run_coro_sync(lambda: call_mcp_tool(endpoint, tool_name, arguments))
 
 
+async def _list_tools(session) -> set[str]:
+    try:
+        tlist = await session.list_tools()
+    except Exception as exc:
+        print(
+            f"  warn: list_tools failed: {exc} — assuming all tools present",
+            file=sys.stderr,
+        )
+        return set()
+    return {t.name for t in getattr(tlist, "tools", []) or []}
+
+
 async def fetch_live_resources(
     endpoint: dict,
     kinds: list[tuple[str, str]],
 ) -> dict[tuple[str, str], list[dict]]:
     """Connect to an MCP server and call resources_list for each
     (apiVersion, kind). Returns {(apiVersion, kind): [resource, ...]}.
-    Hard-fails on transport error.
+
+    Hard-fails on transport error, but soft-degrades on per-call MCP errors:
+    every (apiVersion, kind) that fails (missing CRD, RBAC-forbidden, or tool
+    not found) ends up with an empty list and a single stderr WARN line.
+    Plain-text kubectl tables are parsed with :func:`parse_kubectl_table`.
     """
     out: dict[tuple[str, str], list[dict]] = {}
+    warn = _SeenWarn()
 
     async def _runner(session):
+        available = await _list_tools(session)
+        if available and "resources_list" not in available:
+            warn.once(
+                "resources_list-missing",
+                "  warn: MCP does not expose 'resources_list' — falling back to "
+                "pods_list / pods_list_in_namespace / namespaces_list where possible",
+            )
+
+        has_pods_list = (not available) or ("pods_list" in available)
+        has_namespaces_list = (
+            (not available) or ("namespaces_list" in available)
+        )
+
         for api_version, kind in kinds:
+            args = {"apiVersion": api_version, "kind": kind}
             try:
-                result = await session.call_tool(
-                    "resources_list",
-                    {"apiVersion": api_version, "kind": kind},
-                )
+                result = await session.call_tool("resources_list", args)
             except Exception as exc:
-                out[(api_version, kind)] = []
-                print(f"  warn: resources_list {api_version}/{kind} failed: {exc}")
+                # tool missing or transport hiccup — try a fallback for the
+                # well-known core kinds; otherwise surface the error.
+                fallback = await _resources_list_fallback(
+                    session, api_version, kind, warn,
+                    has_pods_list=has_pods_list,
+                    has_namespaces_list=has_namespaces_list,
+                )
+                if fallback is not None:
+                    out[(api_version, kind)] = fallback
+                else:
+                    out[(api_version, kind)] = []
+                    warn.once(
+                        f"err-{api_version}/{kind}",
+                        f"  warn: resources_list({api_version}/{kind}) failed: {exc}",
+                    )
                 continue
-            payload = _extract_json_from_call_result(result)
-            out[(api_version, kind)] = _resources_from_payload(payload)
+
+            norm = _normalize_call_result(result)
+            if norm["is_error"]:
+                err = norm["error_text"]
+                if _looks_like_missing_tool(err):
+                    warn.once(
+                        "resources_list-unknown",
+                        f"  warn: 'resources_list' rejected by MCP: {err[:200]}",
+                    )
+                    fallback = await _resources_list_fallback(
+                        session, api_version, kind, warn,
+                        has_pods_list=has_pods_list,
+                        has_namespaces_list=has_namespaces_list,
+                    )
+                    out[(api_version, kind)] = fallback if fallback is not None else []
+                    continue
+                if _looks_like_missing_kind(err):
+                    warn.once(
+                        f"missing-{api_version}/{kind}",
+                        f"  warn: kind {api_version}/{kind} not present in cluster — skipping",
+                    )
+                    out[(api_version, kind)] = []
+                    continue
+                if _looks_like_forbidden(err):
+                    warn.once(
+                        f"forbidden-{api_version}/{kind}",
+                        f"  warn: RBAC forbids listing {api_version}/{kind} — skipping",
+                    )
+                    out[(api_version, kind)] = []
+                    continue
+                # Other errors — log + treat as empty.
+                warn.once(
+                    f"err-{api_version}/{kind}",
+                    f"  warn: resources_list({api_version}/{kind}) error: {err[:200]}",
+                )
+                out[(api_version, kind)] = []
+                continue
+
+            payload = norm["payload"]
+            raw_text = norm["raw_text"]
+            items: list[dict] = []
+            if isinstance(payload, list) or (
+                isinstance(payload, dict) and ("items" in payload or "metadata" in payload)
+            ):
+                items = _resources_from_payload(payload)
+            elif isinstance(raw_text, str) and raw_text.strip():
+                items = parse_kubectl_table(
+                    raw_text,
+                    default_api_version=api_version,
+                    default_kind=kind,
+                )
+            else:
+                items = []
+            out[(api_version, kind)] = items
+
         return None
 
     await _open_session(endpoint, _runner)
     return out
+
+
+async def _resources_list_fallback(
+    session,
+    api_version: str,
+    kind: str,
+    warn: _SeenWarn,
+    *,
+    has_pods_list: bool,
+    has_namespaces_list: bool,
+) -> list[dict] | None:
+    """Try a per-kind alias when ``resources_list`` is missing or rejected.
+
+    Returns a list of resource-like dicts on success, or ``None`` to signal
+    "no usable fallback exists, caller should treat as empty".
+    """
+    if api_version == "v1" and kind == "Pod" and has_pods_list:
+        try:
+            r = await session.call_tool("pods_list", {})
+        except Exception as exc:
+            warn.once("pods_list-err", f"  warn: pods_list fallback failed: {exc}")
+            return None
+        norm = _normalize_call_result(r)
+        if norm["is_error"]:
+            warn.once(
+                "pods_list-iserror",
+                f"  warn: pods_list isError: {norm['error_text'][:200]}",
+            )
+            return None
+        return parse_kubectl_table(
+            norm["raw_text"], default_api_version="v1", default_kind="Pod"
+        )
+
+    if api_version == "v1" and kind == "Namespace" and has_namespaces_list:
+        try:
+            r = await session.call_tool("namespaces_list", {})
+        except Exception as exc:
+            warn.once(
+                "namespaces_list-err", f"  warn: namespaces_list fallback failed: {exc}"
+            )
+            return None
+        norm = _normalize_call_result(r)
+        if norm["is_error"]:
+            return None
+        return parse_kubectl_table(
+            norm["raw_text"], default_api_version="v1", default_kind="Namespace"
+        )
+
+    return None
 
 
 def fetch_live_resources_sync(
@@ -255,3 +706,13 @@ def fetch_live_resources_sync(
 def call_mcp_tool_sync(endpoint: dict, tool_name: str, arguments: dict) -> Any:
     """Sync alias for :func:`call_tool` — kept for layer-side clarity."""
     return call_tool(endpoint, tool_name, arguments)
+
+
+__all__ = [
+    "call_mcp_tool",
+    "call_mcp_tool_sync",
+    "call_tool",
+    "fetch_live_resources",
+    "fetch_live_resources_sync",
+    "parse_kubectl_table",
+]

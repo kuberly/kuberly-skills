@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.45.1 — 2026-05-08
+
+Fixes the `kuberly-graph` live-layer scanners against MCP servers that
+return kubectl-style **plaintext tables** instead of JSON (notably the
+ai-agent-tool wrapper around `manusa/kubernetes-mcp-server`). v0.45.0 sent
+~30 successful HTTP 200 POSTs to the live MCP and parsed every response as
+empty, leaving every live layer (k8s/argo/logs/metrics/traces) at 0 nodes.
+After this release `regenerate_layer k8s` populates 400+ nodes against a
+real cluster and all live layers either populate or log a clear soft-degrade
+warning when the upstream they need is unavailable.
+
+- **FIX: `mcp/kuberly-graph/src/kuberly_graph/client.py`** —
+  - new `parse_kubectl_table()` reconstructs `{apiVersion, kind, metadata:
+    {name, namespace, labels, annotations}, spec, status}` records from
+    kubectl plaintext tables (single-row + multi-row, namespaced + cluster
+    scoped, with embedded comma-separated `LABELS` cells preserved as a
+    `dict[str,str]`),
+  - `fetch_live_resources()` now surfaces `isError=true` as a per-(api,kind)
+    `WARN` line on stderr instead of swallowing it as an empty list, and
+    walks tool-name fallbacks (`resources_list` -> `pods_list` /
+    `pods_list_in_namespace` / `namespaces_list`) when the primary tool is
+    rejected as `unknown tool`,
+  - `_normalize_call_result()` is the new spine — separates `is_error /
+    error_text / payload / raw_text` so each call site decides whether to
+    JSON-decode, plaintext-parse, or log-and-skip,
+  - de-duplicates "missing CRD" / "RBAC forbidden" / "tool not found"
+    warnings with a per-scan `_SeenWarn` so a 30-kind scan doesn't spam 30
+    identical errors.
+
+- **FIX: `mcp/kuberly-graph/src/kuberly_graph/layers/logs.py`** — sends both
+  the v0.45.1 `logql` / `since` argument names (the ai-agent-tool wrapper)
+  AND the legacy `query` / `start` names, so we match either flavour. Soft-
+  degrades on transport errors instead of raising.
+- **FIX: `mcp/kuberly-graph/src/kuberly_graph/layers/metrics.py`** — sends
+  both `promql` and `query`. Soft-degrades on tool error rather than
+  raising. Per-metric `mode=metadata` calls are still attempted but never
+  raise when the wrapper rejects them.
+- **FIX: `mcp/kuberly-graph/src/kuberly_graph/layers/traces.py`** — when
+  the upstream rejects TraceQL `{query: ...}` with a "service is required"
+  error, falls back to per-service `query_traces({service: <name>, since,
+  limit})` over the existing `application` nodes already in the graph
+  (caps at 50 services to bound runtime).
+- **FIX: `mcp/kuberly-graph/src/kuberly_graph/tools/regenerate.py`** —
+  `regenerate_layer` now uses `_resolve_endpoint`, matching
+  `regenerate_graph`, so when an operator passes an explicit `mcp_url`
+  whose URL also appears in `<repo_root>/.mcp.json`, we merge the `headers`
+  (e.g. `Authorization: Bearer ${VAR}`) from the file. Without this,
+  explicit-URL invocations hit `401 Unauthorized` because no bearer ever
+  attached.
+
 ## v0.45.0 — 2026-05-08
 
 Introduces a brand-new MCP service — **`kuberly-graph`** — under `mcp/kuberly-graph/`. It's a FastMCP-based Python package that builds a **44-tool, 21-layer knowledge graph** spanning IaC, live cluster, observability, security, supply chain, compliance, DNS, secrets, and cost. Backed by **LanceDB** (vector search + auto-embedding via `sentence-transformers/all-MiniLM-L6-v2`) and **rustworkx** (graph algorithms). Ships with a vanilla-JS web dashboard mounted on the same FastMCP HTTP transport. Distributed via `apm install` like every other shared service in this package — no consumer-side scripts required.
