@@ -20,7 +20,7 @@ export default function App() {
       <Header
         statsLabel={
           stats.data
-            ? `${stats.data.node_count.toLocaleString()} nodes · ${stats.data.edge_count.toLocaleString()} edges`
+            ? `${(stats.data.total_nodes ?? 0).toLocaleString()} nodes · ${(stats.data.total_edges ?? 0).toLocaleString()} edges`
             : "— nodes · — edges"
         }
       />

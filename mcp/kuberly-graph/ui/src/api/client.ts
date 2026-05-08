@@ -22,9 +22,11 @@ import type {
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
 async function getJSON<T>(path: string): Promise<T> {
+  // No `credentials: "include"` — the dashboard API has no auth surface,
+  // and browsers reject responses that combine wildcard `Access-Control-
+  // Allow-Origin: *` (the backend default) with credentials.
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { Accept: "application/json" },
-    credentials: "include",
   });
   if (!res.ok) {
     let body = "";

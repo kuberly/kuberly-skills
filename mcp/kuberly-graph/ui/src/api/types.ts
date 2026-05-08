@@ -44,21 +44,36 @@ export interface GraphResponse {
 }
 
 // /api/v1/layers — one row per layer.
+//
+// The endpoint returns objects shaped like
+//   { name, type, refresh_trigger, last_refresh, node_count, edge_count }
+// where `name` is the layer id (e.g. "code", "k8s", "aws"), and `type`
+// is the layer kind (e.g. "cold", "meta"). `last_refresh` is null when
+// the layer has never been populated.
 export interface LayerSummary {
-  layer: string;
+  name: string;
+  type: string;
+  refresh_trigger: string;
+  last_refresh: string | null;
   node_count: number;
   edge_count: number;
-  last_refresh: string;
-  refresh_trigger: string;
-  // The Python side may include other keys; keep an open record.
   [k: string]: unknown;
 }
 
 // /api/v1/stats — totals + per-layer breakdown.
+//
+// Field names match the LanceDB store's `stats()` output, which the dashboard
+// API returns verbatim: `total_nodes` / `total_edges` (not the shorter
+// `node_count` / `edge_count` you might expect from the layer summary
+// endpoint), plus a `per_layer` dict keyed by layer name with per-layer
+// node/edge counts and last_refresh.
 export interface StatsResponse {
-  node_count: number;
-  edge_count: number;
-  layers: Record<string, { node_count: number; edge_count: number }>;
+  mode: string;
+  persist_dir: string;
+  total_nodes: number;
+  total_edges: number;
+  per_layer: Record<string, { nodes: number; edges: number; last_refresh: string }>;
+  scalar_indices?: Record<string, string>;
   [k: string]: unknown;
 }
 

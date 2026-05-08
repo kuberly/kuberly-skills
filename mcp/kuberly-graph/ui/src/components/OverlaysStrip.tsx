@@ -48,14 +48,16 @@ export function OverlaysStrip({ layers, loading, error }: Props) {
   // Sort high-value layers (iac/state/k8s/docs/cue/ci_cd/apps) first,
   // others after. Mirrors the screenshot's grouping intent.
   const order = ["iac", "code", "state", "tg_state", "k8s", "docs", "cue", "ci_cd", "applications", "aws"];
-  const ranked = [...layers].sort((a, b) => {
-    const ai = order.indexOf(a.layer);
-    const bi = order.indexOf(b.layer);
-    if (ai === -1 && bi === -1) return a.layer.localeCompare(b.layer);
-    if (ai === -1) return 1;
-    if (bi === -1) return -1;
-    return ai - bi;
-  });
+  const ranked = [...layers]
+    .filter((row) => typeof row?.name === "string" && row.name.length > 0)
+    .sort((a, b) => {
+      const ai = order.indexOf(a.name);
+      const bi = order.indexOf(b.name);
+      if (ai === -1 && bi === -1) return a.name.localeCompare(b.name);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
 
   return (
     <section className="flex flex-wrap gap-2 items-center">
@@ -63,12 +65,12 @@ export function OverlaysStrip({ layers, loading, error }: Props) {
         graph layers
       </span>
       {ranked.map((row) => {
-        const cat = layerToCategory(row.layer);
+        const cat = layerToCategory(row.name);
         const color = CATEGORY_COLORS[cat] ?? "#888";
-        const label = CATEGORY_LABELS[cat] ?? row.layer;
+        const label = CATEGORY_LABELS[cat] ?? row.name;
         return (
           <span
-            key={row.layer}
+            key={row.name}
             className={clsx(
               "pill border bg-bg-card text-xs",
               "border-[var(--cat-border)]"
@@ -78,7 +80,7 @@ export function OverlaysStrip({ layers, loading, error }: Props) {
                 "--cat-border": `${color}55`,
               } as React.CSSProperties
             }
-            title={`${row.layer} · last_refresh=${row.last_refresh || "—"}`}
+            title={`${row.name} · last_refresh=${row.last_refresh || "—"}`}
           >
             <span
               className="w-2 h-2 rounded-full"
@@ -86,7 +88,7 @@ export function OverlaysStrip({ layers, loading, error }: Props) {
               aria-hidden
             />
             {label}
-            <span className="text-text-muted font-mono ml-1">{row.node_count.toLocaleString()}</span>
+            <span className="text-text-muted font-mono ml-1">{(row.node_count ?? 0).toLocaleString()}</span>
           </span>
         );
       })}
