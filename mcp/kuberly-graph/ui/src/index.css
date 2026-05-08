@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    font-family: theme('fontFamily.sans');
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+  }
+  /* Slight glow on focused interactive elements. */
+  :focus-visible {
+    outline: 2px solid theme('colors.accent.blue');
+    outline-offset: 2px;
+  }
+  /* Custom scrollbars in dark theme. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: theme('colors.bg.panel');
+  }
+  ::-webkit-scrollbar-thumb {
+    background: theme('colors.border.strong');
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: theme('colors.text.dim');
+  }
+}
+
+@layer components {
+  .pill {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+  .pill-soft {
+    @apply pill bg-bg-card text-text border border-border;
+  }
+  .kpi-card {
+    @apply flex flex-col gap-1 px-4 py-3 bg-bg-card rounded-lg border border-border;
+  }
+  .kpi-label {
+    @apply text-[10px] font-mono uppercase tracking-wider text-text-muted;
+  }
+  .kpi-value {
+    @apply text-xl font-medium text-text;
+  }
+  .arch-tile {
+    @apply relative flex flex-col gap-1 px-3 py-2.5 bg-bg-card rounded-md border border-border
+           hover:border-border-strong hover:bg-bg-hover transition-colors cursor-pointer
+           min-w-[140px];
+  }
+  .arch-tile.active {
+    @apply border-accent-blue shadow-glow;
+  }
+  .badge-count {
+    @apply absolute -top-1 -right-1 inline-flex items-center justify-center
+           min-w-[20px] h-5 px-1.5 rounded-md bg-accent-blue text-white
+           text-[11px] font-mono font-medium;
+  }
+}

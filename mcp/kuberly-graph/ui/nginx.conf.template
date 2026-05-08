@@ -1,0 +1,58 @@
+# nginx config for the kuberly-graph SPA.
+#
+# - Static SPA at /            (Vite dist/, with SPA-fallback to index.html)
+# - /api/v1/*                  → proxied to the MCP server (CORS still set
+#                                upstream by routes.py, but same-origin
+#                                here so the browser doesn't even ask)
+# - /dashboard*                → legacy path, also proxied (lets the new UI
+#                                and the old static dashboard coexist while
+#                                we migrate)
+#
+# ${KUBERLY_GRAPH_BACKEND} is templated at container start via envsubst (see
+# /docker-entrypoint.d/40-template-backend.sh).
+
+server {
+    listen 8080;
+    server_name _;
+
+    # SPA root.
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Long cache for hashed Vite assets, no cache for index.html so deploys
+    # take effect immediately.
+    location /assets/ {
+        access_log off;
+        expires 1y;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-store";
+    }
+
+    # API + legacy dashboard → backend.
+    location /api/ {
+        proxy_pass ${KUBERLY_GRAPH_BACKEND};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+
+    location /dashboard {
+        proxy_pass ${KUBERLY_GRAPH_BACKEND};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # SPA fallback. Anything not matched above is served by index.html so
+    # client-side routing works on hard reload.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
