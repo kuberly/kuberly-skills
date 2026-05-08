@@ -80,3 +80,17 @@ The kuberly-stack `ensure-apm-skills` pre-commit hook calls `sync_agents.sh` aut
 - `init_agent_session.py cleanup <name>` once the PR is open and the session is complete.
 
 The `.agents/` directory is **gitignored**; sessions are ephemeral. The protocol is documented here and in the `agent-orchestrator` skill.
+
+## MCP orchestration
+
+`kuberly-platform` can create and manage this session layout directly:
+
+```bash
+kuberly-platform call orchestrate --args '{"goal":"backend is slow in dev","environment":"main"}'
+kuberly-platform call orchestrate_status --args '{"session_id":"<session>"}'
+kuberly-platform call collect_agent_results --args '{"session_id":"<session>"}'
+```
+
+The MCP does not spawn subagents by itself. It writes graph evidence, routing,
+and per-agent task prompts into the session directory so the parent OpenCode or
+Claude process can dispatch personas safely, including parallel phases.

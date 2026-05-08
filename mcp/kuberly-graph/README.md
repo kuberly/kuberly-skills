@@ -19,6 +19,23 @@ For runtime incidents, call `troubleshoot` after `platform_index`. It reuses the
 persisted graph index and forwards to `ai-agent-tool` only when live logs,
 metrics, traces, or Kubernetes reads are needed.
 
+For multi-step work, call `orchestrate`. It wraps `platform_index`, evidence
+collection, optional live troubleshooting, and a parallel agent fanout plan. By
+default it is read-only and materializes a session under
+`.agents/prompts/<session>/` for OpenCode/Claude subagents to execute.
+
+```sh
+kuberly-platform call orchestrate --args '{"goal":"backend is slow in dev","environment":"main","namespace":"traigent-dev"}'
+```
+
+Useful orchestration helpers:
+
+- `plan_agent_fanout` — return the parallel phase DAG without writing files.
+- `graph_evidence` — return concise node/relation/semantic evidence.
+- `orchestrate_status` — inspect a `.agents/prompts/<session>/` session.
+- `orchestrate_continue` — append decisions or update session status.
+- `collect_agent_results` — read persona output files back into MCP context.
+
 ## Stack
 
 - FastMCP (`mcp.server.fastmcp.FastMCP`) for the MCP server.
@@ -90,7 +107,9 @@ consumer repo's `.mcp.json`.
 
 ## Tools
 
-platform_index, query_nodes, get_node, get_neighbors, blast_radius, shortest_path, drift,
+platform_index, orchestrate, plan_agent_fanout, graph_evidence,
+orchestrate_status, orchestrate_continue, collect_agent_results,
+query_nodes, get_node, get_neighbors, blast_radius, shortest_path, drift,
 stats, regenerate_graph, regenerate_layer, regenerate_all, list_layers,
 semantic_search, find_similar, graph_stats, find_log_anomalies,
 find_high_cardinality_metrics, find_metric_owners, find_slow_operations,
