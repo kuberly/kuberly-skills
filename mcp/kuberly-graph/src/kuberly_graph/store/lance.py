@@ -126,6 +126,12 @@ class LanceGraphStore:
         self._nodes = self._open_or_create("nodes", self._nodes_schema)
         self._edges = self._open_or_create("edges", self._edges_schema)
 
+        # Phase 8M — scalar indices on lookup-hot columns. Idempotent
+        # (replace=True). Soft-degrade if the running LanceDB version
+        # doesn't expose the API we expect; never raise.
+        self._scalar_index_status: dict[str, str] = {}
+        self._ensure_scalar_indices()
+
         self._last_refresh: dict[str, str] = {}
         meta_file = self._lance_dir / "lance_meta.json"
         # Migrate any legacy v0.51.0-or-earlier sidecar at the top level
@@ -157,6 +163,39 @@ class LanceGraphStore:
             return self._db.open_table(name)
         except Exception:
             return self._db.create_table(name, schema=schema)
+
+    def _ensure_scalar_indices(self) -> None:
+        """Create scalar indices on lookup-hot columns (idempotent).
+
+        Soft-degrade: if the LanceDB version doesn't expose
+        ``create_scalar_index`` or rejects the args (empty table, unsupported
+        index_type, etc.), record the reason and continue. Never raise — the
+        store must remain usable even without indices.
+        """
+        plan: list[tuple[str, str, str]] = [
+            # (table_attr, column, index_type)
+            ("_nodes", "id", "BTREE"),
+            ("_nodes", "type", "BITMAP"),
+            ("_nodes", "layer", "BITMAP"),
+            ("_edges", "source", "BTREE"),
+            ("_edges", "target", "BTREE"),
+        ]
+        for table_attr, column, index_type in plan:
+            tbl = getattr(self, table_attr, None)
+            if tbl is None:
+                continue
+            key = f"{table_attr}.{column}"
+            if not hasattr(tbl, "create_scalar_index"):
+                self._scalar_index_status[key] = "unsupported (no create_scalar_index)"
+                continue
+            try:
+                tbl.create_scalar_index(
+                    column, index_type=index_type, replace=True
+                )
+                self._scalar_index_status[key] = f"ok ({index_type})"
+            except Exception as exc:
+                # Common case: empty table → "no rows" / version mismatch.
+                self._scalar_index_status[key] = f"skipped: {exc}"
 
     def _persist_meta(self) -> None:
         try:
@@ -314,6 +353,9 @@ class LanceGraphStore:
             _dt.timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
         self._persist_meta()
+        # Refresh scalar indices after a layer replacement so newly-added
+        # rows are covered. Cheap when the index already exists (idempotent).
+        self._ensure_scalar_indices()
 
     # -- queries ------------------------------------------------------------
 
@@ -425,4 +467,5 @@ class LanceGraphStore:
             "total_nodes": len(self._mem_nodes),
             "total_edges": len(self._mem_edges),
             "per_layer": per_layer,
+            "scalar_indices": dict(self._scalar_index_status),
         }

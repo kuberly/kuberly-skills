@@ -1,5 +1,67 @@
 # Changelog
 
+## v0.53.0 — 2026-05-08
+
+Phase 8L + 8M — fusion super-tools + perf for scale (one PR).
+
+**Phase 8L — 5 LLM-agent-friendly fusion tools** (`tools/super.py`,
+all `@mcp.tool()`-decorated):
+
+- **NEW: `summarize_environment(env=None)`** — auto-detects single-env
+  forks and returns counts/breakdowns across IaC (modules / components /
+  applications), k8s by kind, AWS by category + service, observability
+  (log_templates / metrics / traces / scrape_targets), compliance
+  (violations / by_severity / by_rule), anomalies (count / by_layer),
+  graph health (totals + populated-layer count).
+- **NEW: `trace_data_flow(from_id, to_id, max_hops=8)`** — uses the
+  process-cached `RxGraph.shortest_path` and annotates every hop with
+  the relation that linked it to the previous node + the layer of the
+  visited node. Returns `{found, path, hop_count, mermaid}` (or
+  `{found:false, reason}`).
+- **NEW: `incident_context(symptom, service=None)`** — joins
+  `semantic_search` + `find_log_anomalies` + `find_high_cardinality_metrics`
+  + `find_error_hotspots` (and `service_one_pager` when `service` is given)
+  into one structured triage report with a derived
+  `recommended_next_steps` list. Per-probe soft-degrades.
+- **NEW: `service_lineage(service, env=None)`** — upstream callers +
+  downstream callees from trace edges, k8s data deps (`consumes_secret`
+  / `consumes_configmap` from matched pods), network exposure (matched
+  Service / Ingress with `service_type` / `is_public`), Mermaid diagram.
+- **NEW: `node_explain(node_id)`** — full metadata + neighbours grouped
+  by `in:<rel>` / `out:<rel>` (capped at 50 neighbours) + ancestor
+  derivation chain (walks inbound edges by relation priority:
+  `owned_by` → `in_cluster` → `in_vpc` → `declared_in` → `in_repo` → …)
+  + Mermaid diagram of the chain.
+
+**Phase 8M — perf**:
+
+- **LanceDB scalar indices** on `nodes.{id, type, layer}` (BTREE +
+  BITMAP × 2) and `edges.{source, target}` (BTREE × 2). Created at
+  `LanceGraphStore.__init__` and re-asserted after every
+  `replace_layer` (idempotent via `replace=True`). Soft-degrades when
+  the running LanceDB version rejects the args (empty table, etc.) —
+  status surfaces in `store.stats().scalar_indices`. Never raises.
+- **`query_nodes` cursor pagination** — new optional `cursor` + `limit`
+  kwargs. When EITHER is provided the return shape switches to
+  `{nodes, next_cursor, total_count}`; when both are omitted the legacy
+  `list[dict]` is returned (back-compat preserved). Cursor is a
+  base64-url payload encoding `{last_id, filter_hash}`.
+- **`/api/v1/graph` cursor pagination** — same shape; new optional
+  `cursor` query param + `next_cursor` + `total_count` in the response.
+- **Dashboard TTL cache** — 5-second cache on `/api/v1/meta-overview`,
+  `/api/v1/aws-services`, `/api/v1/compliance`, `/api/v1/communities`
+  (per-filter keys). Cache key embeds a global `cache_epoch` integer
+  that `regenerate_graph` / `regenerate_layer` bumps after each
+  successful refresh — stale data after refresh is impossible.
+- **RxGraph reuse** — `RxGraph.cached_from_store(store)` keeps one
+  rebuilt graph per `(persist_dir, cache_epoch)`; consecutive
+  `shortest_path` / `blast_radius` / `trace_data_flow` calls within the
+  same epoch share one graph.
+
+Tool count: 50 → **55**. Layer count unchanged at **25**. No new Python
+deps. Backwards compatible — every existing tool's signature and return
+shape is preserved.
+
 ## v0.52.0 — 2026-05-08
 
 Dashboard polish — Stack Overview + Compliance + AWS tiles + community grouping.

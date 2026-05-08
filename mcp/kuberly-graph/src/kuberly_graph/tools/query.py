@@ -3,13 +3,24 @@
 These mirror the legacy `query_nodes / get_node / get_neighbors /
 blast_radius / shortest_path / drift / stats` MCP tools. Output shapes are
 preserved byte-for-byte so existing consumers see no change.
+
+v0.53.0: ``query_nodes`` accepts optional ``cursor`` + ``limit`` kwargs.
+When EITHER is provided the return shape switches to
+``{nodes, next_cursor, total_count}``; otherwise the legacy ``list[dict]``
+is returned to keep existing callers untouched. ``shortest_path`` and
+``blast_radius`` reuse a process-wide cached ``RxGraph`` so repeated calls
+within a single ``cache_epoch`` window are cheap.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 from collections import defaultdict
 from typing import Any
 
+from ..cache import cache_epoch, ttl_get, ttl_set
 from ..layers._util import KuberlyGraph
 from ..server import SERVER_CONFIG, mcp
 
@@ -34,15 +45,55 @@ def _resolve(g: KuberlyGraph, q: str) -> str | None:
     return cands[0] if len(cands) == 1 else None
 
 
+def _filter_hash(
+    node_type: str | None, environment: str | None, name_contains: str | None
+) -> str:
+    payload = json.dumps(
+        {"t": node_type or "", "e": environment or "", "n": name_contains or ""},
+        sort_keys=True,
+    )
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _encode_cursor(last_id: str, fhash: str) -> str:
+    raw = json.dumps({"last_id": last_id, "filter_hash": fhash})
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def _decode_cursor(cursor: str | None) -> tuple[str | None, str | None]:
+    if not cursor:
+        return None, None
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode("ascii"))
+        d = json.loads(raw.decode("utf-8"))
+        return d.get("last_id"), d.get("filter_hash")
+    except Exception:
+        return None, None
+
+
 @mcp.tool()
 def query_nodes(
     node_type: str | None = None,
     environment: str | None = None,
     name_contains: str | None = None,
-) -> list[dict]:
-    """Filter graph nodes by type, environment, and/or name substring."""
+    cursor: str | None = None,
+    limit: int | None = None,
+):
+    """Filter graph nodes by type, environment, and/or name substring.
+
+    v0.53.0: optional ``cursor`` + ``limit`` enable pagination.
+
+    - When BOTH ``cursor`` and ``limit`` are ``None`` the return type is the
+      legacy ``list[dict]`` (back-compat with existing callers).
+    - When EITHER is provided, the return is
+      ``{"nodes": [...], "next_cursor": str | None, "total_count": int}``.
+      Cursor is a base64-url payload encoding ``{"last_id", "filter_hash"}``;
+      the filter hash is verified on resume so a stale cursor against a
+      different filter set falls back to the start.
+    """
+    paginated = cursor is not None or limit is not None
     g = _load_cold()
-    results: list[dict] = []
+    matches: list[dict] = []
     for _nid, node in g.nodes.items():
         if node_type and node.get("type") != node_type:
             continue
@@ -53,8 +104,40 @@ def query_nodes(
             and name_contains.lower() not in node["id"].lower()
         ):
             continue
-        results.append(node)
-    return results
+        matches.append(node)
+
+    if not paginated:
+        return matches
+
+    # Stable id ordering for cursor-based resume.
+    matches.sort(key=lambda n: n.get("id", ""))
+    fhash = _filter_hash(node_type, environment, name_contains)
+    last_id, cursor_fhash = _decode_cursor(cursor)
+    # Stale-cursor guard: if filter changed, restart from the top.
+    if cursor and cursor_fhash and cursor_fhash != fhash:
+        last_id = None
+
+    page_limit = max(1, int(limit)) if limit is not None else 100
+    start_idx = 0
+    if last_id:
+        for i, n in enumerate(matches):
+            if n.get("id", "") > last_id:
+                start_idx = i
+                break
+        else:
+            start_idx = len(matches)
+    end_idx = min(len(matches), start_idx + page_limit)
+    page = matches[start_idx:end_idx]
+    next_cursor = (
+        _encode_cursor(page[-1].get("id", ""), fhash)
+        if end_idx < len(matches) and page
+        else None
+    )
+    return {
+        "nodes": page,
+        "next_cursor": next_cursor,
+        "total_count": len(matches),
+    }
 
 
 @mcp.tool()

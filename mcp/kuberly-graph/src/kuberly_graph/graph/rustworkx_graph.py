@@ -3,6 +3,12 @@
 The store keeps payload dicts canonically; this graph layer is built
 from those dicts on demand for traversal queries (BFS, shortest path,
 blast radius).
+
+v0.53.0 — ``RxGraph.cached_from_store`` memoises a single RxGraph per
+``(persist_dir, cache_epoch)`` so repeated ``shortest_path`` /
+``blast_radius`` / ``trace_data_flow`` calls don't rebuild the rustworkx
+graph from scratch. The cache is invalidated whenever
+``regenerate_graph`` / ``regenerate_layer`` bumps the global cache epoch.
 """
 
 from __future__ import annotations
@@ -67,6 +73,35 @@ class RxGraph:
                 continue
             g.add_edge(src, tgt, dict(e))
         return g
+
+    # Process-local cache for `cached_from_store`. Key: (persist_dir, epoch).
+    _CACHE: dict[tuple[str, int], "RxGraph"] = {}
+
+    @classmethod
+    def cached_from_store(cls, store, persist_dir: str = "") -> "RxGraph":
+        """Return a process-cached RxGraph keyed by (persist_dir, cache_epoch).
+
+        The graph is rebuilt only when the cache epoch advances (via a
+        ``regenerate_*`` call) so consecutive ``shortest_path`` / BFS-style
+        queries within the same epoch share a single rustworkx graph. The
+        cache holds at most one entry per persist_dir to bound memory.
+        """
+        from ..cache import cache_epoch
+
+        epoch = cache_epoch()
+        key = (str(persist_dir), epoch)
+        cached = cls._CACHE.get(key)
+        if cached is not None:
+            return cached
+        # Drop stale entries for the same persist_dir, different epoch.
+        cls._CACHE = {
+            k: v for k, v in cls._CACHE.items() if k[0] != str(persist_dir)
+        }
+        nodes = store.all_nodes()
+        edges = store.all_edges()
+        graph = cls.from_store(nodes, edges)
+        cls._CACHE[key] = graph
+        return graph
 
     # -- introspection ------------------------------------------------------
 

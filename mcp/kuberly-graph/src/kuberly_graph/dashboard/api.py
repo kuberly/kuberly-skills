@@ -16,6 +16,9 @@ v0.47.0:
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -23,8 +26,16 @@ from urllib.parse import unquote
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from ..cache import cache_epoch, ttl_get, ttl_set
 from ..server import SERVER_CONFIG
 from ..store import open_store
+
+
+# v0.53.0 — short TTL cache for dashboard endpoints. 5s is long enough to
+# absorb a tab-reload burst, short enough that operators rarely see stale
+# data; ``regenerate_*`` bumps the cache_epoch which is part of every
+# cache key, so refresh-after-regenerate is always immediate.
+_DASHBOARD_TTL_SECONDS = 5.0
 
 
 def _persist_dir() -> Path:
@@ -220,6 +231,27 @@ def _categorize(node: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _graph_filter_hash(layer: str | None, type_: str | None) -> str:
+    payload = json.dumps({"layer": layer or "", "type": type_ or ""}, sort_keys=True)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _encode_graph_cursor(last_id: str, fhash: str) -> str:
+    raw = json.dumps({"last_id": last_id, "filter_hash": fhash})
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def _decode_graph_cursor(cursor: str | None) -> tuple[str | None, str | None]:
+    if not cursor:
+        return None, None
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode("ascii"))
+        d = json.loads(raw.decode("utf-8"))
+        return d.get("last_id"), d.get("filter_hash")
+    except Exception:
+        return None, None
+
+
 async def graph_endpoint(request: Request) -> JSONResponse:
     """Return ``{nodes:[...], edges:[...]}`` for the 3D force-graph viz.
 
@@ -227,10 +259,17 @@ async def graph_endpoint(request: Request) -> JSONResponse:
       layer  optional layer filter (matches node.layer)
       type   optional type filter (matches node.type)
       limit  cap on returned nodes (default 5000)
+      cursor optional opaque pagination token (v0.53.0)
+
+    When ``cursor`` is provided, the response also includes ``next_cursor``
+    + ``total_count`` so a frontend can stream pages of nodes for graphs
+    larger than ``limit``. Existing callers that omit ``cursor`` keep their
+    legacy capped slice behaviour.
     """
     layer = _str_param(request, "layer")
     type_ = _str_param(request, "type")
     limit = max(1, _int_param(request, "limit", 5000))
+    cursor = _str_param(request, "cursor")
 
     try:
         store = open_store(_persist_dir())
@@ -239,7 +278,8 @@ async def graph_endpoint(request: Request) -> JSONResponse:
     except Exception as exc:
         return _err(f"graph query failed: {exc}", 500)
 
-    nodes_out: list[dict] = []
+    # First pass: filter + project. Sort by id so cursor pagination is stable.
+    filtered: list[dict] = []
     seen: set[str] = set()
     for n in all_n:
         if not isinstance(n, dict):
@@ -250,7 +290,7 @@ async def graph_endpoint(request: Request) -> JSONResponse:
         if not nid or nid in seen:
             continue
         seen.add(nid)
-        nodes_out.append(
+        filtered.append(
             {
                 "id": nid,
                 "type": n.get("type", ""),
@@ -259,8 +299,29 @@ async def graph_endpoint(request: Request) -> JSONResponse:
                 "category": _categorize(n),
             }
         )
-        if len(nodes_out) >= limit:
-            break
+    filtered.sort(key=lambda r: r["id"])
+    total_count = len(filtered)
+
+    fhash = _graph_filter_hash(layer, type_)
+    last_id, cursor_fhash = _decode_graph_cursor(cursor)
+    if cursor and cursor_fhash and cursor_fhash != fhash:
+        last_id = None  # filter changed, restart
+
+    start = 0
+    if last_id:
+        for i, r in enumerate(filtered):
+            if r["id"] > last_id:
+                start = i
+                break
+        else:
+            start = len(filtered)
+    end = min(len(filtered), start + limit)
+    nodes_out = filtered[start:end]
+    next_cursor = (
+        _encode_graph_cursor(nodes_out[-1]["id"], fhash)
+        if end < len(filtered) and nodes_out
+        else None
+    )
 
     node_ids = {n["id"] for n in nodes_out}
     edges_out: list[dict] = []
@@ -281,6 +342,8 @@ async def graph_endpoint(request: Request) -> JSONResponse:
             "limit": limit,
             "node_count": len(nodes_out),
             "edge_count": len(edges_out),
+            "total_count": total_count,
+            "next_cursor": next_cursor,
             "nodes": nodes_out,
             "edges": edges_out,
         }
@@ -546,8 +609,13 @@ async def meta_overview_endpoint(_request: Request) -> JSONResponse:
 
     Sources every ``type=graph_layer`` node and the ``feeds_into`` /
     ``summarized_by`` edges produced by ``MetaLayer``. Pure GraphStore
-    read; no live calls.
+    read; no live calls. Cached for ``_DASHBOARD_TTL_SECONDS`` seconds
+    (key includes ``cache_epoch`` so a regenerate invalidates immediately).
     """
+    cache_key = ("meta-overview", str(_persist_dir()), cache_epoch())
+    cached = ttl_get(cache_key)
+    if cached is not None:
+        return _ok(cached)
     try:
         store = open_store(_persist_dir())
         all_n = store.all_nodes()
@@ -593,14 +661,14 @@ async def meta_overview_endpoint(_request: Request) -> JSONResponse:
         if s in node_ids and t in node_ids:
             links.append({"source": s, "target": t, "relation": rel})
 
-    return _ok(
-        {
-            "node_count": len(nodes),
-            "edge_count": len(links),
-            "nodes": nodes,
-            "links": links,
-        }
-    )
+    payload = {
+        "node_count": len(nodes),
+        "edge_count": len(links),
+        "nodes": nodes,
+        "links": links,
+    }
+    ttl_set(cache_key, payload, _DASHBOARD_TTL_SECONDS)
+    return _ok(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -668,7 +736,14 @@ async def aws_services_endpoint(_request: Request) -> JSONResponse:
     Walks every node where ``type`` starts with ``aws_`` (or ``id`` starts
     with ``aws:``), maps it to a service+category via ``_AWS_SERVICE_TABLE``
     and returns a category→services structure ready for tile rendering.
+
+    Cached for ``_DASHBOARD_TTL_SECONDS`` seconds; key includes
+    ``cache_epoch`` so a regenerate flushes immediately.
     """
+    cache_key = ("aws-services", str(_persist_dir()), cache_epoch())
+    cached = ttl_get(cache_key)
+    if cached is not None:
+        return _ok(cached)
     try:
         store = open_store(_persist_dir())
         rows = store.all_nodes()
@@ -723,13 +798,13 @@ async def aws_services_endpoint(_request: Request) -> JSONResponse:
             }
         )
 
-    return _ok(
-        {
-            "total_resources": total,
-            "category_count": len(service_categories),
-            "service_categories": service_categories,
-        }
-    )
+    payload = {
+        "total_resources": total,
+        "category_count": len(service_categories),
+        "service_categories": service_categories,
+    }
+    ttl_set(cache_key, payload, _DASHBOARD_TTL_SECONDS)
+    return _ok(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -748,6 +823,19 @@ async def compliance_endpoint(request: Request) -> JSONResponse:
     severity = (_str_param(request, "severity") or "").upper() or None
     rule_id = _str_param(request, "rule_id")
     limit = max(1, _int_param(request, "limit", 500))
+
+    # TTL cache key includes filter params + cache_epoch.
+    cache_key = (
+        "compliance",
+        str(_persist_dir()),
+        cache_epoch(),
+        severity,
+        rule_id,
+        limit,
+    )
+    cached = ttl_get(cache_key)
+    if cached is not None:
+        return _ok(cached)
 
     try:
         store = open_store(_persist_dir())
@@ -792,15 +880,15 @@ async def compliance_endpoint(request: Request) -> JSONResponse:
                 }
             )
 
-    return _ok(
-        {
-            "total": total,
-            "by_severity": by_severity,
-            "by_rule": by_rule,
-            "filters": {"severity": severity, "rule_id": rule_id, "limit": limit},
-            "findings": findings,
-        }
-    )
+    payload = {
+        "total": total,
+        "by_severity": by_severity,
+        "by_rule": by_rule,
+        "filters": {"severity": severity, "rule_id": rule_id, "limit": limit},
+        "findings": findings,
+    }
+    ttl_set(cache_key, payload, _DASHBOARD_TTL_SECONDS)
+    return _ok(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -835,6 +923,19 @@ async def communities_endpoint(request: Request) -> JSONResponse:
     type_ = _str_param(request, "type")
     algorithm = (_str_param(request, "algorithm") or "modularity").lower()
     limit = max(1, _int_param(request, "limit", 5000))
+
+    cache_key = (
+        "communities",
+        str(_persist_dir()),
+        cache_epoch(),
+        layer,
+        type_,
+        algorithm,
+        limit,
+    )
+    cached = ttl_get(cache_key)
+    if cached is not None:
+        return _ok(cached)
 
     try:
         import networkx as nx  # transitive dep via lance/sentence-transformers
@@ -882,18 +983,18 @@ async def communities_endpoint(request: Request) -> JSONResponse:
 
     edge_count = G.number_of_edges()
     if G.number_of_nodes() == 0:
-        return _ok(
-            {
-                "node_count": 0,
-                "edge_count": 0,
-                "community_count": 0,
-                "modularity": 0.0,
-                "algorithm": "greedy_modularity",
-                "filters": {"layer": layer, "type": type_, "limit": limit},
-                "communities": {},
-                "sizes": [],
-            }
-        )
+        empty_payload = {
+            "node_count": 0,
+            "edge_count": 0,
+            "community_count": 0,
+            "modularity": 0.0,
+            "algorithm": "greedy_modularity",
+            "filters": {"layer": layer, "type": type_, "limit": limit},
+            "communities": {},
+            "sizes": [],
+        }
+        ttl_set(cache_key, empty_payload, _DASHBOARD_TTL_SECONDS)
+        return _ok(empty_payload)
 
     try:
         comms = list(greedy_modularity_communities(G))
@@ -915,16 +1016,16 @@ async def communities_endpoint(request: Request) -> JSONResponse:
     except Exception:
         mod_score = 0.0
 
-    return _ok(
-        {
-            "node_count": G.number_of_nodes(),
-            "edge_count": edge_count,
-            "community_count": len(comms_sorted),
-            "modularity": mod_score,
-            "algorithm": "greedy_modularity",
-            "requested_algorithm": algorithm,
-            "filters": {"layer": layer, "type": type_, "limit": limit},
-            "communities": node_to_comm,
-            "sizes": sizes,
-        }
-    )
+    payload = {
+        "node_count": G.number_of_nodes(),
+        "edge_count": edge_count,
+        "community_count": len(comms_sorted),
+        "modularity": mod_score,
+        "algorithm": "greedy_modularity",
+        "requested_algorithm": algorithm,
+        "filters": {"layer": layer, "type": type_, "limit": limit},
+        "communities": node_to_comm,
+        "sizes": sizes,
+    }
+    ttl_set(cache_key, payload, _DASHBOARD_TTL_SECONDS)
+    return _ok(payload)

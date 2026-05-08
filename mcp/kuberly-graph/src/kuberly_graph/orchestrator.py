@@ -10,6 +10,7 @@ import datetime as _dt
 from pathlib import Path
 from typing import Any
 
+from .cache import bump_cache_epoch
 from .layers import (
     LAYERS,
     layer_by_name,
@@ -108,6 +109,10 @@ def regenerate_graph(
             print(f"  layer={name} nodes={len(nodes)} edges={len(edges)}")
 
     duration_ms = int((_dt.datetime.now() - start).total_seconds() * 1000)
+    # Bump shared cache epoch so dashboard TTL caches + RxGraph cache rebuild
+    # against the freshly-replaced layer set on the next read. Stale data
+    # after a refresh is unacceptable per task spec.
+    new_epoch = bump_cache_epoch()
     out = {
         "layers_run": target_names,
         "node_count": len(store.all_nodes()),
@@ -116,6 +121,7 @@ def regenerate_graph(
         "duration_ms": duration_ms,
         "mode": store.mode,
         "persist_dir": str(persist),
+        "cache_epoch": new_epoch,
     }
     return out
 

@@ -11,3 +11,4 @@ from . import image_build  # noqa: F401
 from . import meta  # noqa: F401
 from . import aws  # noqa: F401
 from . import code  # noqa: F401  (Phase 8H: TreeSitter + state-sidecar tools)
+from . import super as super_  # noqa: F401  (Phase 8L: 5 fusion super-tools)
