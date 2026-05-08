@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.48.0 — 2026-05-08
+
+AwsLayer — direct boto3 scan of ~25 AWS services. Plug-in for accounts where
+no tfstate sidecar is available (or where deployed-actual data is needed) so
+the existing `network` / `iam` / `storage` / `dns` layers (which read from
+tfstate) can be complemented by a parallel `aws:*` namespace populated
+straight from AWS APIs.
+
+- **FEAT: `kuberly_graph.layers.aws.AwsLayer`** — scrapes VPC / Subnet / SG /
+  RouteTable / NAT / IGW / VPC Endpoint, EBS / EC2, EKS clusters +
+  nodegroups, IAM roles + customer-managed policies + instance profiles,
+  S3 (with best-effort encryption / versioning / public-block / policy
+  introspection), RDS clusters + instances, ElastiCache, ECR, Lambda,
+  ALB / NLB, CloudFront, Route53 hosted zones, ACM certificates, and
+  CloudWatch log groups. Emits ~25 service-specific node types under the
+  `aws:*` id namespace plus intra-namespace edges (`in_vpc`, `in_subnet`,
+  `uses_sg`, `attached_to`, `member_of`, `executes_as`, `has_member`,
+  `attaches`, etc.). Per-service cap defaults to 1000 items
+  (`aws_per_service_limit`); `aws_services` ctx knob narrows to a subset.
+  `boto3` stays an OPTIONAL dep — the layer wraps the import + the STS
+  validation in `try/except` and soft-degrades to `(0, 0)` with an explicit
+  stderr WARN when the SDK is missing or creds are missing/expired/invalid.
+  Per-service `try/except ClientError` so one rejected describe call
+  doesn't poison the rest of the run.
+- **FEAT: `DependencyLayer` cross-namespace edges for `aws:*`** —
+  `aws:iam_role` ↔ `k8s_resource(ServiceAccount)` (relation `bound_to`,
+  matched against the SA's `eks.amazonaws.com/role-arn` annotation, full
+  IRSA chain), `aws:ec2` → `k8s_resource(Node)` (`runs_as`, matched against
+  the node's `spec.providerID`), `aws:ebs` → `k8s_resource(PersistentVolume)`
+  (`backs`, matched against `volumeHandle`), `aws:ecr_repo` → `image`
+  (`hosts`, matched on registry/repo path), `aws:eks` → `component:<env>/eks`
+  (`provisions`, best-effort cluster-name match).
+- **FEAT: 2 new MCP tools** — `aws_resource_count_by_service` (group `aws:*`
+  by `type`) and `find_aws_resources_in_vpc` (BFS over VPC-relevant edges
+  + direct `vpc_id` attribute match). Pure GraphStore queries.
+- **CHORE: `regenerate_layer` knobs** — `aws_per_service_limit` and
+  `aws_services` plumb through `extra_ctx`.
+- Tool count: **45 → 47**. Layer count: **22 → 23**.
+
 ## v0.47.0 — 2026-05-08
 
 Dashboard rewrite + persist_dir resolution fix.

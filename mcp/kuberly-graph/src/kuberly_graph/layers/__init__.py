@@ -9,6 +9,7 @@ from graphlib import TopologicalSorter
 from .alert import AlertLayer
 from .applications import ApplicationsLayer
 from .argo import ArgoLayer
+from .aws import AwsLayer
 from .base import Layer
 from .cold import ColdLayer
 from .code import CodeLayer
@@ -55,6 +56,10 @@ LAYERS: list[Layer] = [
     CostLayer(),
     AlertLayer(),
     ComplianceLayer(),
+    # Phase 8F: AwsLayer scrapes AWS services live via boto3, emitting nodes
+    # under `aws:*`. Empty-store tolerant; soft-degrades if boto3 / AWS creds
+    # are missing.
+    AwsLayer(),
     # DependencyLayer derives cross-layer edges from whatever is already in
     # the GraphStore — must run last among data layers.
     DependencyLayer(),
@@ -124,6 +129,10 @@ _LAYER_PRECEDES: dict[str, set[str]] = {
     "cost": {"state"},
     "alert": {"k8s", "metrics"},
     "compliance": {"state", "k8s", "iam", "network"},
+    # AwsLayer runs independently (no upstream layer feeds it — it scrapes
+    # AWS directly) but must complete before DependencyLayer so its
+    # `aws:*` nodes are visible for the cross-namespace wiring.
+    "aws": set(),
     # DependencyLayer reads the populated store — make every other leaf
     # layer that's part of this run finish first.
     "dependency": {
@@ -146,6 +155,7 @@ _LAYER_PRECEDES: dict[str, set[str]] = {
         "cost",
         "alert",
         "compliance",
+        "aws",
     },
     # MetaLayer summarises the entire store — depends on every other layer
     # finishing first so its node_count / edge_count fields reflect reality.
@@ -170,6 +180,7 @@ _LAYER_PRECEDES: dict[str, set[str]] = {
         "cost",
         "alert",
         "compliance",
+        "aws",
         "dependency",
     },
 }

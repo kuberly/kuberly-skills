@@ -378,6 +378,115 @@ class DependencyLayer(Layer):
             for aa in argo_by_name.get(app_name, []):
                 _emit(app_id, aa["id"], "tracked_by")
 
+        # ---- aws:* → existing graph nodes — Phase 8F extension ------------------
+        # Wire nodes emitted by AwsLayer to whatever else is in the store via
+        # structural matches: IRSA chain (aws:iam_role ← SA annotation),
+        # EC2 ↔ Node (providerID), EBS ↔ PV (volumeHandle), ECR ↔ image,
+        # EKS cluster ↔ component:<env>/eks (best-effort name match).
+        aws_nodes = [n for n in all_nodes if str(n.get("layer") or "") == "aws"]
+        if aws_nodes:
+            aws_by_id: dict[str, dict] = {n["id"]: n for n in aws_nodes if n.get("id")}
+            aws_roles_by_arn: dict[str, str] = {
+                str(n.get("arn") or ""): n["id"]
+                for n in aws_nodes
+                if n.get("type") == "aws_iam_role" and n.get("arn")
+            }
+            # EC2 instances by id (for providerID match)
+            ec2_by_iid: dict[str, str] = {
+                str(n.get("instance_id") or ""): n["id"]
+                for n in aws_nodes
+                if n.get("type") == "aws_ec2" and n.get("instance_id")
+            }
+            # EBS by id
+            ebs_by_id: dict[str, str] = {
+                str(n.get("ebs_id") or ""): n["id"]
+                for n in aws_nodes
+                if n.get("type") == "aws_ebs" and n.get("ebs_id")
+            }
+            # ECR repos by name (for image match)
+            ecr_by_name: dict[str, str] = {
+                str(n.get("repo_name") or ""): n["id"]
+                for n in aws_nodes
+                if n.get("type") == "aws_ecr_repo" and n.get("repo_name")
+            }
+            # EKS clusters by name (for component:<env>/eks match)
+            eks_by_name: dict[str, str] = {
+                str(n.get("cluster_name") or ""): n["id"]
+                for n in aws_nodes
+                if n.get("type") == "aws_eks" and n.get("cluster_name")
+            }
+
+            # IRSA: SA annotation eks.amazonaws.com/role-arn → aws:iam_role
+            for sa in k8s_by_kind.get("ServiceAccount", []):
+                annotations = sa.get("annotations") if isinstance(sa.get("annotations"), dict) else {}
+                if not isinstance(annotations, dict):
+                    continue
+                role_arn = str(
+                    annotations.get("eks.amazonaws.com/role-arn") or ""
+                )
+                if not role_arn:
+                    continue
+                target = aws_roles_by_arn.get(role_arn)
+                if target:
+                    _emit(target, sa["id"], "bound_to")
+
+            # EC2 → Node (spec.providerID = "aws:///<az>/<i-xxx>")
+            for nd in k8s_by_kind.get("Node", []):
+                pid = str(nd.get("provider_id") or "")
+                if not pid:
+                    continue
+                # extract trailing instance id
+                iid = pid.rsplit("/", 1)[-1] if pid else ""
+                if iid.startswith("i-") and iid in ec2_by_iid:
+                    _emit(ec2_by_iid[iid], nd["id"], "runs_as")
+
+            # EBS → PV (volumeHandle / awsElasticBlockStore.volumeID)
+            for pv in k8s_by_kind.get("PersistentVolume", []):
+                # K8sLayer may store volumeHandle / volume_handle / pv_volume_id
+                handle = str(
+                    pv.get("volume_handle")
+                    or pv.get("volumeHandle")
+                    or pv.get("aws_volume_id")
+                    or ""
+                )
+                if not handle:
+                    continue
+                # handle might be vol-xxx directly, or aws://az/vol-xxx
+                vol_id = handle.rsplit("/", 1)[-1] if "/" in handle else handle
+                if vol_id.startswith("vol-") and vol_id in ebs_by_id:
+                    _emit(ebs_by_id[vol_id], pv["id"], "backs")
+
+            # ECR → image (registry/repo match)
+            for img in nodes_by_type.get("image", []):
+                ref = str(img.get("full_ref") or img.get("label") or "")
+                if not ref or ".dkr.ecr." not in ref:
+                    continue
+                # registry/repo[:tag][@digest] — extract repo path after first '/'
+                try:
+                    _registry, rest = ref.split("/", 1)
+                    repo = rest.split("@", 1)[0].split(":", 1)[0]
+                except Exception:
+                    continue
+                if repo in ecr_by_name:
+                    _emit(ecr_by_name[repo], img["id"], "hosts")
+
+            # EKS cluster → component:<env>/eks (best-effort, by cluster name)
+            for cluster_name, eks_id in eks_by_name.items():
+                # try component:<env>/eks where env contains the cluster name
+                # or env equals it. Multiple components may match.
+                for comp in nodes_by_type.get("component", []):
+                    cid = str(comp.get("id") or "")
+                    if not cid.endswith("/eks"):
+                        continue
+                    # id format: component:<env>/<module>
+                    try:
+                        _prefix, body = cid.split(":", 1)
+                        env_part = body.split("/", 1)[0]
+                    except ValueError:
+                        continue
+                    if env_part == cluster_name or cluster_name in env_part or env_part in cluster_name:
+                        _emit(eks_id, cid, "provisions")
+
         # ---- module → resource (state_owns) — best-effort, dedup vs StateLayer.
         existing_state_owns: set[tuple[str, str]] = {
             (str(e.get("source") or ""), str(e.get("target") or ""))

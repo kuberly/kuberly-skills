@@ -169,6 +169,8 @@ def regenerate_layer(
     github_token: str | None = None,
     enable_ecr_enrichment: bool | None = None,
     aws_region: str | None = None,
+    aws_per_service_limit: int | None = None,
+    aws_services: list[str] | None = None,
 ) -> dict:
     """Re-run one layer's scanner. Convenience wrapper around
     `regenerate_graph(layers=[layer])`.
@@ -210,6 +212,10 @@ def regenerate_layer(
         extra["enable_ecr_enrichment"] = bool(enable_ecr_enrichment)
     if aws_region:
         extra["aws_region"] = str(aws_region)
+    if aws_per_service_limit:
+        extra["aws_per_service_limit"] = int(aws_per_service_limit)
+    if aws_services:
+        extra["aws_services"] = list(aws_services)
     return regenerate_layer_op(
         layer=layer,
         repo_root=repo,
