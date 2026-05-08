@@ -21,7 +21,97 @@ DEFAULT_K8S_KINDS: list[tuple[str, str]] = [
     ("karpenter.sh/v1", "NodeClaim"),
     ("karpenter.sh/v1", "NodePool"),
     ("karpenter.k8s.aws/v1", "EC2NodeClass"),
+    # Storage — fed downstream by StorageLayer (PVC→PV→EBS/EFS chains)
+    # and by DependencyLayer (Pod→PVC mount edges).
+    ("v1", "PersistentVolume"),
+    ("v1", "PersistentVolumeClaim"),
+    ("storage.k8s.io/v1", "StorageClass"),
 ]
+
+
+def _extract_container_images(spec: dict) -> list[str]:
+    """Return distinct image refs declared on the (init+main) containers of a
+    Pod-template-shaped spec. Defensive against partial specs.
+    """
+    if not isinstance(spec, dict):
+        return []
+    # Workload kinds nest pod spec under spec.template.spec; Pod has it directly.
+    pod_spec = spec
+    template = spec.get("template")
+    if isinstance(template, dict) and isinstance(template.get("spec"), dict):
+        pod_spec = template["spec"]
+    images: list[str] = []
+    seen: set[str] = set()
+    for key in ("initContainers", "containers", "ephemeralContainers"):
+        items = pod_spec.get(key)
+        if not isinstance(items, list):
+            continue
+        for c in items:
+            if not isinstance(c, dict):
+                continue
+            img = c.get("image")
+            if isinstance(img, str) and img and img not in seen:
+                seen.add(img)
+                images.append(img)
+    return images
+
+
+def _extract_pod_volume_claims(spec: dict) -> list[str]:
+    """Return PVC names referenced from a Pod-template-shaped spec."""
+    if not isinstance(spec, dict):
+        return []
+    pod_spec = spec
+    template = spec.get("template")
+    if isinstance(template, dict) and isinstance(template.get("spec"), dict):
+        pod_spec = template["spec"]
+    vols = pod_spec.get("volumes")
+    if not isinstance(vols, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in vols:
+        if not isinstance(v, dict):
+            continue
+        pvc = v.get("persistentVolumeClaim")
+        if isinstance(pvc, dict):
+            name = pvc.get("claimName")
+            if isinstance(name, str) and name and name not in seen:
+                seen.add(name)
+                out.append(name)
+    return out
+
+
+def _extract_pv_backing(spec: dict) -> dict:
+    """Return a flat dict describing a PV's backing storage so StorageLayer
+    can match it to TF-state EBS/EFS resources without re-parsing nested specs.
+    """
+    if not isinstance(spec, dict):
+        return {}
+    out: dict = {}
+    csi = spec.get("csi")
+    if isinstance(csi, dict):
+        if isinstance(csi.get("driver"), str):
+            out["csi_driver"] = csi["driver"]
+        if isinstance(csi.get("volumeHandle"), str):
+            out["csi_volume_handle"] = csi["volumeHandle"]
+    ebs = spec.get("awsElasticBlockStore")
+    if isinstance(ebs, dict) and isinstance(ebs.get("volumeID"), str):
+        out["aws_ebs_volume_id"] = ebs["volumeID"]
+    sc = spec.get("storageClassName")
+    if isinstance(sc, str):
+        out["storage_class_name"] = sc
+    return out
+
+
+def _extract_pvc_binding(spec: dict) -> dict:
+    if not isinstance(spec, dict):
+        return {}
+    out: dict = {}
+    if isinstance(spec.get("volumeName"), str):
+        out["volume_name"] = spec["volumeName"]
+    if isinstance(spec.get("storageClassName"), str):
+        out["storage_class_name"] = spec["storageClassName"]
+    return out
 
 
 class K8sLayer(Layer):
@@ -80,6 +170,25 @@ class K8sLayer(Layer):
                 provider_id = ""
                 if kind == "Node" and isinstance(spec, dict):
                     provider_id = spec.get("providerID") or ""
+                # Capture image refs and PVC references on workload kinds so
+                # ImageBuildLayer + StorageLayer + DependencyLayer can read them
+                # off the persisted node without re-fetching live data.
+                images: list[str] = []
+                pvc_claims: list[str] = []
+                if kind in {"Deployment", "StatefulSet", "DaemonSet", "Job", "ReplicaSet", "Pod"}:
+                    images = _extract_container_images(spec)
+                    pvc_claims = _extract_pod_volume_claims(spec)
+                # Storage — capture binding/backing fields so StorageLayer can
+                # do PVC→PV and PV→EBS/EFS matching.
+                pv_backing: dict = {}
+                pvc_binding: dict = {}
+                annotations = (
+                    meta.get("annotations") if isinstance(meta.get("annotations"), dict) else {}
+                )
+                if kind == "PersistentVolume":
+                    pv_backing = _extract_pv_backing(spec)
+                if kind == "PersistentVolumeClaim":
+                    pvc_binding = _extract_pvc_binding(spec)
                 nodes.append(
                     {
                         "id": rid,
@@ -91,10 +200,15 @@ class K8sLayer(Layer):
                         "name": name,
                         "creation_timestamp": meta.get("creationTimestamp", ""),
                         "labels": labels,
+                        "annotations": annotations,
                         "owner_references": owner_refs,
                         "node_name": node_name,
                         "node_class_ref": node_class_ref,
                         "provider_id": provider_id,
+                        "container_images": images,
+                        "pvc_claims": pvc_claims,
+                        "pv_backing": pv_backing,
+                        "pvc_binding": pvc_binding,
                     }
                 )
                 live_index[(kind, ns, name)] = rid

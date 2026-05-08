@@ -191,6 +191,11 @@ def list_layers_summary(persist_dir: str = ".kuberly") -> list[dict]:
         "logs": "stub",
         "metrics": "stub",
         "traces": "stub",
+        # Phase 7B — structural extractors over already-stored data.
+        "network": "derived",
+        "iam": "derived",
+        "image_build": "derived",
+        "storage": "derived",
         "dependency": "meta",
     }
     out: list[dict] = []

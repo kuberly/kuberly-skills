@@ -294,6 +294,23 @@ class DependencyLayer(Layer):
                     for metric_id in scrape_to_metrics.get(st["id"], []):
                         _emit(nd["id"], metric_id, "exposes")
 
+        # ---- Pod → PVC (mounts) — Phase 7B extension ----------------------------
+        # K8sLayer captures pvc_claims on pod-template kinds (Deployment / Pod /
+        # etc.). Wire each one to the matching PVC k8s_resource node when both
+        # ends exist in the store.
+        for pod in k8s_by_kind.get("Pod", []):
+            ns = str(pod.get("namespace") or "")
+            claims = pod.get("pvc_claims") or []
+            if not isinstance(claims, list):
+                continue
+            for claim_name in claims:
+                if not isinstance(claim_name, str) or not claim_name:
+                    continue
+                pvc_node = k8s_by_id.get(("PersistentVolumeClaim", ns, claim_name))
+                if pvc_node is None:
+                    continue
+                _emit(pod["id"], pvc_node["id"], "mounts")
+
         # ---- rendered_resource → k8s_resource ------------------------------------
         for rr in nodes_by_type.get("rendered_resource", []):
             kind = str(rr.get("kind") or "")
