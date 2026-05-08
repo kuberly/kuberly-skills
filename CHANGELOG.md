@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.55.1 — 2026-05-08
+
+Patch — `refresh_kuberly_overlays.sh` ran the static graph FIRST and the
+overlay producers (state / k8s / docs) AFTER. Because the MCP boot path
+`load_graph_cached` reads only `.kuberly/graph.json` and never re-scans
+overlays, the cached graph never contained any of the overlay-derived
+nodes — making `query_resources`, `query_k8s`, and `find_docs` return 0
+even when the overlay JSON files were on disk and visible to
+`graph_index`.
+
+- **Reorder layers in `scripts/refresh_kuberly_overlays.sh`**: state
+  (1/4) → k8s (2/4) → docs (3/4) → static graph (4/4). The static
+  graph now consumes the three overlay files when it runs, baking
+  resource / k8s / doc nodes into `graph.json` so the cached load on
+  the next MCP start sees them.
+- **Verified on traigent-iac**: graph.json grew from 92 → 622 nodes
+  (469 resources + 26 docs + 35 state-derived components) once the
+  ordering was correct. Same producers, same overlays — just the
+  bake-in step on the right side.
+- Header comment in the script spells out the dependency: "static is
+  the sealed cache; overlays must exist on disk before it runs."
+
+No producer or schema changes. Pure ordering fix in the wrapper.
+
 ## v0.55.0 — 2026-05-08
 
 Adds a single-entrypoint overlay refresh script. The kuberly-platform

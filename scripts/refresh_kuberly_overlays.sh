@@ -7,38 +7,45 @@
 # once per fresh clone (or when graphs go stale) restores the full
 # cross-layer view that powers query_resources / query_k8s / find_docs.
 #
+# IMPORTANT: order matters. The static graph (graph.json) is the sealed
+# cache the MCP loads at boot — `load_from_cache` does NOT re-scan
+# overlays. So state / k8s / docs must be on disk BEFORE we regenerate
+# graph.json, otherwise their nodes never enter the cache and the three
+# query tools return 0.
+#
 # Layers (each is independent — failures soft-stop the layer, not the run):
 #
-#   1. static (.kuberly/graph.json)
-#        Producer:   mcp/kuberly-platform/kuberly_platform.py generate
-#        Needs:      nothing (reads on-disk Terragrunt + JSON sidecars)
-#        Always run.
-#
-#   2. state  (.kuberly/state_overlay_<env>.json)
+#   1. state  (.kuberly/state_overlay_<env>.json)
 #        Producer:   mcp/kuberly-platform/state_graph.py generate-all --resources
 #        Needs:      AWS creds with s3:Get/List on the Terragrunt state bucket
 #                    (use `aws sso login` first; AWS_PROFILE honored)
 #        Skip with:  --no-state, or set NO_STATE=1, or no AWS creds detected
 #
-#   3. k8s    (.kuberly/k8s_overlay_<env>.json, one per env)
+#   2. k8s    (.kuberly/k8s_overlay_<env>.json, one per env)
 #        Producer:   mcp/kuberly-platform/k8s_graph.py generate --env <env>
 #        Needs:      kubectl context that talks to that env's cluster
 #                    (envs are discovered from components/<env>/shared-infra.json)
 #        Skip with:  --no-k8s, or set NO_K8S=1, or no kubeconfig
-#        Per-env:    if `--context <name>-${env}` (or current context) can't
-#                    reach the apiserver, the env is skipped, not failed
+#        Per-env:    if `--context <env>` (or current context) can't reach
+#                    the apiserver, the env is skipped, not failed
 #
-#   4. docs   (.kuberly/docs_overlay.json)
+#   3. docs   (.kuberly/docs_overlay.json)
 #        Producer:   mcp/kuberly-platform/docs_graph.py generate
 #        Needs:      nothing — semantic embeddings only if KUBERLY_DOCS_EMBED=openai
 #        Skip with:  --no-docs
 #
+#   4. static (.kuberly/graph.json) — RUNS LAST, consumes the three above
+#        Producer:   mcp/kuberly-platform/kuberly_platform.py generate
+#        Needs:      nothing (reads on-disk Terragrunt + JSON sidecars +
+#                    the overlays produced by layers 1–3)
+#        Always run.
+#
 # Flags:
 #   --full           force rescan, ignore incremental caches (state + docs)
-#   --no-state       skip layer 2
-#   --no-k8s         skip layer 3
-#   --no-docs        skip layer 4
-#   --env <name>     only refresh the named env in layers 2 and 3
+#   --no-state       skip layer 1
+#   --no-k8s         skip layer 2
+#   --no-docs        skip layer 3
+#   --env <name>     only refresh the named env in layers 1 and 2
 #   --modules <csv>  passed through to state_graph (allowlist for --resources)
 #   -h | --help      show this help
 #
@@ -98,13 +105,6 @@ note() { printf '\033[1;34m[overlays]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[overlays]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m[overlays]\033[0m %s\n' "$*"; }
 
-# ---------------------------------------------------------------------------
-# Layer 1 — static graph
-# ---------------------------------------------------------------------------
-note "1/4 static graph (.kuberly/graph.json)"
-"$PY" "$PKG/kuberly_platform.py" generate "$REPO_ROOT" -o "$OVERLAY_DIR" >/dev/null
-ok "    -> .kuberly/graph.json refreshed"
-
 # Discover envs once from components/ (canonical signal: shared-infra.json).
 discover_envs() {
     if [[ -n "$ONLY_ENV" ]]; then
@@ -119,12 +119,12 @@ discover_envs() {
 }
 
 # ---------------------------------------------------------------------------
-# Layer 2 — state overlay (AWS creds required)
+# Layer 1 — state overlay (AWS creds required)
 # ---------------------------------------------------------------------------
 if [[ "$NO_STATE" == "1" ]]; then
-    warn "2/4 state overlay skipped (--no-state / NO_STATE=1)"
+    warn "1/4 state overlay skipped (--no-state / NO_STATE=1)"
 else
-    note "2/4 state overlay (.kuberly/state_overlay_<env>.json)"
+    note "1/4 state overlay (.kuberly/state_overlay_<env>.json)"
     if ! command -v aws >/dev/null 2>&1; then
         warn "    aws CLI not found — skipping state layer"
     elif ! aws sts get-caller-identity >/dev/null 2>&1; then
@@ -141,12 +141,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Layer 3 — k8s overlay (kubectl context required, per env)
+# Layer 2 — k8s overlay (kubectl context required, per env)
 # ---------------------------------------------------------------------------
 if [[ "$NO_K8S" == "1" ]]; then
-    warn "3/4 k8s overlay skipped (--no-k8s / NO_K8S=1)"
+    warn "2/4 k8s overlay skipped (--no-k8s / NO_K8S=1)"
 else
-    note "3/4 k8s overlay (.kuberly/k8s_overlay_<env>.json)"
+    note "2/4 k8s overlay (.kuberly/k8s_overlay_<env>.json)"
     if ! command -v kubectl >/dev/null 2>&1; then
         warn "    kubectl not found — skipping k8s layer"
     else
@@ -173,12 +173,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Layer 4 — docs overlay
+# Layer 3 — docs overlay
 # ---------------------------------------------------------------------------
 if [[ "$NO_DOCS" == "1" ]]; then
-    warn "4/4 docs overlay skipped (--no-docs / NO_DOCS=1)"
+    warn "3/4 docs overlay skipped (--no-docs / NO_DOCS=1)"
 else
-    note "4/4 docs overlay (.kuberly/docs_overlay.json)"
+    note "3/4 docs overlay (.kuberly/docs_overlay.json)"
     DOCS_ARGS=("generate")
     [[ "$FULL" == "1" ]] && DOCS_ARGS+=("--full")
     [[ -n "${KUBERLY_DOCS_EMBED:-}" ]] && DOCS_ARGS+=("--embed")
@@ -188,5 +188,13 @@ else
         warn "    docs_graph errored, overlay may be stale"
     fi
 fi
+
+# ---------------------------------------------------------------------------
+# Layer 4 — static graph (LAST: bakes the overlays above into graph.json,
+# which is the sealed cache the MCP loads at boot).
+# ---------------------------------------------------------------------------
+note "4/4 static graph (.kuberly/graph.json)"
+"$PY" "$PKG/kuberly_platform.py" generate "$REPO_ROOT" -o "$OVERLAY_DIR" >/dev/null
+ok "    -> .kuberly/graph.json refreshed"
 
 ok "done — restart the MCP server to pick up new overlays"
