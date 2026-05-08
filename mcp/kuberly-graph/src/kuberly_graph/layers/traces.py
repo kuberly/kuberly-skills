@@ -95,7 +95,30 @@ def _iter_otlp_resource_spans(rs_list, default_trace_id: str):
                 yield sp
 
 
+def _maybe_unwrap_text_payload(payload):
+    """Phase 8H: the ai-agent-tool wrapper returns Tempo/Loki responses as
+    plain text prefixed with ``[Tempo HTTP /api/search ...]\\n<json>`` or
+    similar. When ``payload`` is a string we strip the leading bracket-tag
+    line and try JSON-decoding the rest.
+    """
+    import json as _json
+    if not isinstance(payload, str):
+        return payload
+    text = payload.strip()
+    if not text:
+        return payload
+    # Strip a leading bracket-tag line.
+    if text.startswith("[") and "\n" in text:
+        nl = text.find("\n")
+        text = text[nl + 1 :].strip()
+    try:
+        return _json.loads(text)
+    except Exception:
+        return payload
+
+
 def _iter_trace_spans(payload):
+    payload = _maybe_unwrap_text_payload(payload)
     if not payload:
         return
     if isinstance(payload, dict):
@@ -118,6 +141,36 @@ def _iter_trace_spans(payload):
                             sp = dict(sp)
                             sp["_trace_id"] = trace_id
                             yield sp
+                # Tempo /api/search returns ``spanSet.spans`` with
+                # ``attributes`` as a list of {key, value: {stringValue}}
+                # OTLP-ish dicts. Normalise to the shape ``_aggregate_traces``
+                # expects.
+                span_set = tr.get("spanSet") or {}
+                root_svc = (
+                    tr.get("rootServiceName")
+                    or tr.get("root_service_name")
+                    or ""
+                )
+                root_op = (
+                    tr.get("rootTraceName")
+                    or tr.get("root_trace_name")
+                    or ""
+                )
+                if isinstance(span_set, dict):
+                    for sp in span_set.get("spans") or []:
+                        if not isinstance(sp, dict):
+                            continue
+                        sp = dict(sp)
+                        sp["_trace_id"] = trace_id
+                        # Hoist root-trace service/op into resource attrs so
+                        # _span_service_name picks them up.
+                        attrs_dict = _otlp_attrs_to_dict(sp.get("attributes") or [])
+                        if root_svc and "service.name" not in attrs_dict:
+                            attrs_dict["service.name"] = root_svc
+                        sp["_resource_attrs"] = attrs_dict
+                        if root_op and not sp.get("name"):
+                            sp["name"] = root_op
+                        yield sp
                 rs_list = tr.get("resourceSpans") or tr.get("batches") or []
                 yield from _iter_otlp_resource_spans(rs_list, trace_id)
             return
@@ -306,42 +359,107 @@ class TracesLayer(Layer):
 
         all_spans: list[dict] = []
         traces_seen_total: set = set()
-        # Two query shapes coexist in the wild:
-        #   - legacy TraceQL via {"query": "{}"}
-        #   - ai-agent-tool wrapper which requires {"service": ...} or
-        #     {"trace_id": ...} and returns isError otherwise.
-        # We try the TraceQL form first; if it errors with a "service is
-        # required"-style message we fall back to scanning per-service
-        # using existing_app_ids as the seed list.
-        queries: list[tuple[str, dict]] = []
-        if envs:
-            for env in envs:
-                queries.append(
-                    (
-                        env,
-                        {
-                            "query": _traceql_for_env(env),
-                            "limit": max(1, int(limit)),
-                            "start": f"-{window}",
-                            "since": window,
-                        },
-                    )
-                )
-        else:
-            queries.append(
-                ("", {"query": "{}", "limit": max(1, int(limit)), "since": window})
-            )
 
-        # Per-service fallback seed.
+        # Phase 8H: Tempo MCP wrappers in production reject the legacy TraceQL
+        # ``query={...}`` shape with "either trace_id or service is required".
+        # Skip the TraceQL form entirely and discover services first; then
+        # query traces per-service. Discovery order:
+        #   1. application:* node names (existing_app_ids) — tightest fit.
+        #   2. Tempo-derived span metrics via query_metrics.
+        #   3. k8s_resource(Service) names already in the store.
+        # If every discovery path is empty we fall back to the legacy
+        # ``query={}`` once just to surface the upstream error.
         seed_services: list[str] = []
+        seen_seed: set[str] = set()
         for app_id in existing_app_ids:
             try:
                 _, body = app_id.split(":", 1)
                 _env, name = body.split("/", 1)
-                if name and name not in seed_services:
-                    seed_services.append(name)
             except ValueError:
                 continue
+            if name and name not in seen_seed:
+                seen_seed.add(name)
+                seed_services.append(name)
+
+        if not seed_services:
+            # Fallback A: ask Prometheus for service names from spanmetrics.
+            try:
+                pm = _call_tool_sync(
+                    endpoint,
+                    "query_metrics",
+                    {
+                        "promql": (
+                            'count by (service_name) '
+                            '(traces_spanmetrics_calls_total)'
+                        ),
+                        "query": (
+                            'count by (service_name) '
+                            '(traces_spanmetrics_calls_total)'
+                        ),
+                    },
+                )
+            except Exception:
+                pm = None
+            if isinstance(pm, dict) and pm.get("data"):
+                results = (pm.get("data") or {}).get("result") or []
+                if isinstance(results, list):
+                    for entry in results:
+                        if not isinstance(entry, dict):
+                            continue
+                        labels = entry.get("metric") or {}
+                        svc = (
+                            labels.get("service_name")
+                            or labels.get("service")
+                            or labels.get("__name__")
+                            or ""
+                        )
+                        if svc and svc not in seen_seed:
+                            seen_seed.add(svc)
+                            seed_services.append(str(svc))
+
+        if not seed_services:
+            # Fallback B: existing k8s_resource(Service) nodes in the store.
+            store = ctx.get("graph_store")
+            if store is not None:
+                try:
+                    for n in store.all_nodes():
+                        if n.get("kind") != "Service":
+                            continue
+                        sname = n.get("name") or ""
+                        if not sname:
+                            continue
+                        if sname in seen_seed:
+                            continue
+                        seen_seed.add(sname)
+                        seed_services.append(str(sname))
+                except Exception:
+                    pass
+
+        if verbose:
+            print(
+                f"  [TracesLayer] discovered {len(seed_services)} candidate services "
+                f"(first 5: {seed_services[:5]})"
+            )
+
+        # Build per-service queries.
+        queries: list[tuple[str, dict]] = []
+        for svc in seed_services[:200]:
+            queries.append(
+                (
+                    svc,
+                    {
+                        "service": svc,
+                        "since": window,
+                        "limit": max(1, int(limit)),
+                    },
+                )
+            )
+        if not queries:
+            # Last-ditch: TraceQL with no filter so the operator sees the
+            # actual upstream error in stderr.
+            queries.append(
+                ("", {"query": "{}", "limit": max(1, int(limit)), "since": window})
+            )
 
         for env, args in queries:
             try:

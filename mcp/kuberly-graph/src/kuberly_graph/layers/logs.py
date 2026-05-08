@@ -117,8 +117,69 @@ def _logql_for_env(env: str) -> str:
     )
 
 
+def _logql_fallbacks(env: str, namespace_seed: list[str]) -> list[str]:
+    """Phase 8H: Loki upstreams in the wild are flaky about the exact label
+    set. We try a chain — narrow first, broad last — and return the first
+    response that actually has lines.
+    """
+    out: list[str] = [_logql_for_env(env)]
+    out.append(f'{{namespace="{env}"}}')
+    # Per the user statement, ai-agent-tool runs in its own namespace. Pull
+    # any namespace seed (from k8s_resource(Pod) discovery) and probe each.
+    for ns in namespace_seed:
+        out.append(f'{{namespace="{ns}"}}')
+    out.append('{job=~".+"}')
+    out.append('{app=~".+"}')
+    return out
+
+
+def _parse_logcli_text(text: str):
+    """Phase 8H: ai-agent-tool wraps Loki responses with a tag line
+    ``[Loki via logcli (no upstream MCP)]\\n<one line per log entry>``.
+    Each line is roughly ``<RFC3339Z> {labels=...} <raw>``. Yield
+    ``(stream_dict, ts, raw)`` tuples mirroring the JSON shape callers expect.
+    """
+    import re as _re
+
+    if not isinstance(text, str):
+        return
+    body = text.strip()
+    if not body:
+        return
+    if body.startswith("[") and "\n" in body:
+        body = body[body.find("\n") + 1 :]
+    label_re = _re.compile(r"\{([^}]*)\}")
+    ts_re = _re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)")
+    pair_re = _re.compile(r'(\w[\w.-]*)="([^"]*)"|(\w[\w.-]*)=([^,\s}]+)')
+    for raw_line in body.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        ts_m = ts_re.match(line)
+        if not ts_m:
+            continue
+        ts = ts_m.group(1)
+        rest = line[ts_m.end() :].lstrip()
+        labels: dict[str, str] = {}
+        if rest.startswith("{"):
+            lab_m = label_re.match(rest)
+            if lab_m:
+                lab_body = lab_m.group(1)
+                rest = rest[lab_m.end() :].lstrip()
+                for m in pair_re.finditer(lab_body):
+                    k = m.group(1) or m.group(3)
+                    v = m.group(2) or m.group(4) or ""
+                    if k:
+                        labels[k] = v
+        yield labels, ts, rest
+
+
 def _iter_log_streams(payload):
     if payload is None:
+        return
+    # Phase 8H: text-wrapped logcli output (ai-agent-tool wrapper).
+    if isinstance(payload, str):
+        yield from _parse_logcli_text(payload)
         return
     if isinstance(payload, dict):
         data = payload.get("data") or payload.get("result") or payload
@@ -189,31 +250,73 @@ class LogsLayer(Layer):
         # (the ai-agent-tool wrapper) — not the legacy ``query`` / ``start``.
         # We send both so old wrappers also work; extras are tolerated since
         # the schemas are open.
-        for env in envs:
-            args = {
-                "logql": _logql_for_env(env),
-                "since": window,
-                "limit": limit,
-                # back-compat names
-                "query": _logql_for_env(env),
-                "start": f"-{window}",
-            }
+
+        # Phase 8H: pull namespace seeds from any k8s_resource(Pod/Service) we
+        # already have in the store so the fallback chain covers application
+        # namespaces (e.g. ``ai-agent-tool``) the env-label query misses.
+        namespace_seed: list[str] = []
+        seen_ns: set[str] = set()
+        store = ctx.get("graph_store")
+        if store is not None:
             try:
-                payload = _call_tool_sync(endpoint, "query_logs", args)
-            except ConnectionError:
-                raise
-            except Exception as exc:
+                for n in store.all_nodes():
+                    if n.get("type") != "k8s_resource":
+                        continue
+                    ns = str(n.get("namespace") or "").strip()
+                    if not ns or ns in seen_ns or ns in {"cluster", "kube-system"}:
+                        continue
+                    seen_ns.add(ns)
+                    namespace_seed.append(ns)
+            except Exception:
+                pass
+
+        for env in envs:
+            forms = _logql_fallbacks(env, namespace_seed)
+            payload = None
+            chosen_form = ""
+            last_err = ""
+            for logql in forms:
+                args = {
+                    "logql": logql,
+                    "since": window,
+                    "limit": limit,
+                    # back-compat names
+                    "query": logql,
+                    "start": f"-{window}",
+                }
+                try:
+                    payload = _call_tool_sync(endpoint, "query_logs", args)
+                except ConnectionError:
+                    raise
+                except Exception as exc:
+                    last_err = str(exc)
+                    payload = None
+                    continue
+                if isinstance(payload, dict) and payload.get("error"):
+                    last_err = str(payload.get("error"))
+                    payload = None
+                    continue
+                # Did this form actually return any lines?
+                has_lines = False
+                for _stream, _ts, _raw in _iter_log_streams(payload):
+                    has_lines = True
+                    break
+                if has_lines:
+                    chosen_form = logql
+                    break
+                # else: empty result — try next form.
+                payload = None
+            if payload is None:
                 if verbose:
                     print(
-                        f"  [LogsLayer] env={env} query_logs failed: {exc} — soft-degrade"
+                        f"  [LogsLayer] env={env} all LogQL forms returned 0 lines / errors "
+                        f"(last_err={last_err[:200]})"
                     )
                 continue
-            if isinstance(payload, dict) and payload.get("error"):
-                if verbose:
-                    print(
-                        f"  [LogsLayer] env={env} query_logs error: {payload['error']} — soft-degrade"
-                    )
-                continue
+            if verbose:
+                print(
+                    f"  [LogsLayer] env={env} chose LogQL form: {chosen_form}"
+                )
 
             line_count = 0
             for stream, ts, raw in _iter_log_streams(payload):

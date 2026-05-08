@@ -2,10 +2,137 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
+import shutil
+import subprocess
+import sys
+import time
 from collections import defaultdict
 
 from .base import Layer
+
+
+@contextlib.contextmanager
+def _kubectl_port_forward(
+    namespace: str,
+    service: str,
+    remote_port: int,
+    *,
+    kubectl: str | None = None,
+    timeout_s: float = 8.0,
+):
+    """Spin up `kubectl port-forward -n <ns> svc/<svc> 0:<remote_port>` in a
+    subprocess and yield the local port the kernel allocated.
+
+    Captures stderr (kubectl writes "Forwarding from 127.0.0.1:<port> ->
+    <remote_port>" there) to discover the random local port. Kills the
+    process on context exit.
+    """
+    bin_path = kubectl or shutil.which("kubectl")
+    if not bin_path:
+        raise RuntimeError("kubectl not found on PATH")
+    cmd = [
+        bin_path,
+        "port-forward",
+        "-n",
+        namespace,
+        f"svc/{service}",
+        f"0:{int(remote_port)}",
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    local_port = 0
+    deadline = time.monotonic() + timeout_s
+    try:
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                err = (proc.stderr.read() if proc.stderr else "") or ""
+                raise RuntimeError(f"kubectl port-forward exited early: {err[:300]}")
+            line = ""
+            if proc.stdout is not None:
+                # Both newer and older kubectl print to stdout; some versions
+                # use stderr. Probe both with a short non-blocking peek.
+                try:
+                    import select
+
+                    r, _, _ = select.select([proc.stdout, proc.stderr], [], [], 0.2)
+                    for stream in r:
+                        line = stream.readline() or ""
+                        if line:
+                            break
+                except Exception:
+                    line = proc.stdout.readline() or ""
+            if not line:
+                continue
+            # Forwarding from 127.0.0.1:54321 -> 9090
+            idx = line.find("127.0.0.1:")
+            if idx >= 0:
+                tail = line[idx + len("127.0.0.1:") :]
+                port_str = ""
+                for ch in tail:
+                    if ch.isdigit():
+                        port_str += ch
+                    else:
+                        break
+                if port_str.isdigit():
+                    local_port = int(port_str)
+                    break
+        if not local_port:
+            raise RuntimeError("kubectl port-forward did not announce a local port")
+        yield local_port
+    finally:
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                proc.kill()
+        except Exception:
+            pass
+
+
+def _prom_kubectl_pf_query(
+    promql: str,
+    *,
+    namespace: str,
+    service: str,
+    remote_port: int,
+    timeout_s: float = 10.0,
+) -> dict | None:
+    """Run a single PromQL instant query through a kubectl-port-forwarded
+    Prometheus. Returns the decoded ``{"status": "success", "data": {...}}``
+    or ``None`` on failure. Kills the port-forward on exit.
+    """
+    try:
+        import urllib.parse
+        import urllib.request
+        import json as _json
+    except Exception:
+        return None
+    try:
+        with _kubectl_port_forward(
+            namespace, service, remote_port
+        ) as local_port:
+            qs = urllib.parse.urlencode({"query": promql})
+            url = f"http://127.0.0.1:{local_port}/api/v1/query?{qs}"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+            try:
+                return _json.loads(body)
+            except Exception:
+                return None
+    except Exception as exc:
+        print(
+            f"  [MetricsLayer] kubectl-pf query failed: {exc}", file=sys.stderr
+        )
+        return None
 
 
 def _extract_metric_names(payload) -> list[tuple[str, int]]:
@@ -146,7 +273,12 @@ class MetricsLayer(Layer):
     def scan(self, ctx: dict) -> tuple[list[dict], list[dict]]:
         endpoint = ctx.get("mcp_endpoint")
         verbose = bool(ctx.get("verbose"))
-        if not endpoint:
+        # Phase 8H: kubectl-pf fallback is gated by an opt-in flag so the
+        # default path stays pure-MCP. When the operator passes
+        # ``metrics_use_kubectl_pf=true`` and no usable endpoint is around,
+        # we shell out to kubectl-port-forward and hit Prom directly.
+        use_pf = bool(ctx.get("metrics_use_kubectl_pf"))
+        if not endpoint and not use_pf:
             if verbose:
                 print("  [MetricsLayer] skip — no mcp_endpoint in ctx")
             return [], []
@@ -161,27 +293,57 @@ class MetricsLayer(Layer):
 
         promql = 'count by (__name__) ({__name__!=""})'
         metric_rows: list[tuple[str, int]] = []
-        try:
-            payload = _call_tool_sync(
-                endpoint,
-                "query_metrics",
-                # Send both the v0.45.1 wrapper key (``promql``) and the
-                # legacy key (``query``) so we match either flavour.
-                {"promql": promql, "query": promql},
+        payload = None
+        if endpoint is not None:
+            try:
+                payload = _call_tool_sync(
+                    endpoint,
+                    "query_metrics",
+                    # Send both the v0.45.1 wrapper key (``promql``) and the
+                    # legacy key (``query``) so we match either flavour.
+                    {"promql": promql, "query": promql},
+                )
+            except ConnectionError:
+                raise
+            except Exception as exc:
+                if verbose:
+                    print(
+                        f"  [MetricsLayer] query_metrics failed: {exc} — soft-degrade"
+                    )
+                payload = {"error": str(exc)}
+
+        # When the MCP-side Prom upstream is blank (Tempo/Prom/Loki MCP
+        # wrapper unwired), opt-in kubectl-pf path probes the in-cluster
+        # Prom directly.
+        mcp_failed = (
+            payload is None
+            or (isinstance(payload, dict) and payload.get("error"))
+        )
+        if use_pf and mcp_failed:
+            ns = ctx.get("metrics_pf_namespace") or "monitoring"
+            svc = (
+                ctx.get("metrics_pf_service")
+                or "prometheus-kube-prometheus-prometheus"
             )
-        except ConnectionError:
-            raise
-        except Exception as exc:
+            port = int(ctx.get("metrics_pf_port") or 9090)
             if verbose:
                 print(
-                    f"  [MetricsLayer] query_metrics failed: {exc} — soft-degrade"
+                    f"  [MetricsLayer] kubectl-pf fallback to "
+                    f"svc/{ns}/{svc}:{port}"
                 )
-            payload = {"error": str(exc)}
+            pf_payload = _prom_kubectl_pf_query(
+                promql,
+                namespace=ns,
+                service=svc,
+                remote_port=port,
+            )
+            if pf_payload is not None:
+                payload = pf_payload
 
         if isinstance(payload, dict) and payload.get("error"):
             if verbose:
                 print(f"  [MetricsLayer] query_metrics error: {payload['error']}")
-        else:
+        elif payload is not None:
             metric_rows = _extract_metric_names(payload)
 
         metric_rows.sort(key=lambda kv: (-kv[1], kv[0]))

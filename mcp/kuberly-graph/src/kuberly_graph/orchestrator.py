@@ -47,6 +47,7 @@ def regenerate_graph(
     traces_window: str | None = None,
     traces_limit: int | None = None,
     extra_ctx: dict | None = None,
+    auto_extract_state: bool = True,
 ) -> dict:
     start = _dt.datetime.now()
     repo = Path(repo_root).resolve()
@@ -65,6 +66,33 @@ def regenerate_graph(
             for p in comp_dir.iterdir()
             if p.is_dir() and not p.name.startswith(".")
         )
+
+    # Phase 8H: when ``state`` is part of this run, auto-pull each env's
+    # tfstate side-car from S3 first so StateLayer has data to ingest.
+    state_extract_summary: dict | None = None
+    if auto_extract_state and ("state" in target_names) and envs_seed:
+        try:
+            from .state_extract import extract_states_from_s3 as _extract
+            summary = _extract(
+                repo_root=str(repo),
+                env=envs_seed[0],
+                region=str(
+                    (extra_ctx or {}).get("aws_region")
+                    or "eu-west-1"
+                ),
+                persist_dir=str(persist),
+            )
+            state_extract_summary = summary
+            if verbose:
+                print(
+                    f"  [auto_extract_state] env={envs_seed[0]} "
+                    f"extracted={summary.get('modules_extracted', 0)} "
+                    f"skipped={summary.get('modules_skipped', 0)}"
+                )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            if verbose:
+                print(f"  [auto_extract_state] failed: {exc}")
+            state_extract_summary = {"error": str(exc)}
 
     ctx: dict[str, Any] = {
         "repo_root": str(repo),
@@ -143,7 +171,7 @@ def regenerate_graph(
             )
 
     duration_ms = int((_dt.datetime.now() - start).total_seconds() * 1000)
-    return {
+    out = {
         "layers_run": target_names,
         "node_count": len(store.all_nodes()),
         "edge_count": len(store.all_edges()),
@@ -152,6 +180,9 @@ def regenerate_graph(
         "mode": store.mode,
         "persist_dir": str(persist),
     }
+    if state_extract_summary is not None:
+        out["state_extract"] = state_extract_summary
+    return out
 
 
 def regenerate_layer_op(
@@ -187,6 +218,7 @@ def list_layers_summary(persist_dir: str = ".kuberly") -> list[dict]:
     type_map = {
         "cold": "meta",
         "code": "cold",
+        "treesitter": "cold",
         "components": "cold",
         "applications": "cold",
         "rendered": "cold",

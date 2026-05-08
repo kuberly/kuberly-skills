@@ -1,6 +1,6 @@
 [project]
 name = "kuberly-graph"
-version = "0.49.0"
+version = "0.50.0"
 description = "FastMCP microservice exposing a multi-layer Kuberly knowledge graph (cold IaC + live k8s/argo + logs/metrics/traces) over MCP."
 requires-python = ">=3.10"
 dependencies = [
@@ -9,6 +9,12 @@ dependencies = [
   "lancedb>=0.13.0,<1.0.0",
   "sentence-transformers>=3.0.0,<4.0.0",
   "pyarrow>=17.0.0,<22.0.0",
+  # Phase 8H: AST-driven HCL/CUE/YAML/Dockerfile scan in TreeSitterLayer.
+  # Pre-compiled grammars for HCL/YAML/Dockerfile/JSON ship in the wheel.
+  # The wrapper is built against tree-sitter 0.21.x so we pin both for ABI
+  # compatibility — newer tree-sitter (>=0.22) breaks Language() init.
+  "tree_sitter==0.21.*",
+  "tree_sitter_languages>=1.10.2",
 ]
 
 [project.scripts]

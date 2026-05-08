@@ -31,11 +31,19 @@ from .secrets import SecretsLayer
 from .state import StateLayer
 from .storage import StorageLayer
 from .traces import TracesLayer
+from .treesitter import TreeSitterLayer
 
 
 LAYERS: list[Layer] = [
     ColdLayer(),
     CodeLayer(),
+    # Phase 8H: TreeSitterLayer reads HCL / CUE / YAML / Dockerfile via
+    # tree-sitter, emitting fine-grained ``hcl_*`` / ``cue_*`` /
+    # ``yaml_manifest:*`` / ``dockerfile_step:*`` nodes. Soft-degrades to 0
+    # nodes when the ``tree_sitter_languages`` wheel is absent. Runs after
+    # ``code`` so ``module:`` ids exist for the ``declares`` edges, and
+    # before ``dependency`` so its nodes feed cross-layer derivations.
+    TreeSitterLayer(),
     ComponentsLayer(),
     ApplicationsLayer(),
     RenderedLayer(),
@@ -145,10 +153,16 @@ _LAYER_PRECEDES: dict[str, set[str]] = {
     # `kubectl`), but should run AFTER K8sLayer so its richer view
     # OVERWRITES the bearer-token one when both are part of the run.
     "kubectl": {"k8s"},
+    # TreeSitterLayer wires `module:<provider>/<name>` -> `hcl_*` /
+    # `yaml_manifest:*` / `dockerfile_step:*` declarations. It depends on
+    # ``code`` for the cold ``module:`` ids; runs before ``dependency`` so
+    # its nodes feed cross-layer edge derivation.
+    "treesitter": {"code"},
     # DependencyLayer reads the populated store — make every other leaf
     # layer that's part of this run finish first.
     "dependency": {
         "code",
+        "treesitter",
         "components",
         "applications",
         "rendered",
@@ -175,6 +189,7 @@ _LAYER_PRECEDES: dict[str, set[str]] = {
     "meta": {
         "cold",
         "code",
+        "treesitter",
         "components",
         "applications",
         "rendered",

@@ -1,5 +1,78 @@
 # Changelog
 
+## v0.50.0 — 2026-05-08
+
+Phase 8H: TreeSitterLayer + S3 state extractor + Loki / Tempo response
+unwrap fixes + opt-in kubectl-port-forward path for the metrics layer.
+
+- **FEAT: `kuberly_graph.layers.treesitter.TreeSitterLayer`** — new AST
+  layer over the consumer's `clouds/` tree using `tree_sitter_languages`
+  (HCL / YAML / Dockerfile / JSON; CUE soft-degrades with regex when the
+  bundled wheel lacks the grammar). Emits `hcl_resource:` /
+  `hcl_data:` / `hcl_module_call:` / `hcl_variable:` / `hcl_output:` /
+  `hcl_locals:` / `cue_definition:` / `cue_field:` / `yaml_manifest:` /
+  `dockerfile_step:` / `dockerfile_base_image:` nodes plus `declares` /
+  `uses_var` / `refs` edges. Caps: 5000 files per glob (configurable via
+  `treesitter_max_files`), 1 MiB per file, walk depth 8. Wired into
+  `LAYERS` after `code` (provides `module:` ids for the `declares`
+  edges) and before `dependency`. Verified on Traigent IaC — **4372
+  nodes / 3671 edges** from 137 HCL/YAML/Dockerfile files in ~50 s.
+- **FEAT: `kuberly_graph.state_extract.extract_states_from_s3`** — pure
+  `boto3.s3.get_object` reader. Reads `components/<env>/shared-infra.json`
+  for the `${account}-${region}-${cluster}-tf-states` bucket name, walks
+  every `clouds/<provider>/modules/<name>/terragrunt.hcl` to extract
+  `key = "..."` (or fall back to the `<provider>/<name>/terraform.tfstate`
+  convention), pulls each tfstate, and writes the resource side-car to
+  `.kuberly/state_<env>.json`. Soft-degrades on missing `boto3`, missing
+  AWS creds, missing bucket, or per-module `NoSuchKey`. Verified on
+  Traigent IaC — **24 modules extracted, StateLayer follow-up emits
+  824 nodes / 944 edges**.
+- **FEAT: `extract_state_sidecar` MCP tool** — pulls every module's
+  tfstate so `regenerate_layer state` has data to ingest. Auto-detects
+  the env from `components/<env>/`. Also wired into `regenerate_graph`
+  via `auto_extract_state=True` (default) so a one-shot
+  `regenerate_all` no longer needs an explicit pull step.
+- **FEAT: `find_resource_callers` / `module_io_summary` /
+  `find_yaml_manifest_kind` MCP tools** — pure GraphStore queries over
+  the new TreeSitter nodes/edges. `find_resource_callers` does a
+  depth-bounded reverse BFS along `uses_var` / `refs` / `reads_output` /
+  `declares`; `module_io_summary` counts declared HCL kinds per module;
+  `find_yaml_manifest_kind` filters `yaml_manifest:*` nodes by Kind.
+- **FIX: TracesLayer ignored Tempo's `[Tempo HTTP /api/search ...]\n<json>`
+  text wrapper** — the ai-agent-tool MCP returns Tempo / Loki responses
+  as a tagged plaintext block, not JSON. Added `_maybe_unwrap_text_payload`
+  helper that strips the leading bracket-tag line and JSON-decodes the
+  body. The Tempo `spanSet.spans` shape (with OTLP-style `attributes`
+  list and root-trace service hoisting via `rootServiceName` /
+  `rootTraceName`) is now ingested correctly. Verified — **80 spans /
+  40 traces / 4 service nodes / 2 service-call edges** from a 15 m
+  window on the Traigent dev cluster.
+- **FIX: TracesLayer skipped TraceQL-with-no-service** — the production
+  Tempo wrapper rejects `query={}` with "either trace_id or service is
+  required". Discovery now goes app-IDs → `traces_spanmetrics_calls_total`
+  → `k8s_resource(Service)` and queries per-service. Falls back to the
+  legacy TraceQL form only when every discovery path is empty (so the
+  operator sees the upstream error).
+- **FIX: LogsLayer dropped `[Loki via logcli ...]\n<lines>` text payload**
+  — added `_parse_logcli_text` to recover the timestamp / labels / line
+  triple from each entry. Loki LogQL fallback chain is now: env-tag →
+  per-namespace → `{job=~".+"}` → `{app=~".+"}`, with namespace seeds
+  pulled from already-populated `k8s_resource:*` nodes. Verified —
+  **24 log_template nodes** from 117 ingested lines on the Traigent
+  dev cluster.
+- **FEAT: MetricsLayer opt-in kubectl-port-forward fallback** — when the
+  ai-agent-tool wrapper's Prom upstream is blank ("Prometheus MCP not
+  available"), passing `metrics_use_kubectl_pf: true` tells the layer to
+  spawn `kubectl port-forward -n monitoring svc/prometheus-kube-prometheus-prometheus
+  0:9090`, parse the random local port from kubectl's stderr, and hit
+  the in-cluster Prom directly via `urllib`. Cleanup is via a
+  `contextlib.contextmanager`. Off by default to keep the no-shell
+  invariant intact for routine runs.
+- **DEP: pinned `tree_sitter==0.21.*` + added `tree_sitter_languages>=1.10.2`**
+  to `pyproject.toml`. The wrapper wheel only loads against
+  tree-sitter 0.21.x; newer 0.22+ breaks `Language()` init.
+- **Layer count: 24 → 25.** **Tool count: 47 → 51.**
+
 ## v0.49.0 — 2026-05-08
 
 Phase 8G: render-fix + AWS lazy-init audit + KubectlLayer (full-RBAC k8s scan).
