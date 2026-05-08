@@ -8,6 +8,12 @@ import react from "@vitejs/plugin-react";
 // reverse-proxy to the MCP server's /api/v1/* — see Dockerfile.ui.
 export default defineConfig({
   plugins: [react()],
+  // Note: do NOT dedupe `three` here. 3d-force-graph's transitive
+  // three-render-objects pins to a three release that exports `Timer` at
+  // the top level; if Vite forces the root `three` (which may not export
+  // Timer in the same shape) the dev server fails to pre-bundle. The cost
+  // is the "Multiple instances of Three.js being imported" console warning,
+  // which is cosmetic at our scale.
   server: {
     port: 5173,
     proxy: {
