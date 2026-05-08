@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.52.0 — 2026-05-08
+
+Dashboard polish — Stack Overview + Compliance + AWS tiles + community grouping.
+
+Renders the rich-graph data we accumulated through Phases 8A-8H/v0.51.1
+(7763 nodes, 5585 edges, 25 layers, 50 tools) into UI surfaces:
+
+- **NEW: `GET /api/v1/meta-overview`** — emits the meta layer as a small
+  `{nodes, links}` payload: every `type=graph_layer` node + the
+  `feeds_into` / `summarized_by` edges from `MetaLayer`. Pure GraphStore
+  read; no live calls.
+- **NEW: `GET /api/v1/aws-services`** — groups every `aws:*`/`aws_*` node
+  into `{Compute, Storage, Database, Network, Security/IAM, Edge/CDN,
+  Monitoring, Lambda/Serverless, Other}` with service display labels.
+  Powers the populated Architecture tile section in the Dashboard tab.
+- **NEW: `GET /api/v1/compliance?severity=&rule_id=&limit=`** — returns
+  every `compliance_violation:*` node + by-severity / by-rule breakdowns
+  + filter-applied findings list. Powers the Compliance tab.
+- **NEW: `GET /api/v1/communities?layer=&type=&limit=&algorithm=`** —
+  builds a NetworkX undirected graph from the same node-set the
+  `/graph` endpoint produces and runs
+  `networkx.algorithms.community.greedy_modularity_communities`. Returns
+  `{community_count, modularity, communities: {node_id: int}, sizes}` so
+  the Graph tab can recolour nodes by community. Falls back to
+  `greedy_modularity` only — no `igraph-python` / `leidenalg` deps added.
+  NetworkX is already a transitive dep of lance/sentence-transformers
+  (3.6.1 in the consumer venv).
+- **NEW: Dashboard tabs** — `Stack Overview` (meta-layer as a 2D-ish
+  force-directed graph-of-graphs, sized by `node_count`, coloured by
+  `layer_type`, click-to-drill into Graph tab pre-filtered) and
+  `Compliance` (KPI cards + chip filters + sortable findings table with
+  resource → Graph tab focus). Existing Dashboard + Graph tabs unchanged
+  except: AWS tiles now render real per-category data, and Graph tab
+  added a `Group by community` option in the existing group-by selector
+  with a community legend overlay.
+- **NIL: tool/layer counts unchanged** — still 50 tools / 25 layers.
+  Backend additions are dashboard-internal HTTP routes only.
+
+Acceptance: 4 new endpoints return real data on the populated graph
+(`meta-overview`: 25 nodes / 99 links; `aws-services`: 166 resources
+across 7 categories; `compliance`: 93 findings; `communities` at
+limit=3000: 3000 nodes / 3993 edges / 254 communities / modularity
+0.912).
+
 ## v0.51.1 — 2026-05-08
 
 Drop ALL non-LanceDB filesystem writes (only-lancedb).

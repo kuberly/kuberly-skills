@@ -81,3 +81,16 @@ def register_dashboard(mcp_app) -> None:
     mcp_app.custom_route("/api/v1/service/{name:path}", methods=["GET"])(
         api.service_one_pager_endpoint
     )
+    # ---- v0.52.0 dashboard polish ----
+    mcp_app.custom_route("/api/v1/meta-overview", methods=["GET"])(
+        api.meta_overview_endpoint
+    )
+    mcp_app.custom_route("/api/v1/aws-services", methods=["GET"])(
+        api.aws_services_endpoint
+    )
+    mcp_app.custom_route("/api/v1/compliance", methods=["GET"])(
+        api.compliance_endpoint
+    )
+    mcp_app.custom_route("/api/v1/communities", methods=["GET"])(
+        api.communities_endpoint
+    )

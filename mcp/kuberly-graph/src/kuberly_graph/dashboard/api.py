@@ -534,3 +534,397 @@ async def service_mermaid_endpoint(request: Request) -> JSONResponse:
         return _ok(service_mermaid(service=service, layers=layers_arg, env=env))
     except Exception as exc:  # pragma: no cover
         return _err(f"service_mermaid failed: {exc}", 500)
+
+
+# ---------------------------------------------------------------------------
+# /api/v1/meta-overview — graph_layer:* nodes + feeds_into / summarized_by
+# ---------------------------------------------------------------------------
+
+
+async def meta_overview_endpoint(_request: Request) -> JSONResponse:
+    """Return the meta layer as a small ``{nodes, links}`` payload.
+
+    Sources every ``type=graph_layer`` node and the ``feeds_into`` /
+    ``summarized_by`` edges produced by ``MetaLayer``. Pure GraphStore
+    read; no live calls.
+    """
+    try:
+        store = open_store(_persist_dir())
+        all_n = store.all_nodes()
+        all_e = store.all_edges()
+    except Exception as exc:
+        return _err(f"meta-overview query failed: {exc}", 500)
+
+    nodes: list[dict] = []
+    seen: set[str] = set()
+    for n in all_n:
+        if not isinstance(n, dict):
+            continue
+        if n.get("type") != "graph_layer":
+            continue
+        nid = n.get("id")
+        if not nid or nid in seen:
+            continue
+        seen.add(nid)
+        nodes.append(
+            {
+                "id": nid,
+                "name": n.get("name") or n.get("label") or nid,
+                "type": "graph_layer",
+                "layer_type": n.get("layer_type", "unknown"),
+                "refresh_trigger": n.get("refresh_trigger", "manual"),
+                "node_count": int(n.get("node_count") or 0),
+                "edge_count": int(n.get("edge_count") or 0),
+                "last_refresh": n.get("last_refresh", ""),
+                "node_types": n.get("node_types") or [],
+            }
+        )
+
+    node_ids = {n["id"] for n in nodes}
+    links: list[dict] = []
+    for e in all_e:
+        if not isinstance(e, dict):
+            continue
+        rel = e.get("relation", "")
+        if rel not in ("feeds_into", "summarized_by"):
+            continue
+        s = e.get("source")
+        t = e.get("target")
+        if s in node_ids and t in node_ids:
+            links.append({"source": s, "target": t, "relation": rel})
+
+    return _ok(
+        {
+            "node_count": len(nodes),
+            "edge_count": len(links),
+            "nodes": nodes,
+            "links": links,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# /api/v1/aws-services — AWS architecture tile data
+# ---------------------------------------------------------------------------
+
+# Map AWS scanner node `type` → (Service display label, Category).
+# Categories: Compute, Storage, Database, Network, Security/IAM, Edge/CDN,
+# Monitoring, Lambda/Serverless, Other.
+_AWS_SERVICE_TABLE: dict[str, tuple[str, str]] = {
+    # Compute
+    "aws_ec2":            ("EC2 Instance",         "Compute"),
+    "aws_eks":            ("EKS Cluster",          "Compute"),
+    "aws_eks_nodegroup":  ("EKS Node Group",       "Compute"),
+    "aws_fargate_profile":("Fargate Profile",      "Compute"),
+    "aws_account":        ("AWS Account",          "Compute"),
+    # Storage
+    "aws_s3":             ("S3 Bucket",            "Storage"),
+    "aws_ebs":            ("EBS Volume",           "Storage"),
+    "aws_ecr_repo":       ("ECR Repository",       "Storage"),
+    # Database
+    "aws_rds_cluster":    ("RDS Cluster",          "Database"),
+    "aws_rds_instance":   ("RDS Instance",         "Database"),
+    "aws_elasticache":    ("ElastiCache",          "Database"),
+    # Network
+    "aws_vpc":            ("VPC",                  "Network"),
+    "aws_subnet":         ("Subnet",               "Network"),
+    "aws_rtb":            ("Route Table",          "Network"),
+    "aws_nat":            ("NAT Gateway",          "Network"),
+    "aws_igw":            ("Internet Gateway",     "Network"),
+    "aws_vpce":           ("VPC Endpoint",         "Network"),
+    "aws_lb":             ("Load Balancer",        "Network"),
+    # Security/IAM
+    "aws_sg":             ("Security Group",       "Security/IAM"),
+    "aws_iam_role":       ("IAM Role",             "Security/IAM"),
+    "aws_iam_policy":     ("IAM Policy",           "Security/IAM"),
+    "aws_iam_instance_profile": ("IAM Instance Profile", "Security/IAM"),
+    "aws_acm":            ("ACM Certificate",      "Security/IAM"),
+    # Edge/CDN
+    "aws_cloudfront":     ("CloudFront",           "Edge/CDN"),
+    "aws_r53_zone":       ("Route 53 Zone",        "Edge/CDN"),
+    # Monitoring
+    "aws_cw_log_group":   ("CloudWatch Log Group", "Monitoring"),
+    # Lambda / Serverless
+    "aws_lambda":         ("Lambda Function",      "Lambda/Serverless"),
+}
+
+# Stable ordering of the categories as they should render in the UI.
+_AWS_CATEGORY_ORDER = (
+    "Compute",
+    "Storage",
+    "Database",
+    "Network",
+    "Security/IAM",
+    "Edge/CDN",
+    "Monitoring",
+    "Lambda/Serverless",
+    "Other",
+)
+
+
+async def aws_services_endpoint(_request: Request) -> JSONResponse:
+    """Return AWS resources grouped into service categories.
+
+    Walks every node where ``type`` starts with ``aws_`` (or ``id`` starts
+    with ``aws:``), maps it to a service+category via ``_AWS_SERVICE_TABLE``
+    and returns a category→services structure ready for tile rendering.
+    """
+    try:
+        store = open_store(_persist_dir())
+        rows = store.all_nodes()
+    except Exception as exc:
+        return _err(f"aws-services query failed: {exc}", 500)
+
+    # service-key -> {service, category, node_type, count, sample_id, sample_label}
+    by_service: dict[str, dict] = {}
+    total = 0
+    for n in rows:
+        if not isinstance(n, dict):
+            continue
+        ntype = (n.get("type") or "").strip()
+        nid = n.get("id") or ""
+        if not (ntype.startswith("aws_") or nid.startswith("aws:")):
+            continue
+        total += 1
+        service, category = _AWS_SERVICE_TABLE.get(
+            ntype, (ntype.replace("aws_", "").replace("_", " ").title() or "AWS Resource", "Other")
+        )
+        key = f"{category}::{ntype or 'aws'}"
+        bucket = by_service.get(key)
+        if bucket is None:
+            by_service[key] = {
+                "service": service,
+                "category": category,
+                "node_type": ntype or "aws",
+                "count": 1,
+                "sample_id": nid,
+                "sample_label": n.get("label") or nid,
+            }
+        else:
+            bucket["count"] += 1
+
+    # Group services by category in stable order.
+    by_cat: dict[str, list[dict]] = {c: [] for c in _AWS_CATEGORY_ORDER}
+    for bucket in by_service.values():
+        cat = bucket["category"] if bucket["category"] in by_cat else "Other"
+        by_cat[cat].append(bucket)
+
+    service_categories: list[dict] = []
+    for cat in _AWS_CATEGORY_ORDER:
+        services = sorted(by_cat[cat], key=lambda b: -b["count"])
+        if not services:
+            continue
+        service_categories.append(
+            {
+                "category": cat,
+                "service_count": len(services),
+                "resource_count": sum(s["count"] for s in services),
+                "services": services,
+            }
+        )
+
+    return _ok(
+        {
+            "total_resources": total,
+            "category_count": len(service_categories),
+            "service_categories": service_categories,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# /api/v1/compliance — ComplianceLayer findings
+# ---------------------------------------------------------------------------
+
+
+async def compliance_endpoint(request: Request) -> JSONResponse:
+    """Return compliance violation nodes with breakdowns + filters.
+
+    Query params:
+      severity  filter to a single severity (HIGH/MEDIUM/LOW)
+      rule_id   filter to a single rule id (e.g. R001)
+      limit     cap on findings array (default 500)
+    """
+    severity = (_str_param(request, "severity") or "").upper() or None
+    rule_id = _str_param(request, "rule_id")
+    limit = max(1, _int_param(request, "limit", 500))
+
+    try:
+        store = open_store(_persist_dir())
+        rows = store.all_nodes(layer="compliance")
+    except Exception as exc:
+        return _err(f"compliance query failed: {exc}", 500)
+
+    findings: list[dict] = []
+    by_severity: dict[str, int] = {}
+    by_rule: dict[str, int] = {}
+    total = 0
+    for n in rows:
+        if not isinstance(n, dict):
+            continue
+        if n.get("type") != "compliance_violation":
+            continue
+        total += 1
+        sev = str(n.get("severity") or "UNKNOWN").upper()
+        rid = str(n.get("rule_id") or "")
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+        if rid:
+            by_rule[rid] = by_rule.get(rid, 0) + 1
+        if severity and sev != severity:
+            continue
+        if rule_id and rid != rule_id:
+            continue
+        if len(findings) < limit:
+            findings.append(
+                {
+                    "id": n.get("id"),
+                    "rule_id": rid,
+                    "severity": sev,
+                    "resource_type": n.get("resource_type") or "",
+                    "target_resource": n.get("resource_id") or "",
+                    "env": n.get("env") or "",
+                    "address": n.get("address") or "",
+                    "namespace": n.get("namespace") or "",
+                    "name": n.get("name") or "",
+                    "description": n.get("description") or "",
+                    "recommendation": n.get("recommendation") or "",
+                    "label": n.get("label") or "",
+                }
+            )
+
+    return _ok(
+        {
+            "total": total,
+            "by_severity": by_severity,
+            "by_rule": by_rule,
+            "filters": {"severity": severity, "rule_id": rule_id, "limit": limit},
+            "findings": findings,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# /api/v1/communities — modularity-based community detection
+# ---------------------------------------------------------------------------
+
+
+async def communities_endpoint(request: Request) -> JSONResponse:
+    """Detect communities over a filtered subgraph.
+
+    Builds a NetworkX undirected graph from ``store.all_nodes(layer=…)`` +
+    ``store.all_edges(layer=…)`` (the same filter the ``/graph`` endpoint
+    uses) and runs ``nx.community.greedy_modularity_communities``.
+
+    Query params:
+      layer      optional layer filter (matches node.layer)
+      type       optional type filter (matches node.type)
+      algorithm  reserved — currently always ``modularity``
+                 (``leidenalg`` would require an extra dep we won't add).
+      limit      cap on the candidate node set (default 5000).
+
+    Response shape:
+        {
+          "node_count": N, "edge_count": E,
+          "community_count": M, "modularity": float,
+          "algorithm": "greedy_modularity",
+          "communities": {"<node_id>": <int>, ...},
+          "sizes": [{"community": 0, "size": K}, ...]
+        }
+    """
+    layer = _str_param(request, "layer")
+    type_ = _str_param(request, "type")
+    algorithm = (_str_param(request, "algorithm") or "modularity").lower()
+    limit = max(1, _int_param(request, "limit", 5000))
+
+    try:
+        import networkx as nx  # transitive dep via lance/sentence-transformers
+        from networkx.algorithms.community import (
+            greedy_modularity_communities,
+            modularity as nx_modularity,
+        )
+    except Exception as exc:
+        return _err(f"networkx unavailable: {exc}", 500)
+
+    try:
+        store = open_store(_persist_dir())
+        all_n = store.all_nodes(layer=layer)
+        all_e = store.all_edges(layer=layer)
+    except Exception as exc:
+        return _err(f"communities query failed: {exc}", 500)
+
+    # Same filter logic as /api/v1/graph: cap nodes, include only edges
+    # whose endpoints both survived.
+    node_ids: list[str] = []
+    seen: set[str] = set()
+    for n in all_n:
+        if not isinstance(n, dict):
+            continue
+        if type_ and n.get("type") != type_:
+            continue
+        nid = n.get("id")
+        if not nid or nid in seen:
+            continue
+        seen.add(nid)
+        node_ids.append(nid)
+        if len(node_ids) >= limit:
+            break
+
+    id_set = set(node_ids)
+    G = nx.Graph()
+    G.add_nodes_from(node_ids)
+    for e in all_e:
+        if not isinstance(e, dict):
+            continue
+        s = e.get("source")
+        t = e.get("target")
+        if s in id_set and t in id_set and s != t:
+            G.add_edge(s, t)
+
+    edge_count = G.number_of_edges()
+    if G.number_of_nodes() == 0:
+        return _ok(
+            {
+                "node_count": 0,
+                "edge_count": 0,
+                "community_count": 0,
+                "modularity": 0.0,
+                "algorithm": "greedy_modularity",
+                "filters": {"layer": layer, "type": type_, "limit": limit},
+                "communities": {},
+                "sizes": [],
+            }
+        )
+
+    try:
+        comms = list(greedy_modularity_communities(G))
+    except Exception as exc:
+        return _err(f"community detection failed: {exc}", 500)
+
+    # community index → set of nodes; sort by descending size for stable
+    # colours (largest community = index 0).
+    comms_sorted = sorted(comms, key=lambda c: -len(c))
+    node_to_comm: dict[str, int] = {}
+    sizes: list[dict] = []
+    for idx, members in enumerate(comms_sorted):
+        sizes.append({"community": idx, "size": len(members)})
+        for m in members:
+            node_to_comm[m] = idx
+
+    try:
+        mod_score = float(nx_modularity(G, comms_sorted)) if edge_count else 0.0
+    except Exception:
+        mod_score = 0.0
+
+    return _ok(
+        {
+            "node_count": G.number_of_nodes(),
+            "edge_count": edge_count,
+            "community_count": len(comms_sorted),
+            "modularity": mod_score,
+            "algorithm": "greedy_modularity",
+            "requested_algorithm": algorithm,
+            "filters": {"layer": layer, "type": type_, "limit": limit},
+            "communities": node_to_comm,
+            "sizes": sizes,
+        }
+    )

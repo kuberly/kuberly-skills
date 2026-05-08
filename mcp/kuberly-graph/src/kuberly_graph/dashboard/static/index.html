@@ -24,12 +24,14 @@
       </span>
       <span class="wordmark">kuberly-graph</span>
       <span class="tagline">live multi-layer knowledge graph</span>
-      <span class="eyebrow" id="version-badge">v0.49.0</span>
+      <span class="eyebrow" id="version-badge">v0.52.0</span>
     </div>
 
     <nav class="tabs" role="tablist">
       <button data-tab="dashboard" class="active" role="tab">Dashboard</button>
       <button data-tab="graph" role="tab">Graph</button>
+      <button data-tab="stack" role="tab">Stack Overview</button>
+      <button data-tab="compliance" role="tab">Compliance</button>
     </nav>
 
     <div id="graph-controls">
@@ -38,6 +40,7 @@
         <option value="category">Group by category</option>
         <option value="layer">Group by layer</option>
         <option value="type">Group by type</option>
+        <option value="community">Group by community</option>
       </select>
       <button class="filters-reset" id="filters-reset" title="Clear all filters">reset</button>
       <span id="stats">— nodes · — edges</span>
@@ -70,16 +73,14 @@
     </section>
 
     <section class="arch-block">
-      <h2>Architecture <span class="muted">— deployed AWS services</span></h2>
-      <div class="arch-tiles" id="arch-tiles">
-        <div class="arch-empty muted">
-          No AWS scanner data yet. Phase 8F will populate this section with native AWS resources (VPC, EKS, RDS, S3, IAM, …) — for now, AWS-shaped resources are inferred from terraform state.
-        </div>
+      <h2>AWS Architecture <span class="muted" id="arch-summary">— loading…</span></h2>
+      <div class="arch-categories" id="arch-categories">
+        <div class="arch-empty muted">Loading AWS scanner data…</div>
       </div>
     </section>
 
     <footer class="dash-footer muted">
-      Tool count: <span id="footer-tools">45</span> · Reading from <code id="footer-persist">…</code>
+      Tool count: <span id="footer-tools">50</span> · Reading from <code id="footer-persist">…</code>
     </footer>
   </main>
 
@@ -87,12 +88,63 @@
   <section id="view-graph" hidden>
     <div id="graph-chips" class="chip-bar"></div>
     <div id="graph-3d"></div>
+    <div id="community-legend" class="community-legend hidden"></div>
     <aside id="sidebar" class="sidebar">
       <button class="sidebar-close" id="sidebar-close" title="Close">×</button>
       <div id="sidebar-body"></div>
     </aside>
     <div id="graph-empty-hint" class="hint hidden">
       No nodes yet — populate the graph then refresh.
+    </div>
+  </section>
+
+  <!-- Stack Overview view ------------------------------------------- -->
+  <section id="view-stack" hidden>
+    <div class="stack-header">
+      <h2>Stack Overview <span class="muted">— graph of graphs (meta layer)</span></h2>
+      <div class="stack-legend" id="stack-legend"></div>
+    </div>
+    <div id="stack-canvas"></div>
+    <div id="stack-empty-hint" class="hint hidden">
+      Meta layer empty — run <code>regenerate_all</code> then refresh.
+    </div>
+  </section>
+
+  <!-- Compliance view ----------------------------------------------- -->
+  <section id="view-compliance" hidden>
+    <div class="compliance-wrap">
+      <h2>Compliance <span class="muted">— ComplianceLayer findings</span></h2>
+      <div class="kpi-row" id="compliance-kpis">
+        <div class="kpi-card"><span class="kpi-label">total findings</span><span class="kpi-value" id="cmp-total">—</span></div>
+        <div class="kpi-card"><span class="kpi-label">HIGH</span><span class="kpi-value sev-high" id="cmp-high">—</span></div>
+        <div class="kpi-card"><span class="kpi-label">MEDIUM</span><span class="kpi-value sev-med" id="cmp-medium">—</span></div>
+        <div class="kpi-card"><span class="kpi-label">LOW</span><span class="kpi-value sev-low" id="cmp-low">—</span></div>
+      </div>
+
+      <div class="filter-row">
+        <span class="filter-label">Severity</span>
+        <div class="chip-bar inline" id="cmp-sev-chips"></div>
+        <span class="filter-label">Rule</span>
+        <div class="chip-bar inline" id="cmp-rule-chips"></div>
+      </div>
+
+      <div class="cmp-table-wrap">
+        <table class="cmp-table" id="cmp-table">
+          <thead>
+            <tr>
+              <th data-sort="rule_id">Rule</th>
+              <th data-sort="severity">Severity</th>
+              <th data-sort="resource_type">Resource type</th>
+              <th data-sort="target_resource">Resource</th>
+              <th data-sort="description">Description</th>
+              <th>Recommendation</th>
+            </tr>
+          </thead>
+          <tbody id="cmp-tbody">
+            <tr><td colspan="6" class="muted">loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </section>
 
