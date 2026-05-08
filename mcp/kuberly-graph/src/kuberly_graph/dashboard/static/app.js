@@ -296,10 +296,19 @@ function ensureForceGraph() {
   if (STATE.Graph3D) return STATE.Graph3D;
   if (typeof ForceGraph3D !== "function") return null;
   const host = $("#graph-3d");
+  // Until the Graph tab is active, #graph-3d is `display:none`, so
+  // host.clientWidth / clientHeight read 0. Initialising 3d-force-graph
+  // with a 0×0 canvas is what produced the "black canvas with chip strip"
+  // bug — the WebGL renderer never resizes itself afterwards. Fall back
+  // to the viewport dimensions so the canvas always boots non-zero, then
+  // an explicit resyncSize() pass on tab-switch / ResizeObserver locks it
+  // to the actual host box.
+  const initW = host.clientWidth || window.innerWidth || 1024;
+  const initH = host.clientHeight || window.innerHeight || 768;
   STATE.Graph3D = ForceGraph3D({ controlType: "orbit" })(host)
     .backgroundColor("#090b0d")
-    .width(host.clientWidth)
-    .height(host.clientHeight)
+    .width(initW)
+    .height(initH)
     .nodeId("id")
     .nodeLabel(n => `<div style="font-family:Geist,system-ui,sans-serif;font-size:12px;padding:6px 8px;background:rgba(20,24,30,0.95);border:1px solid rgba(255,255,255,0.18);border-radius:6px;color:#fff;">${escapeHtml(n.label || n.id)}<br><span style="opacity:0.6;font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;">${escapeHtml(n.type || "")} · ${escapeHtml(n.layer || "")}</span></div>`)
     .nodeRelSize(5)
@@ -325,11 +334,31 @@ function ensureForceGraph() {
     if (l && l.distance) l.distance(40);
   }
 
-  window.addEventListener("resize", () => {
-    if (!STATE.Graph3D) return;
-    STATE.Graph3D.width(host.clientWidth).height(host.clientHeight);
-  });
+  // Window-resize keeps width/height in sync with the host as the user
+  // resizes the browser window.
+  window.addEventListener("resize", resyncGraphSize);
+
+  // ResizeObserver catches the case where the host is hidden then shown
+  // (display:none → display:block) which doesn't fire window.resize but
+  // does change clientWidth/clientHeight from 0 → real values. Without
+  // this, switching to the Graph tab with the canvas already initialised
+  // at 0×0 would leave it permanently invisible.
+  if (typeof ResizeObserver === "function") {
+    const ro = new ResizeObserver(() => resyncGraphSize());
+    ro.observe(host);
+  }
   return STATE.Graph3D;
+}
+
+function resyncGraphSize() {
+  if (!STATE.Graph3D) return;
+  const host = $("#graph-3d");
+  if (!host) return;
+  const w = host.clientWidth;
+  const h = host.clientHeight;
+  if (w > 0 && h > 0) {
+    STATE.Graph3D.width(w).height(h);
+  }
 }
 
 function nodeColorFn(node) {
@@ -504,13 +533,24 @@ function switchTab(tab) {
 
   if (tab === "graph") {
     // First time → init the force graph and zoom.
-    setTimeout(() => {
+    // Use rAF + a follow-up resyncGraphSize() so the canvas is sized to
+    // the actually-laid-out host (not the 0×0 it was before display
+    // flipped). Without this the canvas stays black even though
+    // graphData(...) happily ate the nodes.
+    requestAnimationFrame(() => {
       const G = ensureForceGraph();
       if (G) {
+        resyncGraphSize();
         renderGraph();
-        setTimeout(() => G.zoomToFit(800, 60), 600);
+        // Some browsers report clientWidth correctly only one frame later.
+        setTimeout(() => {
+          resyncGraphSize();
+          if (G.refresh) G.refresh();
+          if (G.zoomToFit) G.zoomToFit(800, 60);
+        }, 200);
+        setTimeout(() => G.zoomToFit(800, 60), 800);
       }
-    }, 50);
+    });
   }
 }
 

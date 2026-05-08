@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.49.0 — 2026-05-08
+
+Phase 8G: render-fix + AWS lazy-init audit + KubectlLayer (full-RBAC k8s scan).
+
+- **FIX: dashboard 3D Graph tab rendered black canvas** — the
+  `/api/v1/graph` payload uses `edges`, but `3d-force-graph` expects
+  `links`. The client `renderGraph()` already mapped `edges → links` and
+  filtered cross-window references, but the canvas was being initialised
+  while the Graph tab host was still `display:none`, so
+  `host.clientWidth/clientHeight` were both 0 and the WebGL renderer
+  never resized itself afterwards. Fixed by booting with viewport
+  fallback dimensions, then `resyncGraphSize()` on tab-switch +
+  `ResizeObserver` so the canvas tracks the host once it's actually laid
+  out (`dashboard/static/app.js`).
+- **FIX: AwsLayer/CostLayer/IAMLayer eager `boto3` work at module
+  import** — verified via 5-second silent-boot probe that no
+  `Found credentials` / `botocore` / `sts.amazonaws.com` traffic is
+  emitted before the first `regenerate_*` tool call. All AWS work is
+  inside `scan(ctx)`; module-level imports are stdlib-only. The layer
+  classes now construct cleanly without a `boto3` install, and
+  soft-degrade with an explicit stderr WARN when invoked.
+- **FEAT: `kuberly_graph.layers.kubectl.KubectlLayer`** — new layer that
+  shells out to local `kubectl` (`subprocess.run`) using whatever creds
+  the operator has on PATH. `kubectl api-resources -o wide --no-headers`
+  enumerates every listable kind, then `kubectl get <Kind>.<group> -A
+  -o json` per kind populates the graph. Mirrors `K8sLayer`'s metadata
+  shape (labels, owner_references, container_images, pvc_claims,
+  secret_refs, configmap_refs, node_name / node_class_ref / provider_id,
+  spec passthrough for monitoring kinds) and emits CRDs as `crd:<name>`
+  nodes with `defines_kind` edges to matching `k8s_resource:` ids. Same
+  id namespace as K8sLayer with `source: "kubectl"` so `DependencyLayer`
+  Just Works regardless of which scanner populated the node — kubectl
+  upserts overwrite the bearer-token entries when both run. Soft-degrade
+  chain: missing binary → empty result; failed `kubectl version --client`
+  → empty result; failed `kubectl config current-context` → empty
+  result; per-kind failures logged + skipped without aborting.
+  `kubectl_path` / `kubectl_kubeconfig` / `kubectl_context` /
+  `kubectl_per_kind_limit` (default 5000) /
+  `kubectl_skip_kinds` (default `["events.k8s.io/Event", "v1/Event"]`)
+  / `kubectl_timeout_seconds` are all available via `regenerate_layer`.
+- **CHORE: `regenerate_layer` knobs** — `kubectl_path`,
+  `kubectl_kubeconfig`, `kubectl_context`, `kubectl_per_kind_limit`,
+  `kubectl_skip_kinds`, `kubectl_timeout_seconds` plumbed through
+  `extra_ctx`.
+- **Layer count: 23 → 24.** Tool count unchanged at **47**. KubectlLayer
+  is wired into `_LAYER_PRECEDES` after `k8s` and before `dependency`.
+
 ## v0.48.0 — 2026-05-08
 
 AwsLayer — direct boto3 scan of ~25 AWS services. Plug-in for accounts where

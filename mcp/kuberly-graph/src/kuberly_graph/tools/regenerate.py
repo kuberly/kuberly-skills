@@ -171,6 +171,12 @@ def regenerate_layer(
     aws_region: str | None = None,
     aws_per_service_limit: int | None = None,
     aws_services: list[str] | None = None,
+    kubectl_path: str | None = None,
+    kubectl_kubeconfig: str | None = None,
+    kubectl_context: str | None = None,
+    kubectl_per_kind_limit: int | None = None,
+    kubectl_skip_kinds: list[str] | None = None,
+    kubectl_timeout_seconds: int | None = None,
 ) -> dict:
     """Re-run one layer's scanner. Convenience wrapper around
     `regenerate_graph(layers=[layer])`.
@@ -216,6 +222,18 @@ def regenerate_layer(
         extra["aws_per_service_limit"] = int(aws_per_service_limit)
     if aws_services:
         extra["aws_services"] = list(aws_services)
+    if kubectl_path:
+        extra["kubectl_path"] = str(kubectl_path)
+    if kubectl_kubeconfig:
+        extra["kubectl_kubeconfig"] = str(kubectl_kubeconfig)
+    if kubectl_context:
+        extra["kubectl_context"] = str(kubectl_context)
+    if kubectl_per_kind_limit:
+        extra["kubectl_per_kind_limit"] = int(kubectl_per_kind_limit)
+    if kubectl_skip_kinds is not None:
+        extra["kubectl_skip_kinds"] = list(kubectl_skip_kinds)
+    if kubectl_timeout_seconds:
+        extra["kubectl_timeout_seconds"] = int(kubectl_timeout_seconds)
     return regenerate_layer_op(
         layer=layer,
         repo_root=repo,

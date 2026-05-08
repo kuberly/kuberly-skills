@@ -21,6 +21,7 @@ from .dns import DnsLayer
 from .iam import IAMLayer
 from .image_build import ImageBuildLayer
 from .k8s import K8sLayer
+from .kubectl import KubectlLayer
 from .logs import LogsLayer
 from .meta import MetaLayer
 from .metrics import MetricsLayer
@@ -40,6 +41,13 @@ LAYERS: list[Layer] = [
     RenderedLayer(),
     StateLayer(),
     K8sLayer(),
+    # Phase 8G: KubectlLayer shells out to local `kubectl` with whatever
+    # creds the operator already has (typically full IAM/admin), so kinds
+    # the bearer-token MCP can't list (Secret, Role, RoleBinding, Lease,
+    # custom resources) enter the graph. Same `k8s_resource:` id namespace
+    # as K8sLayer — kubectl OVERWRITES the bearer-token version when both
+    # populate. Soft-degrades when kubectl absent / no current-context.
+    KubectlLayer(),
     ArgoLayer(),
     LogsLayer(),
     MetricsLayer(),
@@ -133,6 +141,10 @@ _LAYER_PRECEDES: dict[str, set[str]] = {
     # AWS directly) but must complete before DependencyLayer so its
     # `aws:*` nodes are visible for the cross-namespace wiring.
     "aws": set(),
+    # KubectlLayer is independent of any other layer (shells directly to
+    # `kubectl`), but should run AFTER K8sLayer so its richer view
+    # OVERWRITES the bearer-token one when both are part of the run.
+    "kubectl": {"k8s"},
     # DependencyLayer reads the populated store — make every other leaf
     # layer that's part of this run finish first.
     "dependency": {
@@ -142,6 +154,7 @@ _LAYER_PRECEDES: dict[str, set[str]] = {
         "rendered",
         "state",
         "k8s",
+        "kubectl",
         "argo",
         "logs",
         "metrics",
@@ -167,6 +180,7 @@ _LAYER_PRECEDES: dict[str, set[str]] = {
         "rendered",
         "state",
         "k8s",
+        "kubectl",
         "argo",
         "logs",
         "metrics",
