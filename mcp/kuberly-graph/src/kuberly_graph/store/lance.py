@@ -88,6 +88,10 @@ class LanceGraphStore:
         self.persist_dir.mkdir(parents=True, exist_ok=True)
         lance_dir = self.persist_dir / "lance"
         lance_dir.mkdir(parents=True, exist_ok=True)
+        # v0.51.1: keep meta sidecar inside the lance store dir so the only
+        # filesystem footprint outside <persist_dir> is the LanceDB store
+        # itself. Top-level <persist_dir> stays empty after a regenerate.
+        self._lance_dir = lance_dir
         self._db = lancedb.connect(str(lance_dir))
 
         # Try to bring the embedding model up. If the registry import or the
@@ -123,7 +127,16 @@ class LanceGraphStore:
         self._edges = self._open_or_create("edges", self._edges_schema)
 
         self._last_refresh: dict[str, str] = {}
-        meta_file = self.persist_dir / "lance_meta.json"
+        meta_file = self._lance_dir / "lance_meta.json"
+        # Migrate any legacy v0.51.0-or-earlier sidecar at the top level
+        # into the lance subdir so we don't break a freshly-upgraded store.
+        legacy_meta = self.persist_dir / "lance_meta.json"
+        if legacy_meta.exists() and not meta_file.exists():
+            try:
+                meta_file.write_text(legacy_meta.read_text())
+                legacy_meta.unlink()
+            except Exception:
+                pass
         if meta_file.exists():
             try:
                 self._last_refresh = json.loads(meta_file.read_text()).get(
@@ -147,7 +160,7 @@ class LanceGraphStore:
 
     def _persist_meta(self) -> None:
         try:
-            (self.persist_dir / "lance_meta.json").write_text(
+            (self._lance_dir / "lance_meta.json").write_text(
                 json.dumps({"last_refresh": self._last_refresh}, indent=2)
             )
         except Exception:

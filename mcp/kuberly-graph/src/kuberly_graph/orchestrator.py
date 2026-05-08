@@ -7,8 +7,6 @@ module-level functions in `scripts/kuberly_graph.py`.
 from __future__ import annotations
 
 import datetime as _dt
-import json
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +16,6 @@ from .layers import (
     resolve_layer_names,
     topo_sort_layers,
 )
-from .layers._util import KuberlyGraph
 from .store import open_store
 
 
@@ -38,7 +35,6 @@ def regenerate_graph(
     repo_root: str = ".",
     persist_dir: str = ".kuberly",
     layers: list[str] | None = None,
-    write_json: bool = True,
     verbose: bool = False,
     mcp_endpoint: dict | None = None,
     logs_window: str | None = None,
@@ -67,8 +63,8 @@ def regenerate_graph(
         )
 
     # v0.50.1: state extraction is intrinsic to ``StateLayer.scan()`` now.
-    # No more ``auto_extract_state`` flag, no sidecar JSON — every layer
-    # writes nodes/edges directly to the LanceDB store.
+    # v0.51.1: dropped the legacy ``.kuberly/graph.json`` dump — every
+    # layer writes nodes/edges directly to the LanceDB store.
 
     ctx: dict[str, Any] = {
         "repo_root": str(repo),
@@ -89,7 +85,6 @@ def regenerate_graph(
     if extra_ctx:
         ctx.update(extra_ctx)
     per_layer: dict[str, dict] = {}
-    cold_graph: KuberlyGraph | None = None
 
     for name in target_names:
         layer = layer_by_name(name)
@@ -109,42 +104,8 @@ def regenerate_graph(
         nodes, edges = layer.scan(ctx)
         store.replace_layer(name, nodes, edges)
         per_layer[name] = {"nodes": len(nodes), "edges": len(edges)}
-        if name == "cold":
-            cold_graph = ctx.get("_cold_graph")
         if verbose:
             print(f"  layer={name} nodes={len(nodes)} edges={len(edges)}")
-
-    if write_json:
-        if cold_graph is not None:
-            out_path = persist / "graph.json"
-            out_path.write_text(
-                json.dumps(
-                    {
-                        "nodes": list(cold_graph.nodes.values()),
-                        "edges": cold_graph.edges,
-                        "stats": cold_graph.compute_stats(),
-                        "drift": cold_graph.cross_env_drift(),
-                    },
-                    indent=2,
-                    default=str,
-                )
-            )
-        elif {"code", "components", "applications"}.issubset(set(target_names)):
-            synth = KuberlyGraph(str(repo))
-            synth.build()
-            out_path = persist / "graph.json"
-            out_path.write_text(
-                json.dumps(
-                    {
-                        "nodes": list(synth.nodes.values()),
-                        "edges": synth.edges,
-                        "stats": synth.compute_stats(),
-                        "drift": synth.cross_env_drift(),
-                    },
-                    indent=2,
-                    default=str,
-                )
-            )
 
     duration_ms = int((_dt.datetime.now() - start).total_seconds() * 1000)
     out = {

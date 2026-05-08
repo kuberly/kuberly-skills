@@ -21,7 +21,6 @@ layer is populated — missing data → ``null`` / ``[]`` / ``0``, never crash.
 from __future__ import annotations
 
 import datetime as _dt
-import json
 import math
 from collections import defaultdict
 from pathlib import Path
@@ -846,29 +845,27 @@ def cross_layer_fuse(
       5. traces (sampled) vs applications (untraced)
 
     When ``mcp_url`` (or ``mcp_stdio``) is provided, refreshes each live
-    layer first; otherwise operates on the cached store. Hard-fails when
-    the rendered manifest file ``rendered_apps_<env>.json`` is missing
-    (matches the existing ``fuse-live`` convention). Per-tool data
-    unavailability soft-degrades — sections without data render as
+    layer first; otherwise operates on the cached store. Per-section
+    data unavailability soft-degrades — sections without data render as
     "data unavailable".
 
-    Writes ``<out_dir>/cross_drift_<env>.md`` and
-    ``<out_dir>/cross_drift_<env>.json``.
+    v0.51.1: returns the report INLINE — no more
+    ``cross_drift_<env>.{md,json}`` files. Operators pipe the result if
+    they want a file. Rendered manifest hard-fail also dropped:
+    ``RenderedLayer`` now produces ``rendered_resource`` nodes inline
+    in the LanceDB store (v0.51.0), so this tool reads them directly.
+
+    The ``out_dir`` parameter is accepted for backward-compatibility
+    with cached operator scripts but is **ignored** — nothing is
+    written to disk.
+
+    Returns ``{markdown, data, env}``. ``data`` is the structured JSON
+    blob; ``markdown`` is the rendered report.
     """
     persist_path = Path(_resolve_persist(persist_dir)).resolve()
-    out_path = Path(out_dir).resolve() if out_dir else persist_path
-    out_path.mkdir(parents=True, exist_ok=True)
-
-    rendered_file = persist_path / f"rendered_apps_{env}.json"
-    if not rendered_file.exists():
-        return {
-            "error": (
-                f"rendered_apps_{env}.json not found at {rendered_file} — "
-                "produce CUE rendering first (kuberly-stack render-apps)"
-            ),
-            "env": env,
-            "rendered_file": str(rendered_file),
-        }
+    if out_dir is not None:
+        # Deprecated: kept for signature compatibility; no file is written.
+        pass
 
     refreshed: list[str] = []
     refresh_errors: dict[str, str] = {}
@@ -1048,7 +1045,6 @@ def cross_layer_fuse(
     json_blob = {
         "env": env,
         "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
-        "rendered_file": str(rendered_file),
         "refreshed_layers": refreshed,
         "refresh_errors": refresh_errors,
         "app_count": len(env_apps),
@@ -1063,7 +1059,6 @@ def cross_layer_fuse(
         f"# Cross-layer drift — `{env}`",
         "",
         f"_Generated_: {json_blob['generated_at']}",
-        f"_Rendered file_: `{rendered_file}`",
         f"_Refreshed layers_: {refreshed or 'none (cached)'}",
         f"_Applications in env_: **{len(env_apps)}**",
         "",
@@ -1125,14 +1120,8 @@ def cross_layer_fuse(
             ]
         )
 
-    md_path = out_path / f"cross_drift_{env}.md"
-    json_path = out_path / f"cross_drift_{env}.json"
-    md_path.write_text("\n".join(md_lines) + "\n")
-    json_path.write_text(json.dumps(json_blob, indent=2, default=str))
-
     return {
         "env": env,
-        "md_path": str(md_path),
-        "json_path": str(json_path),
-        "summary": json_blob,
+        "markdown": "\n".join(md_lines) + "\n",
+        "data": json_blob,
     }

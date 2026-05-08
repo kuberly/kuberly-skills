@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.51.1 — 2026-05-08
+
+Drop ALL non-LanceDB filesystem writes (only-lancedb).
+
+Per the architectural principle "everything should be inside LanceDB.
+Everything." v0.50.1 + v0.51.0 already folded state + rendered apps
+inline. v0.51.1 closes the remaining gaps: after `regenerate_all` the
+ONLY thing on disk under `<persist_dir>` is the LanceDB store dir.
+
+- **CHG: `orchestrator.regenerate_graph`** — dropped the legacy
+  `<persist_dir>/graph.json` dump. The dashboard reads LanceDB live;
+  the JSON dump was vestigial backcompat. Removed `write_json` flag
+  and the corresponding `KuberlyGraph` synth path. Removed unused
+  `json` / `KuberlyGraph` / `defaultdict` imports.
+- **CHG: `tools/regenerate.regenerate_graph`** — docstring no longer
+  mentions `.kuberly/graph.json`.
+- **CHG: `tools/fusion.cross_layer_fuse`** — stopped writing
+  `<persist_dir>/cross_drift_<env>.{md,json}`. Tool now returns
+  `{env, markdown, data}` inline. Operators pipe the output if they
+  want a file. `out_dir` parameter retained for signature
+  compatibility (cached operator scripts) but is **ignored** —
+  documented in the docstring. Also dropped the rendered-file
+  hard-fail since `RenderedLayer` produces nodes inline (v0.51.0).
+  Dropped unused `json` import.
+- **CHG: `store/lance.py`** — moved `lance_meta.json` from
+  `<persist_dir>/` into `<persist_dir>/lance/` so the only top-level
+  artifact is the LanceDB store dir itself. Includes a one-shot
+  legacy migration on open: a top-level `lance_meta.json` from a
+  v0.51.0-or-earlier store is moved into `lance/`.
+- **NIL: tool/layer counts unchanged** — still 50 tools / 25 layers.
+
+Acceptance: `find <persist_dir> -maxdepth 1 -type f` returns nothing
+after `regenerate_all`; only the `lance/` subdirectory remains.
+
 ## v0.51.0 — 2026-05-08
 
 Observability layers actually populate; rendered apps inline.

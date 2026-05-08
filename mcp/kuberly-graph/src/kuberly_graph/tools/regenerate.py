@@ -81,8 +81,9 @@ def regenerate_graph(
 ) -> dict:
     """Re-run scanners across one or more layers (cold | code | components |
     applications | rendered | state | k8s | argo | logs | metrics | traces |
-    all) and refresh the persistent GraphStore. Also writes
-    .kuberly/graph.json for legacy consumers when the cold slice is included.
+    all) and refresh the persistent GraphStore. v0.51.1: no more
+    ``.kuberly/graph.json`` dump — the LanceDB store is the single source
+    of truth; consumers query it via MCP tools (``query_nodes`` etc).
 
     When neither `mcp_url` nor `mcp_stdio` is provided, auto-discovers the
     live-cluster MCP endpoint from `<repo_root>/.mcp.json` (looking for an
