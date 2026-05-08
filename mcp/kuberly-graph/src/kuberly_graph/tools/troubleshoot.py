@@ -400,12 +400,11 @@ def troubleshoot(
             calls.append(
                 _safe_live_call(
                     endpoint,
-                    "resources_get",
+                    "resources_list",
                     {
                         "apiVersion": _resource_api_version(resource_kind),
                         "kind": normalized_kind,
                         "namespace": live_namespace,
-                        "name": resource_name,
                     },
                 )
             )
