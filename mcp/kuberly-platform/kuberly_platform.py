@@ -300,6 +300,10 @@ class KuberlyPlatform:
         self.repo = Path(repo_root)
         self.nodes: dict[str, dict] = {}
         self.edges: list[dict] = []
+        # Set True by load_graph_cached when the LanceDB backing kuberly-
+        # graph is missing or empty. dispatch.py reads this flag to
+        # short-circuit graph-data tools with a remediation hint.
+        self._graph_empty: bool = False
 
     # -- node helpers --
     def add_node(self, nid: str, **attrs):
@@ -2357,18 +2361,124 @@ class KuberlyPlatform:
         self.scan_catalog()
         self.link_components_to_modules()
 
-    def load_from_cache(self, cache_path: Path) -> None:
-        """Hydrate `nodes` and `edges` from a previously-generated graph.json.
+    def load_from_lance(self, lance_dir: Path) -> bool:
+        """Hydrate `nodes` and `edges` from kuberly-graph's LanceDB store.
 
-        Skips the expensive repo walk in `build()`. Stats and drift are
-        computed lazily from the loaded nodes/edges so they don't go stale.
+        kuberly-graph (sister MCP) is the single source of truth for the
+        graph. It writes `<repo>/.kuberly/lance/{nodes,edges}.lance` on
+        every `regenerate_all`, with a unified schema:
+          nodes(id, type, layer, label, metadata, embedding_text, vector)
+          edges(id, source, target, relation, layer, metadata)
+
+        kuberly-platform tools expect each node/edge as a flat dict —
+        the `metadata` column already carries the typed attrs the tools
+        read (environment, module, resource_type, ...) so we spread it
+        and let the canonical scalar columns win on key collisions.
+
+        Returns True iff at least one node was loaded; False on missing
+        DB / missing tables / import error / empty store. Caller uses
+        this to set the `_graph_empty` flag that gates the graph tools.
         """
-        with cache_path.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        if not isinstance(data, dict):
-            raise ValueError(f"{cache_path} is not a valid graph dump")
-        self.nodes = {n["id"]: n for n in (data.get("nodes") or []) if isinstance(n, dict) and n.get("id")}
-        self.edges = list(data.get("edges") or [])
+        try:
+            import lancedb  # local import: kuberly-graph venv carries it
+        except ImportError:
+            return False
+
+        if not lance_dir.is_dir():
+            return False
+        try:
+            db = lancedb.connect(str(lance_dir))
+            tables = set(
+                db.table_names() if hasattr(db, "table_names") else db.list_tables()
+            )
+            if "nodes" not in tables or "edges" not in tables:
+                return False
+            nt = db.open_table("nodes")
+            et = db.open_table("edges")
+        except Exception:
+            return False
+
+        for row in nt.to_arrow().to_pylist():
+            nid = row.get("id")
+            if not nid:
+                continue
+            attrs = {
+                "id":    nid,
+                "type":  row.get("type"),
+                "layer": row.get("layer"),
+                "label": row.get("label") or nid,
+            }
+            md = row.get("metadata")
+            if isinstance(md, str):
+                try:
+                    md = json.loads(md)
+                except Exception:
+                    md = {}
+            if isinstance(md, dict):
+                # Spread metadata, then re-pin canonical columns so a
+                # rogue metadata.id can't shadow the real id.
+                attrs = {**md, **attrs}
+            self._normalize_node(attrs)
+            self.nodes[nid] = attrs
+
+        for row in et.to_arrow().to_pylist():
+            src = row.get("source")
+            dst = row.get("target")
+            if not (src and dst):
+                continue
+            edge = {
+                "source":   src,
+                "target":   dst,
+                "relation": row.get("relation", ""),
+            }
+            md = row.get("metadata")
+            if isinstance(md, str):
+                try:
+                    md = json.loads(md)
+                except Exception:
+                    md = {}
+            if isinstance(md, dict):
+                edge = {**md, **edge}
+            if row.get("layer"):
+                edge.setdefault("layer", row["layer"])
+            self.edges.append(edge)
+
+        return bool(self.nodes)
+
+    def _normalize_node(self, attrs: dict) -> None:
+        """Translate kuberly-graph's node taxonomy to kuberly-platform's
+        expected attr names, IN PLACE.
+
+        kuberly-graph and kuberly-platform model the same things with
+        different keys. Rather than touch every query method, we
+        normalize once at load time so query_resources / query_k8s /
+        drift / blast_radius all see the schema they were written for.
+
+        - tf_state_resource -> type='resource' with environment / module
+          / resource_type / resource_name. Module is the leaf of
+          module_path (e.g. clouds/aws/modules/loki -> loki). Sensitive
+          tf_types get the redacted flag query_resources already honors.
+
+        - k8s_resource -> kind / namespace / name pass through as-is
+          (already what query_k8s expects). Environment is left empty
+          when kuberly-graph regenerated against a single live MCP;
+          callers can still filter by namespace / kind.
+        """
+        ntype = attrs.get("type")
+        if ntype == "tf_state_resource":
+            attrs["type"] = "resource"
+            if attrs.get("env") and not attrs.get("environment"):
+                attrs["environment"] = attrs["env"]
+            mod_path = attrs.get("module_path") or ""
+            if mod_path and "module" not in attrs:
+                attrs["module"] = mod_path.rstrip("/").rsplit("/", 1)[-1]
+            if attrs.get("tf_type") and "resource_type" not in attrs:
+                attrs["resource_type"] = attrs["tf_type"]
+            if attrs.get("tf_name") and "resource_name" not in attrs:
+                attrs["resource_name"] = attrs["tf_name"]
+            rt = attrs.get("resource_type")
+            if rt and rt in self._SENSITIVE_RESOURCE_TYPES:
+                attrs["redacted"] = True
 
     # -- export --
     def to_json(self) -> dict:
@@ -3348,31 +3458,31 @@ def load_graph(repo_path: str) -> KuberlyPlatform:
 
 
 def load_graph_cached(repo_path: str) -> KuberlyPlatform:
-    """Hydrate a KuberlyPlatform from `.kuberly/graph.json` (MCP-startup path).
+    """Hydrate a KuberlyPlatform from kuberly-graph's LanceDB at MCP startup.
 
-    The MCP server should NOT build the graph from the repo on every cold
-    start — that's expensive and racy with concurrent edits. The pre-commit
-    hook (post_apm_install.sh) regenerates `.kuberly/graph.json` on every
-    commit, so the cached file is always current as of the latest commit.
+    Single source of truth: `<repo>/.kuberly/lance/`, populated by the
+    sister MCP `kuberly-graph` (`kuberly-graphs refresh` /
+    `kuberly-graph call regenerate_all`). This server reads but never
+    writes the store.
 
-    Raises SystemExit(1) with a clear message if the cache is missing — the
-    consumer needs to either commit something (which fires the regen hook)
-    or run `bash apm_modules/kuberly/kuberly-skills/scripts/post_apm_install.sh`
-    once to bootstrap.
+    Soft-degrade: if the DB is missing / empty / unreadable, the MCP
+    still BOOTS so session_* and other non-graph tools keep working.
+    `KuberlyPlatform._graph_empty` is set to True and `dispatch.py`
+    short-circuits every graph-data tool with a remediation hint
+    pointing at `kuberly-graphs refresh`. No graph.json fallback —
+    that path was retired in v0.56.0.
     """
     repo = Path(repo_path).resolve()
-    cache = repo / ".kuberly" / "graph.json"
-    if not cache.is_file():
-        print(
-            f"Error: {cache} not found. The MCP server reads this cached graph; "
-            "regenerate it once with:\n"
-            f"  python3 {Path(__file__).resolve()} generate {repo} -o {repo}/.kuberly\n"
-            "After that, the pre-commit hook keeps it fresh on every commit.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    lance_dir = repo / ".kuberly" / "lance"
     g = KuberlyPlatform(str(repo))
-    g.load_from_cache(cache)
+    g._graph_empty = not g.load_from_lance(lance_dir)
+    # Docs are not yet ingested into kuberly-graph's LanceDB — until
+    # that layer ships, we still scan `.kuberly/docs_overlay.json` (the
+    # only JSON sidecar to survive the v0.56 migration) so find_docs
+    # keeps working when docs_graph.py has been run. Scoped TODO:
+    # remove once kuberly-graph emits a "docs" layer.
+    if not g._graph_empty:
+        g.scan_docs_overlay()
     return g
 
 
@@ -4094,7 +4204,10 @@ def _compact_summary(name: str, result, args: dict) -> str:
     explicitly when the orchestrator wants human-readable Markdown.
     """
     if isinstance(result, dict) and "error" in result:
-        return f"err {name}: {result['error']}"
+        msg = f"err {name}: {result['error']}"
+        if result.get("hint"):
+            msg += f"\nhint: {result['hint']}"
+        return msg
 
     if name == "query_nodes":
         if not result:

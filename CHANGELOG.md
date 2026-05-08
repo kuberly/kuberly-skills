@@ -1,5 +1,77 @@
 # Changelog
 
+## v0.56.0 — 2026-05-08
+
+Single-source-of-truth: the kuberly-platform MCP now reads its graph
+from kuberly-graph's LanceDB store at `<repo>/.kuberly/lance/` instead
+of the JSON cache it built itself. Rationale: every layer producer
+(static / state / k8s / docs / and 20+ more) already lives in
+kuberly-graph; kuberly-platform was duplicating part of that work and
+shipping a parallel JSON cache that drifted whenever consumers
+regenerated overlays in the wrong order. Consolidation closes the gap.
+
+- **NEW: `KuberlyPlatform.load_from_lance(lance_dir)`** — opens the
+  `nodes` and `edges` tables in `.kuberly/lance/`, hydrates
+  `self.nodes` (id-keyed dict) and `self.edges` (list of dicts), and
+  spreads the LanceDB `metadata` column so existing tools see the
+  same flat attrs they always read. Returns `True` iff at least one
+  node was loaded; soft-fails to `False` on missing dir / missing
+  tables / lancedb import error / empty store.
+- **`load_graph_cached` rewritten** — boots from LanceDB; on miss,
+  sets `KuberlyPlatform._graph_empty = True` and returns the empty
+  graph. The MCP **still starts** in this state so session_* and
+  other non-graph tools keep working. Old graph.json fallback path
+  is removed from this entrypoint (the methods that produced
+  graph.json remain unused for v0.57.0 deletion — additive PR
+  policy).
+- **`KuberlyPlatform._normalize_node`** — translates kuberly-graph's
+  `tf_state_resource` rows into kuberly-platform's expected
+  `type='resource'` schema (`environment` ← `env`, `module` ← leaf of
+  `module_path`, `resource_type` ← `tf_type`, `resource_name` ←
+  `tf_name`, plus the redacted-types flag). Means `query_resources`
+  works against the consolidated DB without touching any tool's
+  query logic.
+- **NEW: `kuberly_mcp.dispatch._GRAPH_REQUIRING_TOOLS`** — soft-degrade
+  whitelist. When `_graph_empty` is true and the caller invoked one
+  of `query_nodes / query_resources / find_docs / graph_index /
+  query_k8s / get_node / get_neighbors / blast_radius / shortest_path
+  / drift / stats / plan_persona_fanout / quick_scope`, dispatch
+  short-circuits with `{"error": "graph not generated yet", "hint":
+  "run: kuberly-graphs refresh"}`. The compact renderer renders the
+  hint on a separate line so it survives terse output. Session tools
+  bypass the gate.
+- **NEW: `kuberly_graph.refresh_cli` + `kuberly-graphs` console
+  script** — friendly alias for `kuberly-graph call regenerate_all`.
+  Subcommand: `kuberly-graphs refresh [--repo PATH] [--persist-dir
+  PATH]`. Pure wrapper — every flag passes through to `_cmd_call` so
+  behaviour is identical to the underlying tool.
+- **`requirements-mcp.txt`** — adds `lancedb>=0.13.0,<1.0.0` and
+  `pyarrow>=17.0.0,<22.0.0` to the kuberly-platform venv.
+- **`scripts/ensure_mcp_venv.sh`** — prefers `python3.12` then
+  `python3.13` then `python3` because pyarrow has no Python 3.14
+  wheel as of writing. Detects an existing 3.14+ `.venv-mcp` and
+  recreates it on a known-good Python rather than failing on `pip
+  install pyarrow`.
+- **Docs sidecar lives** — `KuberlyPlatform.scan_docs_overlay()` is
+  still called after `load_from_lance` because kuberly-graph does not
+  yet emit a docs layer. v0.57.0 will add a `docs` layer to
+  kuberly-graph and remove this last JSON sidecar.
+
+**Migration on upgrade:** consumers MUST run `kuberly-graphs refresh`
+(or `kuberly-graph call regenerate_all`) once after `apm install` to
+populate the LanceDB. Without it, every graph-data MCP tool returns
+the remediation hint above. Forks that already ran `kuberly-graph
+regenerate_all` are zero-downtime.
+
+**Deprecations (still functional, removal in v0.57.0):**
+- `scripts/refresh_kuberly_overlays.sh` — superseded by
+  `kuberly-graphs refresh`.
+- `KuberlyPlatform.{scan_state_overlays, scan_k8s_overlays,
+  _scan_state_resources, load_from_cache, write_graph_json}` — dead
+  code while LanceDB is the cache.
+- `kuberly_platform.py generate` CLI subcommand — unused by the boot
+  path.
+
 ## v0.55.1 — 2026-05-08
 
 Patch — `refresh_kuberly_overlays.sh` ran the static graph FIRST and the
