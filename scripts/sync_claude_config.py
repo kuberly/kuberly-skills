@@ -137,6 +137,45 @@ def _mcp_server_cursor() -> dict[str, Any]:
     }
 
 
+def _mcp_server_graph_claude() -> dict[str, Any]:
+    """kuberly-graph MCP server for Claude Code project-scope `.mcp.json`.
+
+    The package ships under `mcp/kuberly-graph/` in the apm cache; consumers
+    `pip install -e` it into a local venv at
+    `apm_modules/kuberly/kuberly-skills/mcp/kuberly-graph/.venv/`. The console
+    script `kuberly-graph` is the entry point; `serve --transport stdio` is
+    Claude Code's project-scope contract.
+    """
+    return {
+        "command": (
+            f"{APM_CACHE_PATH}/mcp/kuberly-graph/.venv/bin/kuberly-graph"
+        ),
+        "args": ["serve", "--transport", "stdio", "--repo", "."],
+    }
+
+
+def _mcp_server_graph_cursor() -> dict[str, Any]:
+    """kuberly-graph MCP server for Cursor `.cursor/mcp.json`.
+
+    Same package as Claude's entry; Cursor needs `type: stdio` and
+    `${workspaceFolder}` expansion for the binary and the ``--repo`` flag.
+    """
+    return {
+        "type": "stdio",
+        "command": (
+            "${workspaceFolder}/" + APM_CACHE_PATH
+            + "/mcp/kuberly-graph/.venv/bin/kuberly-graph"
+        ),
+        "args": [
+            "serve",
+            "--transport",
+            "stdio",
+            "--repo",
+            "${workspaceFolder}",
+        ],
+    }
+
+
 _SESSION_START_COMMAND = (
     "sh apm_modules/kuberly/kuberly-skills/scripts/hooks/"
     "refresh_kuberly_graph_cursor_session.sh"
@@ -189,7 +228,8 @@ def _matcher_is_kuberly_owned(matcher: Any) -> bool:
     Supports (1) Claude-style nested ``{ "hooks": [ { "command": ... } ] }``
     matchers and (2) Cursor flat entries ``{ "command": "...", "timeout": … }``.
 
-    Catches the current apm-cache layout AND legacy hand-wired layouts
+    Catches the current apm-cache layout (`mcp/kuberly-graph/`,
+    `mcp/kuberly-platform/`) AND legacy hand-wired layouts
     (vendored scripts/kuberly_graph.py, scripts/mcp/kuberly-graph/, ...).
     Mixed matchers (some kuberly, some user) are left alone — safer to
     over-preserve than to delete user hooks.
@@ -288,18 +328,25 @@ def _merge_cursor_hooks_file(existing: dict[str, Any]) -> dict[str, Any]:
     return ordered
 
 
-def _merge_mcp_file(existing: dict[str, Any], server_entry: dict[str, Any]) -> dict[str, Any]:
-    """Merge kuberly-platform into an mcpServers dict (idempotent).
+def _merge_mcp_file(
+    existing: dict[str, Any],
+    server_entries: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Merge canonical kuberly-skills MCP servers into an mcpServers dict (idempotent).
 
-    Also removes any stale `kuberly-graph` entry — v0.12.0 renamed the
-    server, no consumer should keep pointing at the old name.
+    `server_entries` is a `{name: entry}` map — currently `kuberly-platform`
+    (v0.12.0+) and `kuberly-graph` (v0.44.0+, FastMCP package shipped under
+    `mcp/kuberly-graph/`). Both names are treated as canonical: if either
+    already exists with a non-kuberly command, this function still
+    overwrites with the canonical entry (consistent with how
+    `kuberly-platform` was always handled).
     """
     out = json.loads(json.dumps(existing))
     out.setdefault("mcpServers", {})
     if not isinstance(out["mcpServers"], dict):
         return existing
-    out["mcpServers"].pop("kuberly-graph", None)  # drop legacy on every sync
-    out["mcpServers"]["kuberly-platform"] = server_entry
+    for name, entry in server_entries.items():
+        out["mcpServers"][name] = entry
     return out
 
 
@@ -369,7 +416,10 @@ def main() -> int:
              ".claude/settings.json"),
             (root / ".mcp.json",
              {"mcpServers": {}},
-             lambda d: _merge_mcp_file(d, _mcp_server_claude()),
+             lambda d: _merge_mcp_file(d, {
+                 "kuberly-platform": _mcp_server_claude(),
+                 "kuberly-graph": _mcp_server_graph_claude(),
+             }),
              ".mcp.json"),
         ]),
         ("cursor", [
@@ -379,7 +429,10 @@ def main() -> int:
              ".cursor/hooks.json"),
             (root / ".cursor" / "mcp.json",
              {"mcpServers": {}},
-             lambda d: _merge_mcp_file(d, _mcp_server_cursor()),
+             lambda d: _merge_mcp_file(d, {
+                 "kuberly-platform": _mcp_server_cursor(),
+                 "kuberly-graph": _mcp_server_graph_cursor(),
+             }),
              ".cursor/mcp.json"),
         ]),
     ]

@@ -5,8 +5,40 @@ from __future__ import annotations
 from typing import Any
 
 
+# Tools that need the graph populated to do anything useful. When the
+# LanceDB backing kuberly-graph is empty (fresh clone, regenerate
+# never run, kuberly-graph venv missing, ...), these short-circuit
+# with a single remediation hint so the user knows the exact command
+# to run instead of seeing 0 / empty results from every graph query.
+#
+# Pass-through (work in any state): session_init, session_read,
+# session_write, session_list, session_status, session_set_status —
+# they're filesystem ops keyed off `.agents/prompts/<slug>/` and
+# don't read self.nodes / self.edges.
+_GRAPH_REQUIRING_TOOLS = frozenset({
+    "query_nodes",
+    "query_resources",
+    "find_docs",
+    "graph_index",
+    "query_k8s",
+    "get_node",
+    "get_neighbors",
+    "blast_radius",
+    "shortest_path",
+    "drift",
+    "stats",
+    "plan_persona_fanout",
+    "quick_scope",
+})
+
+
 def dispatch_tool(graph: Any, name: str, args: dict[str, Any]) -> Any:
     """Return a plain Python result for `render_tool_result`."""
+    if name in _GRAPH_REQUIRING_TOOLS and getattr(graph, "_graph_empty", False):
+        return {
+            "error": "graph not generated yet",
+            "hint":  "run: kuberly-graphs refresh",
+        }
     if name == "query_nodes":
         return graph.query_nodes(
             node_type=args.get("node_type"),

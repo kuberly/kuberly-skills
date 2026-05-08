@@ -1,0 +1,14 @@
+apiVersion: v2
+name: kuberly-graph-ui
+description: Standalone SPA for the kuberly-graph dashboard (Vite + nginx).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - kuberly
+  - graph
+  - dashboard
+  - mcp
+maintainers:
+  - name: kuberly
+    url: https://github.com/kuberly/kuberly-skills

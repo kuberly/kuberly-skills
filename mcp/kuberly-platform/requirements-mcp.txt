@@ -1,3 +1,12 @@
-# Optional dependency for `kuberly_platform.py mcp` (stdio server).
+# Runtime dependencies for `kuberly_platform.py mcp` (stdio server).
 # Install in the same interpreter Cursor / Claude Code uses for MCP.
+
+# MCP framework.
 mcp>=1.10,<2
+
+# v0.56.0+: kuberly-platform reads its graph from kuberly-graph's
+# LanceDB store at .kuberly/lance/. lancedb's wheel chain currently
+# requires Python <= 3.13 (no pyarrow wheel for 3.14 yet) — see
+# ensure_mcp_venv.sh which prefers python3.12 when available.
+lancedb>=0.13.0,<1.0.0
+pyarrow>=17.0.0,<22.0.0

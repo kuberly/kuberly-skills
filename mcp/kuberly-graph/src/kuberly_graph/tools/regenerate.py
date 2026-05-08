@@ -1,0 +1,284 @@
+"""Regeneration tools — drive the LAYERS pipeline."""
+
+from __future__ import annotations
+
+import sys
+
+from ..layers import leaf_layer_names
+from ..orchestrator import (
+    build_mcp_endpoint,
+    list_layers_summary,
+    regenerate_graph as _regenerate_graph_op,
+    regenerate_layer_op,
+)
+from ..server import SERVER_CONFIG, mcp
+from ..store._mcp_discovery import discover_live_mcp
+
+
+# Layers that need a live-cluster MCP endpoint to produce real data.
+_LIVE_LAYERS: set[str] = {"k8s", "argo", "logs", "metrics", "traces"}
+
+
+def _resolve_repo(repo_root: str | None) -> str:
+    return repo_root or SERVER_CONFIG.get("repo_root", ".")
+
+
+def _resolve_persist(persist_dir: str | None) -> str:
+    return persist_dir or SERVER_CONFIG.get("persist_dir", ".kuberly")
+
+
+def _resolve_endpoint(
+    mcp_url: str | None,
+    mcp_stdio: str | None,
+    repo_root: str,
+) -> tuple[dict | None, str | None]:
+    """Pick endpoint: explicit args win; else auto-discover from .mcp.json.
+
+    When ``mcp_url`` is passed explicitly we still consult ``.mcp.json`` and
+    merge any matching ``headers`` (e.g. ``Authorization: Bearer ${VAR}``) so
+    the operator doesn't have to encode the bearer in the URL. The user's
+    explicit URL still wins; only the headers piggy-back.
+
+    Returns (endpoint, label) where label is a human-readable string for the
+    skipped_layers note ("auto-discovered http://..." / "no live MCP found").
+    """
+    if mcp_url or mcp_stdio:
+        endpoint = build_mcp_endpoint(mcp_url, mcp_stdio) or {}
+        if mcp_url and not endpoint.get("headers"):
+            discovered = discover_live_mcp(repo_root)
+            if (
+                isinstance(discovered, dict)
+                and discovered.get("url") == mcp_url
+                and discovered.get("headers")
+            ):
+                endpoint["headers"] = discovered["headers"]
+                print(
+                    "  info: merged headers from .mcp.json into explicit mcp_url endpoint",
+                    file=sys.stderr,
+                )
+        return endpoint, ("explicit url" if mcp_url else "explicit stdio")
+    discovered = discover_live_mcp(repo_root)
+    if discovered:
+        url = discovered.get("url") or "stdio"
+        print(f"Auto-discovered MCP at {url}", file=sys.stderr)
+        return discovered, f"auto-discovered {url}"
+    return None, None
+
+
+@mcp.tool()
+def regenerate_graph(
+    layers: list[str] | None = None,
+    verbose: bool = False,
+    mcp_url: str | None = None,
+    mcp_stdio: str | None = None,
+    logs_window: str | None = None,
+    logs_limit: int | None = None,
+    metrics_top_n: int | None = None,
+    traces_window: str | None = None,
+    traces_limit: int | None = None,
+    repo_root: str | None = None,
+    persist_dir: str | None = None,
+) -> dict:
+    """Re-run scanners across one or more layers (cold | code | components |
+    applications | rendered | state | k8s | argo | logs | metrics | traces |
+    all) and refresh the persistent GraphStore. v0.51.1: no more
+    ``.kuberly/graph.json`` dump — the LanceDB store is the single source
+    of truth; consumers query it via MCP tools (``query_nodes`` etc).
+
+    When neither `mcp_url` nor `mcp_stdio` is provided, auto-discovers the
+    live-cluster MCP endpoint from `<repo_root>/.mcp.json` (looking for an
+    `ai-agent-tool` HTTP entry, resolving `${VAR}` headers from os.environ).
+    If discovery returns nothing, live layers (k8s/argo/logs/metrics/traces)
+    are skipped silently with a note in the result's `skipped_layers` field;
+    cold/code/components/applications/rendered/state still run.
+    """
+    repo = _resolve_repo(repo_root)
+    persist = _resolve_persist(persist_dir)
+    endpoint, endpoint_label = _resolve_endpoint(mcp_url, mcp_stdio, repo)
+
+    # Decide which layers to actually run vs skip when no MCP is available.
+    requested = list(layers) if layers else None
+    skipped: list[dict] = []
+    if endpoint is None:
+        target = requested if requested is not None else ["all"]
+        # Expand "all" to the leaf list so we can filter.
+        expanded: list[str] = []
+        for name in target:
+            if name == "all":
+                expanded.extend(leaf_layer_names())
+            else:
+                expanded.append(name)
+        kept: list[str] = []
+        for name in expanded:
+            if name in _LIVE_LAYERS:
+                skipped.append(
+                    {"layer": name, "reason": "no live MCP endpoint discovered"}
+                )
+            else:
+                kept.append(name)
+        run_layers: list[str] | None = kept if requested is not None else (
+            kept if kept else None
+        )
+        # If user passed nothing explicit and we filtered out live layers,
+        # ensure we don't end up passing [] (which resolve_layer_names treats
+        # as "no layers"). Default to leaf cold-only set.
+        if requested is None:
+            run_layers = kept or None
+    else:
+        run_layers = requested
+
+    result = _regenerate_graph_op(
+        repo_root=repo,
+        persist_dir=persist,
+        layers=run_layers,
+        verbose=verbose,
+        mcp_endpoint=endpoint,
+        logs_window=logs_window,
+        logs_limit=logs_limit,
+        metrics_top_n=metrics_top_n,
+        traces_window=traces_window,
+        traces_limit=traces_limit,
+    )
+    if skipped:
+        result["skipped_layers"] = skipped
+    if endpoint_label:
+        result["mcp_endpoint"] = endpoint.get("url") if endpoint else None
+        result["mcp_endpoint_source"] = endpoint_label
+    else:
+        result["mcp_endpoint"] = None
+        result["mcp_endpoint_source"] = "none"
+    return result
+
+
+@mcp.tool()
+def regenerate_layer(
+    layer: str,
+    mcp_url: str | None = None,
+    mcp_stdio: str | None = None,
+    logs_window: str | None = None,
+    logs_limit: int | None = None,
+    metrics_top_n: int | None = None,
+    traces_window: str | None = None,
+    traces_limit: int | None = None,
+    repo_root: str | None = None,
+    persist_dir: str | None = None,
+    aws_account_id: str | None = None,
+    cost_lookback_months: int | None = None,
+    compliance_required_tags: list[str] | None = None,
+    enable_gha_enrichment: bool | None = None,
+    github_repos: list[str] | None = None,
+    github_token: str | None = None,
+    enable_ecr_enrichment: bool | None = None,
+    aws_region: str | None = None,
+    aws_per_service_limit: int | None = None,
+    aws_services: list[str] | None = None,
+    kubectl_path: str | None = None,
+    kubectl_kubeconfig: str | None = None,
+    kubectl_context: str | None = None,
+    kubectl_per_kind_limit: int | None = None,
+    kubectl_skip_kinds: list[str] | None = None,
+    kubectl_timeout_seconds: int | None = None,
+) -> dict:
+    """Re-run one layer's scanner. Convenience wrapper around
+    `regenerate_graph(layers=[layer])`.
+
+    Phase 7D knobs (all optional):
+      * ``aws_account_id`` / ``cost_lookback_months`` — CostLayer.
+      * ``compliance_required_tags`` — ComplianceLayer R003 input.
+
+    Phase 7E knobs (image_build only — all optional, all opt-in):
+      * ``enable_gha_enrichment`` — emit ``commit`` + ``workflow_run`` nodes
+        via GitHub REST API. Requires ``github_token`` (or
+        ``GITHUB_TOKEN`` / ``KUBERLY_GITHUB_TOKEN`` env). Soft-degrades
+        when token absent.
+      * ``github_repos`` — explicit ``["owner/repo", ...]`` list. When
+        omitted, auto-discovered from ECR repository names.
+      * ``github_token`` — explicit token; falls back to env vars.
+      * ``enable_ecr_enrichment`` — enrich ``ecr_repo`` nodes
+        (scan-on-push, lifecycle, immutability) and emit
+        ``image_scan_finding`` for HIGH/CRITICAL CVEs via boto3.
+        Soft-degrades when boto3 / AWS creds absent.
+      * ``aws_region`` — defaults to ``AWS_REGION`` env / ``us-east-1``.
+    """
+    repo = _resolve_repo(repo_root)
+    endpoint, _label = _resolve_endpoint(mcp_url, mcp_stdio, repo)
+    extra: dict = {}
+    if aws_account_id:
+        extra["aws_account_id"] = aws_account_id
+    if cost_lookback_months:
+        extra["cost_lookback_months"] = int(cost_lookback_months)
+    if compliance_required_tags:
+        extra["compliance_required_tags"] = list(compliance_required_tags)
+    if enable_gha_enrichment is not None:
+        extra["enable_gha_enrichment"] = bool(enable_gha_enrichment)
+    if github_repos:
+        extra["github_repos"] = list(github_repos)
+    if github_token:
+        extra["github_token"] = str(github_token)
+    if enable_ecr_enrichment is not None:
+        extra["enable_ecr_enrichment"] = bool(enable_ecr_enrichment)
+    if aws_region:
+        extra["aws_region"] = str(aws_region)
+    if aws_per_service_limit:
+        extra["aws_per_service_limit"] = int(aws_per_service_limit)
+    if aws_services:
+        extra["aws_services"] = list(aws_services)
+    if kubectl_path:
+        extra["kubectl_path"] = str(kubectl_path)
+    if kubectl_kubeconfig:
+        extra["kubectl_kubeconfig"] = str(kubectl_kubeconfig)
+    if kubectl_context:
+        extra["kubectl_context"] = str(kubectl_context)
+    if kubectl_per_kind_limit:
+        extra["kubectl_per_kind_limit"] = int(kubectl_per_kind_limit)
+    if kubectl_skip_kinds is not None:
+        extra["kubectl_skip_kinds"] = list(kubectl_skip_kinds)
+    if kubectl_timeout_seconds:
+        extra["kubectl_timeout_seconds"] = int(kubectl_timeout_seconds)
+    return regenerate_layer_op(
+        layer=layer,
+        repo_root=repo,
+        persist_dir=_resolve_persist(persist_dir),
+        mcp_endpoint=endpoint,
+        logs_window=logs_window,
+        logs_limit=logs_limit,
+        metrics_top_n=metrics_top_n,
+        traces_window=traces_window,
+        traces_limit=traces_limit,
+        extra_ctx=extra or None,
+    )
+
+
+@mcp.tool()
+def list_layers(persist_dir: str | None = None) -> list[dict]:
+    """Per-layer summary: name, type, refresh_trigger, last_refresh, node/edge counts."""
+    return list_layers_summary(_resolve_persist(persist_dir))
+
+
+@mcp.tool()
+def regenerate_all(
+    repo_root: str | None = None,
+    persist_dir: str | None = None,
+) -> dict:
+    """Refresh every layer of the graph in one shot. No JSON args required.
+
+    Auto-discovers the live-cluster MCP endpoint from `<repo_root>/.mcp.json`
+    (preferring an `ai-agent-tool` HTTP entry, resolving `${VAR}` headers
+    from os.environ). Use this after `aws sso login` + `kubectl` connection
+    + ai-agent-tool MCP wiring, when you want a one-shot full refresh.
+
+    If no live MCP is discoverable, cold/code/components/applications/
+    rendered/state still run; live layers (k8s/argo/logs/metrics/traces) are
+    skipped silently and reported under `skipped_layers`.
+
+    Returns: {layers_run, node_count, edge_count, mcp_endpoint,
+              mcp_endpoint_source, duration_ms, skipped_layers, ...}.
+    """
+    return regenerate_graph(
+        layers=None,
+        verbose=False,
+        mcp_url=None,
+        mcp_stdio=None,
+        repo_root=repo_root,
+        persist_dir=persist_dir,
+    )

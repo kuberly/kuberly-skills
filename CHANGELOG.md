@@ -1,5 +1,726 @@
 # Changelog
 
+## v0.56.0 — 2026-05-08
+
+Single-source-of-truth: the kuberly-platform MCP now reads its graph
+from kuberly-graph's LanceDB store at `<repo>/.kuberly/lance/` instead
+of the JSON cache it built itself. Rationale: every layer producer
+(static / state / k8s / docs / and 20+ more) already lives in
+kuberly-graph; kuberly-platform was duplicating part of that work and
+shipping a parallel JSON cache that drifted whenever consumers
+regenerated overlays in the wrong order. Consolidation closes the gap.
+
+- **NEW: `KuberlyPlatform.load_from_lance(lance_dir)`** — opens the
+  `nodes` and `edges` tables in `.kuberly/lance/`, hydrates
+  `self.nodes` (id-keyed dict) and `self.edges` (list of dicts), and
+  spreads the LanceDB `metadata` column so existing tools see the
+  same flat attrs they always read. Returns `True` iff at least one
+  node was loaded; soft-fails to `False` on missing dir / missing
+  tables / lancedb import error / empty store.
+- **`load_graph_cached` rewritten** — boots from LanceDB; on miss,
+  sets `KuberlyPlatform._graph_empty = True` and returns the empty
+  graph. The MCP **still starts** in this state so session_* and
+  other non-graph tools keep working. Old graph.json fallback path
+  is removed from this entrypoint (the methods that produced
+  graph.json remain unused for v0.57.0 deletion — additive PR
+  policy).
+- **`KuberlyPlatform._normalize_node`** — translates kuberly-graph's
+  `tf_state_resource` rows into kuberly-platform's expected
+  `type='resource'` schema (`environment` ← `env`, `module` ← leaf of
+  `module_path`, `resource_type` ← `tf_type`, `resource_name` ←
+  `tf_name`, plus the redacted-types flag). Means `query_resources`
+  works against the consolidated DB without touching any tool's
+  query logic.
+- **NEW: `kuberly_mcp.dispatch._GRAPH_REQUIRING_TOOLS`** — soft-degrade
+  whitelist. When `_graph_empty` is true and the caller invoked one
+  of `query_nodes / query_resources / find_docs / graph_index /
+  query_k8s / get_node / get_neighbors / blast_radius / shortest_path
+  / drift / stats / plan_persona_fanout / quick_scope`, dispatch
+  short-circuits with `{"error": "graph not generated yet", "hint":
+  "run: kuberly-graphs refresh"}`. The compact renderer renders the
+  hint on a separate line so it survives terse output. Session tools
+  bypass the gate.
+- **NEW: `kuberly_graph.refresh_cli` + `kuberly-graphs` console
+  script** — friendly alias for `kuberly-graph call regenerate_all`.
+  Subcommand: `kuberly-graphs refresh [--repo PATH] [--persist-dir
+  PATH]`. Pure wrapper — every flag passes through to `_cmd_call` so
+  behaviour is identical to the underlying tool.
+- **`requirements-mcp.txt`** — adds `lancedb>=0.13.0,<1.0.0` and
+  `pyarrow>=17.0.0,<22.0.0` to the kuberly-platform venv.
+- **`scripts/ensure_mcp_venv.sh`** — prefers `python3.12` then
+  `python3.13` then `python3` because pyarrow has no Python 3.14
+  wheel as of writing. Detects an existing 3.14+ `.venv-mcp` and
+  recreates it on a known-good Python rather than failing on `pip
+  install pyarrow`.
+- **Docs sidecar lives** — `KuberlyPlatform.scan_docs_overlay()` is
+  still called after `load_from_lance` because kuberly-graph does not
+  yet emit a docs layer. v0.57.0 will add a `docs` layer to
+  kuberly-graph and remove this last JSON sidecar.
+
+**Migration on upgrade:** consumers MUST run `kuberly-graphs refresh`
+(or `kuberly-graph call regenerate_all`) once after `apm install` to
+populate the LanceDB. Without it, every graph-data MCP tool returns
+the remediation hint above. Forks that already ran `kuberly-graph
+regenerate_all` are zero-downtime.
+
+**Deprecations (still functional, removal in v0.57.0):**
+- `scripts/refresh_kuberly_overlays.sh` — superseded by
+  `kuberly-graphs refresh`.
+- `KuberlyPlatform.{scan_state_overlays, scan_k8s_overlays,
+  _scan_state_resources, load_from_cache, write_graph_json}` — dead
+  code while LanceDB is the cache.
+- `kuberly_platform.py generate` CLI subcommand — unused by the boot
+  path.
+
+## v0.55.1 — 2026-05-08
+
+Patch — `refresh_kuberly_overlays.sh` ran the static graph FIRST and the
+overlay producers (state / k8s / docs) AFTER. Because the MCP boot path
+`load_graph_cached` reads only `.kuberly/graph.json` and never re-scans
+overlays, the cached graph never contained any of the overlay-derived
+nodes — making `query_resources`, `query_k8s`, and `find_docs` return 0
+even when the overlay JSON files were on disk and visible to
+`graph_index`.
+
+- **Reorder layers in `scripts/refresh_kuberly_overlays.sh`**: state
+  (1/4) → k8s (2/4) → docs (3/4) → static graph (4/4). The static
+  graph now consumes the three overlay files when it runs, baking
+  resource / k8s / doc nodes into `graph.json` so the cached load on
+  the next MCP start sees them.
+- **Verified on traigent-iac**: graph.json grew from 92 → 622 nodes
+  (469 resources + 26 docs + 35 state-derived components) once the
+  ordering was correct. Same producers, same overlays — just the
+  bake-in step on the right side.
+- Header comment in the script spells out the dependency: "static is
+  the sealed cache; overlays must exist on disk before it runs."
+
+No producer or schema changes. Pure ordering fix in the wrapper.
+
+## v0.55.0 — 2026-05-08
+
+Adds a single-entrypoint overlay refresh script. The kuberly-platform
+MCP refuses to start when `.kuberly/graph.json` is missing and silently
+returns 0 results from `query_resources` / `query_k8s` / `find_docs`
+when their overlays haven't been generated. Forks have been hand-running
+four different scripts to recover; this collapses them into one.
+
+- **NEW: `scripts/refresh_kuberly_overlays.sh`** — sequenced runner for
+  all four overlay producers. Always rebuilds the static graph; runs
+  `state_graph generate-all --resources` only when AWS creds resolve;
+  iterates envs from `components/<env>/shared-infra.json` and runs
+  `k8s_graph generate --env <env>` only against kubectl contexts that
+  actually answer; finishes with `docs_graph generate` (incremental,
+  optional `--embed` via `KUBERLY_DOCS_EMBED`). Credential-gated layers
+  soft-skip with a `[overlays]` warning so the script always exits 0
+  when the static layer is healthy. Flags: `--full`, `--no-state`,
+  `--no-k8s`, `--no-docs`, `--env <name>`, `--modules <csv>`.
+- **Idiom matches `regenerate_docs_overlay.sh`** — invoked by the
+  consumer with `bash apm_modules/.../scripts/refresh_kuberly_overlays.sh`,
+  picks up `${REPO_ROOT}/.venv-mcp/bin/python3` when present, no
+  installation step beyond `apm install`.
+
+No code changes to `kuberly_platform.py` or any overlay schema. Pure
+addition. Forks already on v0.54.0 can repin without re-testing.
+
+## v0.54.0 — 2026-05-08
+
+Patch — `session_list` compact renderer crashed on dict-shaped file entries
+(`sequence item 0: expected str instance, dict found`), making the tool
+unusable from MCP clients that default to `format=compact` (Claude Code,
+agent-orchestrator). The `KuberlyPlatform.session_list()` method already
+returned `[{file, bytes, mtime}, ...]` for v0.13.4+ — only the
+`_compact_summary` branch in `kuberly_platform.py` still treated the list
+as bare strings.
+
+- **Fix `_compact_summary` for `session_list`** — render each file as
+  `<path> (<bytes> B, <mtime>)`, matching the card renderer's column
+  layout. Falls back to `str(f)` for non-dict entries so older callers
+  don't break.
+- **Test `test_session_list_compact_renders_dict_files`** — exercises
+  the compact path end-to-end (`session_init` → `session_write` →
+  `session_list` → `_compact_summary`) and asserts the rendered string
+  contains the file name and the size unit. Adds `_compact_summary` to
+  the test module's import list.
+
+No public API change. No overlay format change. Safe to drop into
+existing forks via `apm install` after pin bump.
+
+## v0.53.0 — 2026-05-08
+
+Phase 8L + 8M — fusion super-tools + perf for scale (one PR).
+
+**Phase 8L — 5 LLM-agent-friendly fusion tools** (`tools/super.py`,
+all `@mcp.tool()`-decorated):
+
+- **NEW: `summarize_environment(env=None)`** — auto-detects single-env
+  forks and returns counts/breakdowns across IaC (modules / components /
+  applications), k8s by kind, AWS by category + service, observability
+  (log_templates / metrics / traces / scrape_targets), compliance
+  (violations / by_severity / by_rule), anomalies (count / by_layer),
+  graph health (totals + populated-layer count).
+- **NEW: `trace_data_flow(from_id, to_id, max_hops=8)`** — uses the
+  process-cached `RxGraph.shortest_path` and annotates every hop with
+  the relation that linked it to the previous node + the layer of the
+  visited node. Returns `{found, path, hop_count, mermaid}` (or
+  `{found:false, reason}`).
+- **NEW: `incident_context(symptom, service=None)`** — joins
+  `semantic_search` + `find_log_anomalies` + `find_high_cardinality_metrics`
+  + `find_error_hotspots` (and `service_one_pager` when `service` is given)
+  into one structured triage report with a derived
+  `recommended_next_steps` list. Per-probe soft-degrades.
+- **NEW: `service_lineage(service, env=None)`** — upstream callers +
+  downstream callees from trace edges, k8s data deps (`consumes_secret`
+  / `consumes_configmap` from matched pods), network exposure (matched
+  Service / Ingress with `service_type` / `is_public`), Mermaid diagram.
+- **NEW: `node_explain(node_id)`** — full metadata + neighbours grouped
+  by `in:<rel>` / `out:<rel>` (capped at 50 neighbours) + ancestor
+  derivation chain (walks inbound edges by relation priority:
+  `owned_by` → `in_cluster` → `in_vpc` → `declared_in` → `in_repo` → …)
+  + Mermaid diagram of the chain.
+
+**Phase 8M — perf**:
+
+- **LanceDB scalar indices** on `nodes.{id, type, layer}` (BTREE +
+  BITMAP × 2) and `edges.{source, target}` (BTREE × 2). Created at
+  `LanceGraphStore.__init__` and re-asserted after every
+  `replace_layer` (idempotent via `replace=True`). Soft-degrades when
+  the running LanceDB version rejects the args (empty table, etc.) —
+  status surfaces in `store.stats().scalar_indices`. Never raises.
+- **`query_nodes` cursor pagination** — new optional `cursor` + `limit`
+  kwargs. When EITHER is provided the return shape switches to
+  `{nodes, next_cursor, total_count}`; when both are omitted the legacy
+  `list[dict]` is returned (back-compat preserved). Cursor is a
+  base64-url payload encoding `{last_id, filter_hash}`.
+- **`/api/v1/graph` cursor pagination** — same shape; new optional
+  `cursor` query param + `next_cursor` + `total_count` in the response.
+- **Dashboard TTL cache** — 5-second cache on `/api/v1/meta-overview`,
+  `/api/v1/aws-services`, `/api/v1/compliance`, `/api/v1/communities`
+  (per-filter keys). Cache key embeds a global `cache_epoch` integer
+  that `regenerate_graph` / `regenerate_layer` bumps after each
+  successful refresh — stale data after refresh is impossible.
+- **RxGraph reuse** — `RxGraph.cached_from_store(store)` keeps one
+  rebuilt graph per `(persist_dir, cache_epoch)`; consecutive
+  `shortest_path` / `blast_radius` / `trace_data_flow` calls within the
+  same epoch share one graph.
+
+Tool count: 50 → **55**. Layer count unchanged at **25**. No new Python
+deps. Backwards compatible — every existing tool's signature and return
+shape is preserved.
+
+## v0.52.0 — 2026-05-08
+
+Dashboard polish — Stack Overview + Compliance + AWS tiles + community grouping.
+
+Renders the rich-graph data we accumulated through Phases 8A-8H/v0.51.1
+(7763 nodes, 5585 edges, 25 layers, 50 tools) into UI surfaces:
+
+- **NEW: `GET /api/v1/meta-overview`** — emits the meta layer as a small
+  `{nodes, links}` payload: every `type=graph_layer` node + the
+  `feeds_into` / `summarized_by` edges from `MetaLayer`. Pure GraphStore
+  read; no live calls.
+- **NEW: `GET /api/v1/aws-services`** — groups every `aws:*`/`aws_*` node
+  into `{Compute, Storage, Database, Network, Security/IAM, Edge/CDN,
+  Monitoring, Lambda/Serverless, Other}` with service display labels.
+  Powers the populated Architecture tile section in the Dashboard tab.
+- **NEW: `GET /api/v1/compliance?severity=&rule_id=&limit=`** — returns
+  every `compliance_violation:*` node + by-severity / by-rule breakdowns
+  + filter-applied findings list. Powers the Compliance tab.
+- **NEW: `GET /api/v1/communities?layer=&type=&limit=&algorithm=`** —
+  builds a NetworkX undirected graph from the same node-set the
+  `/graph` endpoint produces and runs
+  `networkx.algorithms.community.greedy_modularity_communities`. Returns
+  `{community_count, modularity, communities: {node_id: int}, sizes}` so
+  the Graph tab can recolour nodes by community. Falls back to
+  `greedy_modularity` only — no `igraph-python` / `leidenalg` deps added.
+  NetworkX is already a transitive dep of lance/sentence-transformers
+  (3.6.1 in the consumer venv).
+- **NEW: Dashboard tabs** — `Stack Overview` (meta-layer as a 2D-ish
+  force-directed graph-of-graphs, sized by `node_count`, coloured by
+  `layer_type`, click-to-drill into Graph tab pre-filtered) and
+  `Compliance` (KPI cards + chip filters + sortable findings table with
+  resource → Graph tab focus). Existing Dashboard + Graph tabs unchanged
+  except: AWS tiles now render real per-category data, and Graph tab
+  added a `Group by community` option in the existing group-by selector
+  with a community legend overlay.
+- **NIL: tool/layer counts unchanged** — still 50 tools / 25 layers.
+  Backend additions are dashboard-internal HTTP routes only.
+
+Acceptance: 4 new endpoints return real data on the populated graph
+(`meta-overview`: 25 nodes / 99 links; `aws-services`: 166 resources
+across 7 categories; `compliance`: 93 findings; `communities` at
+limit=3000: 3000 nodes / 3993 edges / 254 communities / modularity
+0.912).
+
+## v0.51.1 — 2026-05-08
+
+Drop ALL non-LanceDB filesystem writes (only-lancedb).
+
+Per the architectural principle "everything should be inside LanceDB.
+Everything." v0.50.1 + v0.51.0 already folded state + rendered apps
+inline. v0.51.1 closes the remaining gaps: after `regenerate_all` the
+ONLY thing on disk under `<persist_dir>` is the LanceDB store dir.
+
+- **CHG: `orchestrator.regenerate_graph`** — dropped the legacy
+  `<persist_dir>/graph.json` dump. The dashboard reads LanceDB live;
+  the JSON dump was vestigial backcompat. Removed `write_json` flag
+  and the corresponding `KuberlyGraph` synth path. Removed unused
+  `json` / `KuberlyGraph` / `defaultdict` imports.
+- **CHG: `tools/regenerate.regenerate_graph`** — docstring no longer
+  mentions `.kuberly/graph.json`.
+- **CHG: `tools/fusion.cross_layer_fuse`** — stopped writing
+  `<persist_dir>/cross_drift_<env>.{md,json}`. Tool now returns
+  `{env, markdown, data}` inline. Operators pipe the output if they
+  want a file. `out_dir` parameter retained for signature
+  compatibility (cached operator scripts) but is **ignored** —
+  documented in the docstring. Also dropped the rendered-file
+  hard-fail since `RenderedLayer` produces nodes inline (v0.51.0).
+  Dropped unused `json` import.
+- **CHG: `store/lance.py`** — moved `lance_meta.json` from
+  `<persist_dir>/` into `<persist_dir>/lance/` so the only top-level
+  artifact is the LanceDB store dir itself. Includes a one-shot
+  legacy migration on open: a top-level `lance_meta.json` from a
+  v0.51.0-or-earlier store is moved into `lance/`.
+- **NIL: tool/layer counts unchanged** — still 50 tools / 25 layers.
+
+Acceptance: `find <persist_dir> -maxdepth 1 -type f` returns nothing
+after `regenerate_all`; only the `lance/` subdirectory remains.
+
+## v0.51.0 — 2026-05-08
+
+Observability layers actually populate; rendered apps inline.
+
+Phase 8H shipped logs / metrics / traces collection that was
+technically wired but sparse on the live cluster (`metrics=0`,
+`logs=24`, `traces=4`) because the upstream MCP wrapper had no
+Prom / Loki / Tempo URL configured. v0.51.0 adds a guaranteed
+fallback path: when MCP returns `isError` / 0 results we shell out
+to `kubectl port-forward` and hit the in-cluster service directly.
+All three layers share one `contextlib.contextmanager` that owns
+the subprocess lifecycle, so every PF dies on layer-end (no
+orphaned port-forwards). Same architectural principle as v0.50.1's
+state-inline: every layer writes nodes / edges straight to the
+store; no sidecars.
+
+- **NEW: `layers/_pf.py`** — shared `kubectl_port_forward()` ctx
+  manager + tiny stdlib HTTP helpers. Single cleanup invariant for
+  every observability layer.
+- **CHG: `MetricsLayer.scan()`** — try MCP first; on 0 results /
+  `isError`, kubectl-PF to `svc/prometheus-kube-prometheus-prometheus
+  -n monitoring 9090` and scrape `/api/v1/label/__name__/values` +
+  `/api/v1/metadata` + `/api/v1/targets`. `metrics_use_kubectl_pf`
+  now defaults to **on**. Soft-degrades when kubectl missing / no
+  current-context / PF can't bind. `metrics_top_n` default raised
+  200 -> 1000.
+- **CHG: `LogsLayer.scan()`** — discover labels first via Loki
+  `/loki/api/v1/label/namespace/values` then iterate per-namespace
+  LogQL. PF target: `svc/loki-gateway -n monitoring 80`. Per-ns cap
+  via new `logs_per_namespace_limit` ctx (default 1000 lines).
+- **CHG: `TracesLayer.scan()`** — 3-path service discovery
+  (existing app ids -> Prom `traces_spanmetrics_calls_total` ->
+  k8s `Service` names) augmented with a Tempo
+  `/api/search/tag/service.name/values` lookup over the PF.
+  Per-service trace fetch via `/api/search?tags=service.name=<svc>`.
+  PF target: `svc/tempo-query-frontend -n monitoring 3200`.
+- **CHG: `RenderedLayer.scan()`** — `cue` is now invoked inline.
+  Discover apps under `applications/<env>/*.json`, stage each JSON
+  via `cue import` into `cue/`, run `cue cmd -t instance=<env>
+  -t app=<name> dump .`, parse the multi-doc YAML, emit
+  `app_render:` + `rendered_resource:` nodes. Drop the
+  `.kuberly/rendered_apps_<env>.json` sidecar entirely. Soft-
+  degrades when cue absent / no `cue/` dir / `applications/`
+  missing / cue runs fail.
+
+Tool count unchanged at **50**. Layer count unchanged at **25**.
+
+## v0.50.1 — 2026-05-08
+
+Fold S3 state extraction inline — drop sidecar JSON.
+
+Phase 8H landed state extraction as a standalone module
+(`state_extract.py`) that wrote a `.kuberly/state_<env>.json` sidecar,
+and `StateLayer` then re-parsed that JSON. That was a wasteful two-step
+indirection, inconsistent with every other layer (which writes nodes /
+edges directly to the LanceDB store via its `scan()`).
+
+- **CHG: `StateLayer.scan()` is now self-contained.** boto3 S3 fetch +
+  tfstate parsing live inside `layers/state.py`. Per-env soft-degrade on
+  missing `shared-infra.json` / no AWS creds / `ClientError`; per-module
+  soft-degrade on `NoSuchKey` / corrupt JSON. New node ids:
+  `tf_state_module:<env>/<rel>` + `tf_state_resource:<env>/<rel>/<addr>`.
+  New cross-layer edges: `module:<provider>/<name> -> tf_state_module`
+  (`has_state`), `tf_state_module -> tf_state_resource` (`contains`),
+  `tf_state_resource -> aws:<service>:<id>` (`tracks`, best-effort match
+  against AwsLayer ids cached in ctx).
+- **DEL: `kuberly_graph/state_extract.py`** — gone. No more sidecar
+  writer.
+- **DEL: `extract_state_sidecar` MCP tool** — operators just call
+  `regenerate_layer state` (or `regenerate_all`). Tool count: 51 -> 50.
+- **DEL: `auto_extract_state` ctx flag** in `regenerate_graph()` —
+  extraction is intrinsic to the layer scan now.
+- **DEL: `.kuberly/state_<env>.json`** sidecar — never written; never
+  read.
+
+Verified on Traigent dev (account 340334787933, eu-west-1):
+`regenerate_layer state` -> **992 nodes / 1091 edges** (Phase 8H
+baseline was 824 / 944; the extra count comes from the new
+`tf_state_module` per-module nodes + `has_state` cross-layer edges).
+`tools/list` = **50**, `list_layers` length = **25** (unchanged).
+No `.kuberly/state_*.json` written. `graph_stats` total =
+**7442 nodes / 5461 edges**.
+
+## v0.50.0 — 2026-05-08
+
+Phase 8H: TreeSitterLayer + S3 state extractor + Loki / Tempo response
+unwrap fixes + opt-in kubectl-port-forward path for the metrics layer.
+
+- **FEAT: `kuberly_graph.layers.treesitter.TreeSitterLayer`** — new AST
+  layer over the consumer's `clouds/` tree using `tree_sitter_languages`
+  (HCL / YAML / Dockerfile / JSON; CUE soft-degrades with regex when the
+  bundled wheel lacks the grammar). Emits `hcl_resource:` /
+  `hcl_data:` / `hcl_module_call:` / `hcl_variable:` / `hcl_output:` /
+  `hcl_locals:` / `cue_definition:` / `cue_field:` / `yaml_manifest:` /
+  `dockerfile_step:` / `dockerfile_base_image:` nodes plus `declares` /
+  `uses_var` / `refs` edges. Caps: 5000 files per glob (configurable via
+  `treesitter_max_files`), 1 MiB per file, walk depth 8. Wired into
+  `LAYERS` after `code` (provides `module:` ids for the `declares`
+  edges) and before `dependency`. Verified on Traigent IaC — **4372
+  nodes / 3671 edges** from 137 HCL/YAML/Dockerfile files in ~50 s.
+- **FEAT: `kuberly_graph.state_extract.extract_states_from_s3`** — pure
+  `boto3.s3.get_object` reader. Reads `components/<env>/shared-infra.json`
+  for the `${account}-${region}-${cluster}-tf-states` bucket name, walks
+  every `clouds/<provider>/modules/<name>/terragrunt.hcl` to extract
+  `key = "..."` (or fall back to the `<provider>/<name>/terraform.tfstate`
+  convention), pulls each tfstate, and writes the resource side-car to
+  `.kuberly/state_<env>.json`. Soft-degrades on missing `boto3`, missing
+  AWS creds, missing bucket, or per-module `NoSuchKey`. Verified on
+  Traigent IaC — **24 modules extracted, StateLayer follow-up emits
+  824 nodes / 944 edges**.
+- **FEAT: `extract_state_sidecar` MCP tool** — pulls every module's
+  tfstate so `regenerate_layer state` has data to ingest. Auto-detects
+  the env from `components/<env>/`. Also wired into `regenerate_graph`
+  via `auto_extract_state=True` (default) so a one-shot
+  `regenerate_all` no longer needs an explicit pull step.
+- **FEAT: `find_resource_callers` / `module_io_summary` /
+  `find_yaml_manifest_kind` MCP tools** — pure GraphStore queries over
+  the new TreeSitter nodes/edges. `find_resource_callers` does a
+  depth-bounded reverse BFS along `uses_var` / `refs` / `reads_output` /
+  `declares`; `module_io_summary` counts declared HCL kinds per module;
+  `find_yaml_manifest_kind` filters `yaml_manifest:*` nodes by Kind.
+- **FIX: TracesLayer ignored Tempo's `[Tempo HTTP /api/search ...]\n<json>`
+  text wrapper** — the ai-agent-tool MCP returns Tempo / Loki responses
+  as a tagged plaintext block, not JSON. Added `_maybe_unwrap_text_payload`
+  helper that strips the leading bracket-tag line and JSON-decodes the
+  body. The Tempo `spanSet.spans` shape (with OTLP-style `attributes`
+  list and root-trace service hoisting via `rootServiceName` /
+  `rootTraceName`) is now ingested correctly. Verified — **80 spans /
+  40 traces / 4 service nodes / 2 service-call edges** from a 15 m
+  window on the Traigent dev cluster.
+- **FIX: TracesLayer skipped TraceQL-with-no-service** — the production
+  Tempo wrapper rejects `query={}` with "either trace_id or service is
+  required". Discovery now goes app-IDs → `traces_spanmetrics_calls_total`
+  → `k8s_resource(Service)` and queries per-service. Falls back to the
+  legacy TraceQL form only when every discovery path is empty (so the
+  operator sees the upstream error).
+- **FIX: LogsLayer dropped `[Loki via logcli ...]\n<lines>` text payload**
+  — added `_parse_logcli_text` to recover the timestamp / labels / line
+  triple from each entry. Loki LogQL fallback chain is now: env-tag →
+  per-namespace → `{job=~".+"}` → `{app=~".+"}`, with namespace seeds
+  pulled from already-populated `k8s_resource:*` nodes. Verified —
+  **24 log_template nodes** from 117 ingested lines on the Traigent
+  dev cluster.
+- **FEAT: MetricsLayer opt-in kubectl-port-forward fallback** — when the
+  ai-agent-tool wrapper's Prom upstream is blank ("Prometheus MCP not
+  available"), passing `metrics_use_kubectl_pf: true` tells the layer to
+  spawn `kubectl port-forward -n monitoring svc/prometheus-kube-prometheus-prometheus
+  0:9090`, parse the random local port from kubectl's stderr, and hit
+  the in-cluster Prom directly via `urllib`. Cleanup is via a
+  `contextlib.contextmanager`. Off by default to keep the no-shell
+  invariant intact for routine runs.
+- **DEP: pinned `tree_sitter==0.21.*` + added `tree_sitter_languages>=1.10.2`**
+  to `pyproject.toml`. The wrapper wheel only loads against
+  tree-sitter 0.21.x; newer 0.22+ breaks `Language()` init.
+- **Layer count: 24 → 25.** **Tool count: 47 → 51.**
+
+## v0.49.0 — 2026-05-08
+
+Phase 8G: render-fix + AWS lazy-init audit + KubectlLayer (full-RBAC k8s scan).
+
+- **FIX: dashboard 3D Graph tab rendered black canvas** — the
+  `/api/v1/graph` payload uses `edges`, but `3d-force-graph` expects
+  `links`. The client `renderGraph()` already mapped `edges → links` and
+  filtered cross-window references, but the canvas was being initialised
+  while the Graph tab host was still `display:none`, so
+  `host.clientWidth/clientHeight` were both 0 and the WebGL renderer
+  never resized itself afterwards. Fixed by booting with viewport
+  fallback dimensions, then `resyncGraphSize()` on tab-switch +
+  `ResizeObserver` so the canvas tracks the host once it's actually laid
+  out (`dashboard/static/app.js`).
+- **FIX: AwsLayer/CostLayer/IAMLayer eager `boto3` work at module
+  import** — verified via 5-second silent-boot probe that no
+  `Found credentials` / `botocore` / `sts.amazonaws.com` traffic is
+  emitted before the first `regenerate_*` tool call. All AWS work is
+  inside `scan(ctx)`; module-level imports are stdlib-only. The layer
+  classes now construct cleanly without a `boto3` install, and
+  soft-degrade with an explicit stderr WARN when invoked.
+- **FEAT: `kuberly_graph.layers.kubectl.KubectlLayer`** — new layer that
+  shells out to local `kubectl` (`subprocess.run`) using whatever creds
+  the operator has on PATH. `kubectl api-resources -o wide --no-headers`
+  enumerates every listable kind, then `kubectl get <Kind>.<group> -A
+  -o json` per kind populates the graph. Mirrors `K8sLayer`'s metadata
+  shape (labels, owner_references, container_images, pvc_claims,
+  secret_refs, configmap_refs, node_name / node_class_ref / provider_id,
+  spec passthrough for monitoring kinds) and emits CRDs as `crd:<name>`
+  nodes with `defines_kind` edges to matching `k8s_resource:` ids. Same
+  id namespace as K8sLayer with `source: "kubectl"` so `DependencyLayer`
+  Just Works regardless of which scanner populated the node — kubectl
+  upserts overwrite the bearer-token entries when both run. Soft-degrade
+  chain: missing binary → empty result; failed `kubectl version --client`
+  → empty result; failed `kubectl config current-context` → empty
+  result; per-kind failures logged + skipped without aborting.
+  `kubectl_path` / `kubectl_kubeconfig` / `kubectl_context` /
+  `kubectl_per_kind_limit` (default 5000) /
+  `kubectl_skip_kinds` (default `["events.k8s.io/Event", "v1/Event"]`)
+  / `kubectl_timeout_seconds` are all available via `regenerate_layer`.
+- **CHORE: `regenerate_layer` knobs** — `kubectl_path`,
+  `kubectl_kubeconfig`, `kubectl_context`, `kubectl_per_kind_limit`,
+  `kubectl_skip_kinds`, `kubectl_timeout_seconds` plumbed through
+  `extra_ctx`.
+- **Layer count: 23 → 24.** Tool count unchanged at **47**. KubectlLayer
+  is wired into `_LAYER_PRECEDES` after `k8s` and before `dependency`.
+
+## v0.48.0 — 2026-05-08
+
+AwsLayer — direct boto3 scan of ~25 AWS services. Plug-in for accounts where
+no tfstate sidecar is available (or where deployed-actual data is needed) so
+the existing `network` / `iam` / `storage` / `dns` layers (which read from
+tfstate) can be complemented by a parallel `aws:*` namespace populated
+straight from AWS APIs.
+
+- **FEAT: `kuberly_graph.layers.aws.AwsLayer`** — scrapes VPC / Subnet / SG /
+  RouteTable / NAT / IGW / VPC Endpoint, EBS / EC2, EKS clusters +
+  nodegroups, IAM roles + customer-managed policies + instance profiles,
+  S3 (with best-effort encryption / versioning / public-block / policy
+  introspection), RDS clusters + instances, ElastiCache, ECR, Lambda,
+  ALB / NLB, CloudFront, Route53 hosted zones, ACM certificates, and
+  CloudWatch log groups. Emits ~25 service-specific node types under the
+  `aws:*` id namespace plus intra-namespace edges (`in_vpc`, `in_subnet`,
+  `uses_sg`, `attached_to`, `member_of`, `executes_as`, `has_member`,
+  `attaches`, etc.). Per-service cap defaults to 1000 items
+  (`aws_per_service_limit`); `aws_services` ctx knob narrows to a subset.
+  `boto3` stays an OPTIONAL dep — the layer wraps the import + the STS
+  validation in `try/except` and soft-degrades to `(0, 0)` with an explicit
+  stderr WARN when the SDK is missing or creds are missing/expired/invalid.
+  Per-service `try/except ClientError` so one rejected describe call
+  doesn't poison the rest of the run.
+- **FEAT: `DependencyLayer` cross-namespace edges for `aws:*`** —
+  `aws:iam_role` ↔ `k8s_resource(ServiceAccount)` (relation `bound_to`,
+  matched against the SA's `eks.amazonaws.com/role-arn` annotation, full
+  IRSA chain), `aws:ec2` → `k8s_resource(Node)` (`runs_as`, matched against
+  the node's `spec.providerID`), `aws:ebs` → `k8s_resource(PersistentVolume)`
+  (`backs`, matched against `volumeHandle`), `aws:ecr_repo` → `image`
+  (`hosts`, matched on registry/repo path), `aws:eks` → `component:<env>/eks`
+  (`provisions`, best-effort cluster-name match).
+- **FEAT: 2 new MCP tools** — `aws_resource_count_by_service` (group `aws:*`
+  by `type`) and `find_aws_resources_in_vpc` (BFS over VPC-relevant edges
+  + direct `vpc_id` attribute match). Pure GraphStore queries.
+- **CHORE: `regenerate_layer` knobs** — `aws_per_service_limit` and
+  `aws_services` plumb through `extra_ctx`.
+- Tool count: **45 → 47**. Layer count: **22 → 23**.
+
+## v0.47.0 — 2026-05-08
+
+Dashboard rewrite + persist_dir resolution fix.
+
+- **FEAT: dashboard UI rewrite** — two-tab vanilla HTML/JS/CSS app inspired
+  by the stage5 `graph.html` reference: Geist + JetBrains Mono fonts, dark
+  slate background, blue accent, coloured "dots" per node category. The
+  Dashboard tab shows a per-layer overlays strip, five KPI cards, and an
+  AWS architecture-tile section (AWS-shaped resources grouped by service).
+  The Graph tab renders the full graph in 3D via `3d-force-graph@1.73.0`
+  with filter chips per category (IAC FILES / TG STATE / K8S / APPLICATIONS
+  / CI/CD / CUE / DOCS / LIVE / AWS / DEPS / META), search highlight,
+  group-by selector (category / layer / type), click-to-detail panel that
+  pulls `/api/v1/nodes/<id>/neighbors` and renders a Mermaid neighbourhood
+  diagram. CDN libs only — no Python deps added, no build pipeline.
+- **FEAT: `/api/v1/graph` REST endpoint** — additive endpoint that returns
+  the full nodes+edges payload (default 5000-node cap) the 3D viz needs,
+  with a derived `category` field per node mapping each layer/type to one
+  of 11 buckets (`iac_files`, `tg_state`, `k8s_resources`, `applications`,
+  `ci_cd`, `cue`, `docs`, `live_observability`, `aws`, `dependency`,
+  `meta`). MCP tool surface unchanged at 45.
+- **FIX: persist_dir mismatch** — when the user ran `kuberly-graph serve
+  --repo <path>` from a CWD other than `<path>`, `--persist-dir` (default
+  `.kuberly`) resolved against the *server* CWD instead of `<path>`. The
+  dashboard then read from an empty `<cwd>/.kuberly` while
+  `regenerate_all` had written to `<repo>/.kuberly` — surfacing as
+  "graph store appears empty" against an actual 1012-node graph.
+  `cli._resolve_persist_dir` now anchors relative `--persist-dir` paths
+  against `--repo`, and the resolved absolute path is logged on startup
+  (`dashboard reading from: ...`). `dashboard/api.py` no longer re-resolves
+  against request-time CWD.
+
+## v0.46.0 — 2026-05-08
+
+Cluster-driven Kubernetes API discovery + a meta-graph layer that turns the
+`kuberly-graph` package into a graph-of-graphs. v0.45.1 captured 463 k8s
+nodes from a hardcoded ~22-kind list; v0.46.0 enumerates every CRD the
+cluster actually exposes and scans every served version of every kind —
+producing 800+ k8s nodes against the same `grafana-dev.traigent.ai/mcp`
+endpoint (cert-manager, Istio, Karpenter, external-secrets, Argo, Tekton,
+AWS Gateway/EBS/EFS controllers, Grafana operator, etc.) plus one new
+`crd:<name>` node per CRD wired to the resources it governs via
+`defines_kind` edges.
+
+- **FEAT: `kuberly_graph.client`** — new `discover_kinds()` /
+  `discover_kinds_sync()` enumerate the live API surface by listing every
+  `apiextensions.k8s.io/v1/CustomResourceDefinition` and parsing each CRD's
+  YAML spec (`spec.group`, `spec.names.kind`, `spec.scope`,
+  `spec.versions[*].name`) without pulling in PyYAML — a tolerant
+  indentation walker handles both inline `- name: vX` and block-style
+  `- additionalPrinterColumns:` version entries. New `parse_crd_spec_yaml()`
+  helper exported for testing. `BUILTIN_K8S_KINDS` (~40 entries) covers the
+  standard built-ins discovery doesn't surface — workloads, networking,
+  storage, RBAC, autoscaling, scheduling, admission webhooks, API services,
+  leases. Discovery soft-degrades on every error path: missing tool, missing
+  CRD kind, RBAC forbidden, transport failure all fall back to
+  `BUILTIN_K8S_KINDS` with a single stderr WARN.
+- **FEAT: `kuberly_graph.layers.k8s.K8sLayer`** — calls `discover_kinds_sync`
+  before scanning; emits one `crd:<name>` node per discovered CRD with
+  `crd:<name> -> k8s_resource:<...>` `defines_kind` edges to every live
+  resource of any of the CRD's served versions. Per-kind cap defaults to
+  1000 (configurable via ctx `k8s_per_kind_limit`) to keep huge clusters
+  tractable. Cluster-scoped resources now get `<ns>` = `cluster` in the
+  node id (was empty string before, breaking some `<env>/<ns>` parsing
+  paths on derived layers).
+- **FEAT: `kuberly_graph.layers.meta.MetaLayer`** — runs LAST after
+  `dependency`. Reads the freshly-populated `GraphStore` and the layer
+  registry, then emits one `graph_layer:<name>` node per registered layer
+  (carrying `name`, `layer_type`, `refresh_trigger`, `node_count`,
+  `edge_count`, `last_refresh`, sorted unique `node_types`) plus
+  `feeds_into` edges derived from `_LAYER_PRECEDES` and `summarized_by`
+  edges from every other layer to `graph_layer:meta`. Pure introspection —
+  no live MCP calls; soft-degrades to empty on missing `graph_store`.
+- **FEAT: `kuberly_graph.tools.meta.meta_overview`** — new MCP tool
+  returning the persisted `graph_layer` nodes + `feeds_into` /
+  `summarized_by` edges + a topological run order over the static layer
+  registry + summary counts. Pure GraphStore query — call after
+  `regenerate_layer meta` (or `regenerate_all`) for the freshest view.
+- **WIRING:** `LAYERS` now ends with `..., DependencyLayer(), MetaLayer()`.
+  `_LAYER_PRECEDES["meta"]` lists every other registered layer so topo-sort
+  runs MetaLayer last. `list_layers_summary` type_map gets `"meta": "meta"`.
+  Tool count: 44 -> **45**. Layer count: 21 -> **22**.
+
+Verified live against `https://grafana-dev.traigent.ai/mcp`:
+
+```
+regenerate_layer k8s:   805 nodes / 82 edges (was 463 / 0 in v0.45.1)
+                        — 102 CRDs, 154 distinct (apiVersion, Kind), per-kind
+                          cap inert at 1000
+regenerate_layer meta:   22 graph_layer nodes / 88 feeds_into+summarized_by edges
+meta_overview:           layer_count=22, topo_order ends ['...', 'dependency', 'meta']
+```
+
+## v0.45.1 — 2026-05-08
+
+Fixes the `kuberly-graph` live-layer scanners against MCP servers that
+return kubectl-style **plaintext tables** instead of JSON (notably the
+ai-agent-tool wrapper around `manusa/kubernetes-mcp-server`). v0.45.0 sent
+~30 successful HTTP 200 POSTs to the live MCP and parsed every response as
+empty, leaving every live layer (k8s/argo/logs/metrics/traces) at 0 nodes.
+After this release `regenerate_layer k8s` populates 400+ nodes against a
+real cluster and all live layers either populate or log a clear soft-degrade
+warning when the upstream they need is unavailable.
+
+- **FIX: `mcp/kuberly-graph/src/kuberly_graph/client.py`** —
+  - new `parse_kubectl_table()` reconstructs `{apiVersion, kind, metadata:
+    {name, namespace, labels, annotations}, spec, status}` records from
+    kubectl plaintext tables (single-row + multi-row, namespaced + cluster
+    scoped, with embedded comma-separated `LABELS` cells preserved as a
+    `dict[str,str]`),
+  - `fetch_live_resources()` now surfaces `isError=true` as a per-(api,kind)
+    `WARN` line on stderr instead of swallowing it as an empty list, and
+    walks tool-name fallbacks (`resources_list` -> `pods_list` /
+    `pods_list_in_namespace` / `namespaces_list`) when the primary tool is
+    rejected as `unknown tool`,
+  - `_normalize_call_result()` is the new spine — separates `is_error /
+    error_text / payload / raw_text` so each call site decides whether to
+    JSON-decode, plaintext-parse, or log-and-skip,
+  - de-duplicates "missing CRD" / "RBAC forbidden" / "tool not found"
+    warnings with a per-scan `_SeenWarn` so a 30-kind scan doesn't spam 30
+    identical errors.
+
+- **FIX: `mcp/kuberly-graph/src/kuberly_graph/layers/logs.py`** — sends both
+  the v0.45.1 `logql` / `since` argument names (the ai-agent-tool wrapper)
+  AND the legacy `query` / `start` names, so we match either flavour. Soft-
+  degrades on transport errors instead of raising.
+- **FIX: `mcp/kuberly-graph/src/kuberly_graph/layers/metrics.py`** — sends
+  both `promql` and `query`. Soft-degrades on tool error rather than
+  raising. Per-metric `mode=metadata` calls are still attempted but never
+  raise when the wrapper rejects them.
+- **FIX: `mcp/kuberly-graph/src/kuberly_graph/layers/traces.py`** — when
+  the upstream rejects TraceQL `{query: ...}` with a "service is required"
+  error, falls back to per-service `query_traces({service: <name>, since,
+  limit})` over the existing `application` nodes already in the graph
+  (caps at 50 services to bound runtime).
+- **FIX: `mcp/kuberly-graph/src/kuberly_graph/tools/regenerate.py`** —
+  `regenerate_layer` now uses `_resolve_endpoint`, matching
+  `regenerate_graph`, so when an operator passes an explicit `mcp_url`
+  whose URL also appears in `<repo_root>/.mcp.json`, we merge the `headers`
+  (e.g. `Authorization: Bearer ${VAR}`) from the file. Without this,
+  explicit-URL invocations hit `401 Unauthorized` because no bearer ever
+  attached.
+
+## v0.45.0 — 2026-05-08
+
+Introduces a brand-new MCP service — **`kuberly-graph`** — under `mcp/kuberly-graph/`. It's a FastMCP-based Python package that builds a **44-tool, 21-layer knowledge graph** spanning IaC, live cluster, observability, security, supply chain, compliance, DNS, secrets, and cost. Backed by **LanceDB** (vector search + auto-embedding via `sentence-transformers/all-MiniLM-L6-v2`) and **rustworkx** (graph algorithms). Ships with a vanilla-JS web dashboard mounted on the same FastMCP HTTP transport. Distributed via `apm install` like every other shared service in this package — no consumer-side scripts required.
+
+Resurrects the historical `kuberly-graph` MCP name that v0.12.0 of `scripts/sync_claude_config.py` used to **strip** from consumer `.mcp.json` files; the strip is removed and the name is now treated as a **canonical entry**, registered automatically across Claude Code / Cursor / OpenCode / VS Code.
+
+- **NEW:** **`mcp/kuberly-graph/`** — FastMCP microservice package (`pyproject.toml`, `Dockerfile`, `README.md`, `src/kuberly_graph/`). Exposes 44 `@mcp.tool()` decorators; runs as `kuberly-graph serve --transport {stdio,streamable-http}`. CLI surface limited to `serve / call / version` — every other operation is an MCP tool. Single `FastMCP("kuberly-graph", version="0.1.0")` instance imported from `server.py`.
+
+- **NEW:** **21-layer scanner pipeline** at `src/kuberly_graph/layers/`:
+  - **Cold (on-disk):** `code` (terragrunt modules) · `components` (env JSON) · `applications` (app JSON) · `rendered` (CUE-rendered manifests) · `state` (tfstate sidecar JSON). Plus `cold` meta-alias.
+  - **Live (via MCP client):** `k8s` · `argo` · `logs` (Loki templates via stdlib regex clustering) · `metrics` (Prom + scrape targets) · `traces` (Tempo services + operations + p50/p95/p99).
+  - **Derived structural:** `network` (VPC/Subnet/SG/NACL/Route/IGW/NAT/VPCEndpoint) · `iam` (roles/policies/IRSA chain) · `image_build` (image refs + optional GHA/ECR enrichment) · `storage` (PV/PVC/StorageClass/EBS/EFS/S3) · `dns` (Route53 + ACM) · `secrets` (ExternalSecret/SecretStore chain) · `cost` (Cost Explorer monthly snapshots — auth-gated, soft-degrades) · `alert` (PrometheusRule + Loki rules) · `compliance` (R001-R007 hardcoded rules over state + k8s).
+  - **Capstone:** `dependency` runs last; emits cross-layer edges only — Pod→Deployment/Node, Pod→ReplicaSet/StatefulSet/DaemonSet/Job, Pod→Node→NodeClaim→NodePool→EC2NodeClass (Karpenter), Pod→log_template/metric/service, rendered_resource→k8s_resource, application→argo_app, module→resource, Pod→PVC mount, Pod→Secret/ConfigMap consumption, Ingress→DNS record.
+
+  Layer order resolved via stdlib `graphlib.TopologicalSorter` + `_LAYER_PRECEDES` map. Empty-store-tolerant — every layer returns `(0, 0)` with a logged note when its source data isn't populated.
+
+- **NEW:** **44 MCP tools** at `src/kuberly_graph/tools/`:
+  - **Query (4):** `query_nodes` · `get_neighbors` · `blast_radius` · `shortest_path` — implemented over `RxGraph` (rustworkx `PyDiGraph` adapter at `src/kuberly_graph/graph/rustworkx_graph.py`).
+  - **Regenerate (4):** `regenerate_graph` · `regenerate_layer` · `list_layers` · `regenerate_all`. The last one is the one-shot full-refresh for operators after `aws sso login` + `kubectl` + ai-agent-tool MCP wiring; auto-discovers the live MCP URL from `<repo_root>/.mcp.json` (looks for `ai-agent-tool` HTTP entry, resolves `${VAR}` headers from env, drops missing-var headers without crash).
+  - **Semantic (3):** `semantic_search_graph` · `find_similar_graph` · `graph_stats` — backed by LanceDB's `SentenceTransformerEmbeddings` registry.
+  - **Analytics (6):** `find_log_anomalies` · `find_high_cardinality_metrics` · `find_metric_owners` · `find_slow_operations` · `find_error_hotspots` · `service_call_graph`.
+  - **Fusion (6):** `service_one_pager` · `find_anomalies` · `cross_layer_search` · `service_mermaid` · `health_score` · `cross_layer_fuse` (capstone — extends `fuse-live` semantics across all layers; writes `<out_dir>/cross_drift_<env>.{md,json}`).
+  - **Infra (6):** `find_open_security_groups` · `service_network_path` · `iam_role_assumers` · `irsa_chain` · `find_image_users` · `find_unbound_pvcs`.
+  - **Phase 7D (10):** `find_dns_dangling_records` · `service_dns_chain` · `find_secret_consumers` · `find_unused_secrets` · `external_secret_chain` · `cost_summary` · `find_orphan_alerts` · `service_alert_summary` · `compliance_report` · `find_violations_for_resource`.
+  - **Image build (2):** `find_image_scan_findings` · `commit_to_image_chain`.
+
+  Tools register via `@mcp.tool()` decorators — FastMCP auto-derives JSON schemas from type hints + docstrings. No hand-rolled `_MCP_TOOLS` dicts.
+
+- **NEW:** **Web dashboard** at `src/kuberly_graph/dashboard/` — vanilla HTML/JS/CSS (no build pipeline) mounted on FastMCP's `streamable-http` transport via `mcp.custom_route()`. Routes:
+  - `GET /dashboard` — SPA shell.
+  - `GET /dashboard/static/<file>` — path-traversal-safe static file server.
+  - `GET /api/v1/{layers,stats,nodes,nodes/<id>,nodes/<id>/neighbors,nodes/<id>/blast,search,search/cross,anomalies,service/<name>,service/<name>/mermaid}` — 11 JSON endpoints wrapping existing tools.
+
+  Mermaid via jsdelivr CDN. Empty-store renders a "populate then refresh" call-to-action. Stdio transport unaffected (dashboard only mounts on HTTP).
+
+- **NEW:** **`src/kuberly_graph/client.py`** — MCP client helper (`fetch_live_resources`, `call_mcp_tool`, `call_tool`). Sync wrappers detect a running event loop (FastMCP HTTP transport) and dispatch the coroutine to a worker-thread loop via `concurrent.futures.ThreadPoolExecutor` — fixes `RuntimeError: asyncio.run() cannot be called from a running event loop` that previously broke every live layer when invoked through the MCP transport.
+
+- **NEW:** **Auth-gated enrichment paths** in `ImageBuildLayer`:
+  - **GHA** — stdlib `urllib.request` (no `requests` lib) against GitHub Actions REST API. Token from `github_token` ctx → `GITHUB_TOKEN` env → `KUBERLY_GITHUB_TOKEN`. Emits `commit:<repo>/<sha>` + `workflow_run:<repo>/<run-id>` nodes; edges `commit→workflow_run→image` (SHA-prefix substring match against image tag).
+  - **ECR** — optional `boto3` (`try/except ImportError`). Enriches `ecr_repo:` nodes with `image_tag_mutability` / `scan_on_push` / `lifecycle_policy_text`; emits `image_scan_finding:<image>/<cve>` for HIGH/CRITICAL severities (top 10 per image).
+
+  Both opt-in via `enable_gha_enrichment` / `enable_ecr_enrichment` ctx flags (off by default). Soft-degrade with logged warning when token / boto3 / creds missing — never crash. v1 structural extraction unchanged when flags off.
+
+- **CHANGE: `scripts/sync_claude_config.py`** — removes the `out["mcpServers"].pop("kuberly-graph", None)` strip that v0.12.0 introduced; replaces it with first-class `kuberly-graph` registration. New `_mcp_server_graph_claude()` / `_mcp_server_graph_cursor()` factories; `_merge_mcp_file` refactored to a `{name: entry}` map. Both `kuberly-platform` and `kuberly-graph` are now written canonically across all four runtime config files (`.claude/settings.json`, `.mcp.json`, `.cursor/hooks.json`, `.cursor/mcp.json`).
+
+- **NEW:** **K8sLayer default kinds extended** with: `apps/v1` ReplicaSet · DaemonSet · Job; `v1` Pod · Node · ConfigMap · PersistentVolume · PersistentVolumeClaim · StorageClass; `karpenter.sh/v1` NodeClaim · NodePool; `karpenter.k8s.aws/v1` EC2NodeClass; `argoproj.io/v1alpha1` Application; `monitoring.coreos.com/v1` PrometheusRule · ServiceMonitor; `external-secrets.io/v1beta1` ExternalSecret · SecretStore · ClusterSecretStore. Live nodes carry `labels`, `owner_references`, `node_name`, `node_class_ref`, `provider_id`, `annotations`, `container_images`, `pvc_claims`, `secret_refs`, `configmap_refs` so DependencyLayer wires structurally without re-querying MCP.
+
+- **NEW:** **`pyproject.toml`** declares `dependencies = [mcp>=1.27.0, rustworkx>=0.16.0, lancedb>=0.13.0, sentence-transformers>=3.0.0, pyarrow>=17.0.0]`. `boto3` is **not** a hard dep — CostLayer + ECR enrichment import it inside `try/except ImportError`. `chromadb` and `networkx` are **explicitly NOT** in the package — replaced by LanceDB + rustworkx for unified Rust-backed perf.
+
+- **DOCS: `mcp/kuberly-graph/README.md`** — package overview, install (`pip install -e .`), running stdio (Claude Code) vs HTTP (microservice / cluster), the 11 layers, the 44-tool count, and the **Quick refresh** recipe: `kuberly-graph call regenerate_all`.
+
 ## v0.44.0 — 2026-05-08
 
 Builds on v0.43.0's dual-source `agent-k8s-ops` by pushing the same

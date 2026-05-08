@@ -28,9 +28,40 @@ if [[ ! -f "${REQ}" ]]; then
   exit 0
 fi
 
+# v0.56.0+: requirements-mcp.txt pulls in lancedb + pyarrow so the MCP
+# can read kuberly-graph's LanceDB store. pyarrow has no Python 3.14
+# wheel as of writing — prefer 3.12, then 3.13, before falling back to
+# bare `python3`. If the existing venv is on a Python that pip then
+# fails to install the deps into, recreate it on a known-good version.
+pick_python() {
+    for cand in python3.12 python3.13 python3; do
+        if command -v "$cand" >/dev/null 2>&1; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    echo ""
+}
+NEW_PY="$(pick_python)"
+if [[ -z "${NEW_PY}" ]]; then
+    echo "ensure_mcp_venv: no usable python3 on PATH" >&2
+    exit 1
+fi
+
+# Detect existing venv interpreter; recreate if it's >=3.14 (where
+# pyarrow wheels are unavailable). Symlinked path resolves to the
+# concrete pythonX.Y so a string compare is enough.
+if [[ -d "${VENV}" ]]; then
+    EXISTING_PY="$(readlink "${VENV}/bin/python3" 2>/dev/null || echo "")"
+    if [[ "${EXISTING_PY}" == python3.14* || "${EXISTING_PY}" == python3.15* ]]; then
+        echo "ensure_mcp_venv: existing ${VENV} is ${EXISTING_PY}; recreating with ${NEW_PY} (lancedb has no Python 3.14+ wheel yet)" >&2
+        rm -rf "${VENV}"
+    fi
+fi
+
 if [[ ! -d "${VENV}" ]]; then
-  echo "ensure_mcp_venv: creating ${VENV}" >&2
-  python3 -m venv "${VENV}"
+    echo "ensure_mcp_venv: creating ${VENV} on ${NEW_PY}" >&2
+    "${NEW_PY}" -m venv "${VENV}"
 fi
 
 # (Re)install so upgrades to requirements-mcp.txt apply.
