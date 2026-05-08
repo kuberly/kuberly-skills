@@ -107,19 +107,25 @@ if [[ -f "$PCC" ]]; then
   fi
 fi
 
-# 4. Refresh kuberly-graph cache so MCP can read it on next session.
+# 4. Refresh kuberly-platform graph store so MCP can read it on next session.
 # Runs only if root.hcl exists (kuberly-stack repo marker). Silent on
 # success — emits the one-line stats banner from kuberly_platform.py.
+PLATFORM_MCP="$ROOT/.venv-mcp/bin/kuberly-platform"
 GRAPH_GEN="$PKG/mcp/kuberly-platform/kuberly_platform.py"
-if [[ -f "$GRAPH_GEN" && -f "$ROOT/root.hcl" ]]; then
+if [[ -f "$ROOT/root.hcl" ]]; then
   if [[ "${KUBERLY_SKIP_GRAPH_ON_HOOK:-}" == "1" ]]; then
     :
   elif [[ "${PRE_COMMIT:-}" == "1" && "${KUBERLY_GRAPH_ON_HOOK:-}" != "1" ]]; then
     :
   else
     mkdir -p "$ROOT/.kuberly"
-    python3 "$GRAPH_GEN" generate "$ROOT" -o "$ROOT/.kuberly" 2>&1 \
-      | sed 's/^/graph: /' || true
+    if [[ -x "$PLATFORM_MCP" ]]; then
+      "$PLATFORM_MCP" call regenerate_all --repo "$ROOT" --persist-dir "$ROOT/.kuberly" 2>&1 \
+        | sed 's/^/graph: /' || true
+    elif [[ -f "$GRAPH_GEN" ]]; then
+      python3 "$GRAPH_GEN" generate "$ROOT" -o "$ROOT/.kuberly" 2>&1 \
+        | sed 's/^/graph: /' || true
+    fi
   fi
 fi
 

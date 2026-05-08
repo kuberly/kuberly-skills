@@ -3,7 +3,7 @@
 #   - git@github.com:kuberly/kuberly-skills.git#vX.Y.Z   (SSH)
 #   - github.com/kuberly/kuberly-skills#vX.Y.Z           (HTTPS)
 name: kuberly-skills
-version: 0.56.0
+version: 0.60.1
 description: >-
   Kuberly org agent skills for kuberly-stack and customer forks (Cursor, Claude Code, Codex).
 type: hybrid
@@ -21,9 +21,10 @@ dependencies:
       # Workspace venv created by scripts/ensure_mcp_venv.sh (post_apm_install).
       command: .venv-mcp/bin/python3
       args:
-        # Repo-relative path (cwd = workspace when the MCP host starts the server).
-        # Cursor / Claude overrides are merged by sync_claude_config.py.
-        - apm_modules/kuberly/kuberly-skills/mcp/kuberly-platform/kuberly_platform.py
-        - mcp
+        - -m
+        - kuberly_graph
+        - serve
+        - --transport
+        - stdio
         - --repo
         - "."

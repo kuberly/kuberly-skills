@@ -3,7 +3,8 @@
 #
 # Cursor / Claude Code often invoke MCP with a bare ``python3`` that does not
 # have ``mcp`` installed. This script creates ``<repo>/.venv-mcp`` (gitignored
-# in consumer repos) and ``pip install -r …/requirements-mcp.txt``.
+# in consumer repos), installs the legacy lightweight requirements, then
+# installs the consolidated kuberly-platform package from mcp/kuberly-graph.
 #
 # Idempotent: safe to run on every ``post_apm_install``. Stdlib venv only;
 # requires ``python3`` and ``pip`` usable from that interpreter.
@@ -21,6 +22,7 @@ fi
 
 PKG="${ROOT}/apm_modules/kuberly/kuberly-skills"
 REQ="${PKG}/mcp/kuberly-platform/requirements-mcp.txt"
+PLATFORM_PKG="${PKG}/mcp/kuberly-graph"
 VENV="${ROOT}/.venv-mcp"
 
 if [[ ! -f "${REQ}" ]]; then
@@ -64,6 +66,9 @@ if [[ ! -d "${VENV}" ]]; then
     "${NEW_PY}" -m venv "${VENV}"
 fi
 
-# (Re)install so upgrades to requirements-mcp.txt apply.
+# (Re)install so upgrades to requirements-mcp.txt and the consolidated MCP apply.
 "${VENV}/bin/pip" install -q -r "${REQ}"
+if [[ -f "${PLATFORM_PKG}/pyproject.toml" ]]; then
+    "${VENV}/bin/pip" install -q -e "${PLATFORM_PKG}"
+fi
 echo "ensure_mcp_venv: OK (${VENV})" >&2
