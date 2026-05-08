@@ -4285,7 +4285,12 @@ def _compact_summary(name: str, result, args: dict) -> str:
 
     if name == "session_list":
         files = result.get("files", []) or []
-        return f"session_list: {result.get('session','?')} {len(files)} files\n" + "\n".join(files)
+        lines = [
+            f"  {f['file']} ({f['bytes']} B, {f['mtime']})"
+            if isinstance(f, dict) else str(f)
+            for f in files
+        ]
+        return f"session_list: {result.get('session','?')} {len(files)} files\n" + "\n".join(lines)
 
     return f"{name}: ok"
 

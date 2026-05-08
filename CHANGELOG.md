@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.54.0 — 2026-05-08
+
+Patch — `session_list` compact renderer crashed on dict-shaped file entries
+(`sequence item 0: expected str instance, dict found`), making the tool
+unusable from MCP clients that default to `format=compact` (Claude Code,
+agent-orchestrator). The `KuberlyPlatform.session_list()` method already
+returned `[{file, bytes, mtime}, ...]` for v0.13.4+ — only the
+`_compact_summary` branch in `kuberly_platform.py` still treated the list
+as bare strings.
+
+- **Fix `_compact_summary` for `session_list`** — render each file as
+  `<path> (<bytes> B, <mtime>)`, matching the card renderer's column
+  layout. Falls back to `str(f)` for non-dict entries so older callers
+  don't break.
+- **Test `test_session_list_compact_renders_dict_files`** — exercises
+  the compact path end-to-end (`session_init` → `session_write` →
+  `session_list` → `_compact_summary`) and asserts the rendered string
+  contains the file name and the size unit. Adds `_compact_summary` to
+  the test module's import list.
+
+No public API change. No overlay format change. Safe to drop into
+existing forks via `apm install` after pin bump.
+
 ## v0.53.0 — 2026-05-08
 
 Phase 8L + 8M — fusion super-tools + perf for scale (one PR).

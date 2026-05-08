@@ -29,6 +29,7 @@ from kuberly_platform import (  # noqa: E402
     EXPECTED_PERSONAS,
     KuberlyPlatform,
     PERSONA_DAGS,
+    _compact_summary,
     _slugify,
 )
 
@@ -573,6 +574,15 @@ class SessionTests(unittest.TestCase):
         files = [f["file"] for f in listing["files"]]
         self.assertIn("context.md", files)
         self.assertIn("scope.md", files)
+
+    def test_session_list_compact_renders_dict_files(self) -> None:
+        self.g.session_init(name="ls2")
+        self.g.session_write("ls2", "scope.md", "scope body")
+        listing = self.g.session_list("ls2")
+        out = _compact_summary("session_list", listing, {"name": "ls2"})
+        self.assertIn("session_list:", out)
+        self.assertIn("scope.md", out)
+        self.assertIn(" B, ", out)
 
 
 class SlugifyTests(unittest.TestCase):
