@@ -1,6 +1,6 @@
 [project]
 name = "kuberly-graph"
-version = "0.51.1"
+version = "0.52.0"
 description = "FastMCP microservice exposing a multi-layer Kuberly knowledge graph (cold IaC + live k8s/argo + logs/metrics/traces) over MCP."
 requires-python = ">=3.10"
 dependencies = [
