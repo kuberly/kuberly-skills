@@ -192,6 +192,72 @@ class K8sLayer(Layer):
     name = "k8s"
     refresh_trigger = "on-event:k8s"
 
+    def to_document(self, node: dict) -> str:
+        """Render a Kubernetes resource as a single-paragraph summary.
+
+        Composes kind / namespace / name / image refs / secret refs /
+        configmap refs / labels into a sentence so semantic_search can
+        answer queries like "find pods with sidecars" or "deployments in
+        argocd that mount tls secrets".
+        """
+        ntype = node.get("type", "")
+        if ntype == "crd":
+            return (
+                f"CustomResourceDefinition {node.get('label', node.get('id', ''))} "
+                f"group={node.get('group', '')} version={node.get('version', '')} "
+                f"kind={node.get('kind', '')} scope={node.get('scope', '')}"
+            )[:512]
+        kind = node.get("kind", "")
+        ns = node.get("namespace", "")
+        name = node.get("name", "")
+        images = node.get("container_images") or []
+        secret_refs = node.get("secret_refs") or []
+        configmap_refs = node.get("configmap_refs") or []
+        owner_refs = node.get("owner_references") or []
+        labels = node.get("labels") or {}
+        annotations = node.get("annotations") or {}
+        node_class = node.get("node_class_ref") or ""
+        parts = [f"Kubernetes {kind} {name}"]
+        if ns:
+            parts.append(f"in namespace {ns}.")
+        if images:
+            parts.append(f"Images: {', '.join(images[:5])}.")
+        if secret_refs:
+            parts.append(f"Mounts secrets: {', '.join(secret_refs[:5])}.")
+        if configmap_refs:
+            parts.append(f"Mounts configmaps: {', '.join(configmap_refs[:5])}.")
+        if owner_refs:
+            owners = [
+                f"{o.get('kind', '')}/{o.get('name', '')}" for o in owner_refs[:3]
+            ]
+            parts.append(f"Owned by {', '.join(owners)}.")
+        # Labels / annotations carry app intent ("app=argocd-server",
+        # "app.kubernetes.io/part-of=argocd"); pick a few that look load-
+        # bearing rather than the IDP / HPA churn ones.
+        salient_labels = {
+            k: labels[k]
+            for k in (
+                "app",
+                "app.kubernetes.io/name",
+                "app.kubernetes.io/part-of",
+                "app.kubernetes.io/component",
+            )
+            if k in labels
+        }
+        if salient_labels:
+            parts.append(
+                "Labels: "
+                + ", ".join(f"{k}={v}" for k, v in salient_labels.items())
+                + "."
+            )
+        if node_class:
+            parts.append(f"NodeClass {node_class}.")
+        # Annotations sometimes hold IRSA role-arn etc.
+        irsa = annotations.get("eks.amazonaws.com/role-arn")
+        if irsa:
+            parts.append(f"IRSA role {irsa}.")
+        return " ".join(parts)[:512]
+
     def scan(self, ctx: dict) -> tuple[list[dict], list[dict]]:
         endpoint = ctx.get("mcp_endpoint")
         verbose = bool(ctx.get("verbose"))

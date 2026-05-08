@@ -1,6 +1,6 @@
 import clsx from "clsx";
 
-import { useUI, type GroupBy, type Tab } from "../store/uiStore";
+import { useUI, type GraphMode, type GroupBy, type Tab } from "../store/uiStore";
 
 interface HeaderProps {
   statsLabel: string;
@@ -18,6 +18,8 @@ export function Header({ statsLabel }: HeaderProps) {
   const setSearch = useUI((s) => s.setSearch);
   const groupBy = useUI((s) => s.groupBy);
   const setGroupBy = useUI((s) => s.setGroupBy);
+  const graphMode = useUI((s) => s.graphMode);
+  const setGraphMode = useUI((s) => s.setGraphMode);
   const resetCategories = useUI((s) => s.resetCategories);
 
   return (
@@ -73,6 +75,33 @@ export function Header({ statsLabel }: HeaderProps) {
         />
         {tab === "graph" && (
           <>
+            <div
+              className="inline-flex rounded-md border border-border overflow-hidden"
+              role="radiogroup"
+              aria-label="Render mode"
+            >
+              {(["force3d", "cosmos"] as GraphMode[]).map((m) => (
+                <button
+                  key={m}
+                  role="radio"
+                  aria-checked={graphMode === m}
+                  onClick={() => setGraphMode(m)}
+                  title={
+                    m === "force3d"
+                      ? "react-force-graph-3d (Three.js, ~10k node ceiling)"
+                      : "cosmos.gl 2D GPU (handles 100k+ nodes)"
+                  }
+                  className={clsx(
+                    "px-2.5 py-1.5 text-xs font-medium transition-colors",
+                    graphMode === m
+                      ? "bg-accent-blue/20 text-text"
+                      : "bg-bg-card text-text-muted hover:text-text",
+                  )}
+                >
+                  {m === "force3d" ? "3D" : "2D · perf"}
+                </button>
+              ))}
+            </div>
             <select
               value={groupBy}
               onChange={(e) => setGroupBy(e.target.value as GroupBy)}

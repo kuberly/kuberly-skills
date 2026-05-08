@@ -103,6 +103,18 @@ def regenerate_graph(
             if n.get("type") == "rendered_resource"
         }
         nodes, edges = layer.scan(ctx)
+        # Pre-render each node's embedding document so the store doesn't
+        # need to know about layer-specific templating. Each layer can
+        # override Layer.to_document() to produce a sentence-shaped
+        # description that semantic_search will index against; the default
+        # template handles layers that haven't been customised yet.
+        for n in nodes:
+            if "_embedding_doc" not in n:
+                try:
+                    n["_embedding_doc"] = layer.to_document(n)
+                except Exception:
+                    # Defensive — never let a bad template kill regen.
+                    n["_embedding_doc"] = ""
         store.replace_layer(name, nodes, edges)
         per_layer[name] = {"nodes": len(nodes), "edges": len(edges)}
         if verbose:

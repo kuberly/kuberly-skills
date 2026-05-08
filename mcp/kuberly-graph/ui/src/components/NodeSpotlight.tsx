@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { useState } from "react";
 
 import { api } from "../api/client";
-import type { NodeDetail, SearchHit } from "../api/types";
+import type { NeighborEdge, NodeDetailInner, SearchHit } from "../api/types";
 import { CATEGORY_COLORS } from "../lib/categories";
 import { useUI } from "../store/uiStore";
 
@@ -140,16 +140,18 @@ export function NodeSpotlight() {
         )}
         {selectedId && (
           <div className="flex flex-col gap-3">
-            <NodeHeader detail={detail.data} loading={detail.isLoading} />
+            <NodeHeader detail={detail.data?.node} loading={detail.isLoading} />
             <Edges
-              title="inbound"
-              edges={neighbors.data?.inbound ?? []}
+              title="incoming"
+              edges={neighbors.data?.incoming ?? []}
+              otherSide="source"
               loading={neighbors.isLoading}
               onPick={selectNode}
             />
             <Edges
-              title="outbound"
-              edges={neighbors.data?.outbound ?? []}
+              title="outgoing"
+              edges={neighbors.data?.outgoing ?? []}
+              otherSide="target"
               loading={neighbors.isLoading}
               onPick={selectNode}
             />
@@ -160,7 +162,7 @@ export function NodeSpotlight() {
   );
 }
 
-function NodeHeader({ detail, loading }: { detail?: NodeDetail; loading: boolean }) {
+function NodeHeader({ detail, loading }: { detail?: NodeDetailInner; loading: boolean }) {
   if (loading) return <div className="text-xs text-text-muted">loading…</div>;
   if (!detail) return null;
   return (
@@ -176,11 +178,13 @@ function NodeHeader({ detail, loading }: { detail?: NodeDetail; loading: boolean
 function Edges({
   title,
   edges,
+  otherSide,
   loading,
   onPick,
 }: {
   title: string;
-  edges: { source: string; target: string; relation: string; other: { id: string; label: string; type: string } }[];
+  edges: NeighborEdge[];
+  otherSide: "source" | "target";
   loading: boolean;
   onPick: (id: string) => void;
 }) {
@@ -191,17 +195,25 @@ function Edges({
       </div>
       {loading && <div className="text-xs text-text-muted">…</div>}
       <div className="flex flex-col gap-0.5 max-h-32 overflow-auto">
-        {edges.map((e, i) => (
-          <button
-            key={`${e.source}-${e.relation}-${e.target}-${i}`}
-            onClick={() => onPick(e.other.id)}
-            className="text-left px-2 py-1 rounded hover:bg-bg-hover text-xs flex items-center gap-2"
-          >
-            <span className="font-mono text-text-muted shrink-0 w-24 truncate">{e.relation}</span>
-            <span className="text-text truncate">{e.other.label || e.other.id}</span>
-            <span className="ml-auto text-[10px] font-mono text-text-muted shrink-0">{e.other.type}</span>
-          </button>
-        ))}
+        {edges.map((e, i) => {
+          const otherId = otherSide === "source" ? e.source : e.target;
+          return (
+            <button
+              key={`${e.source}-${e.relation}-${e.target}-${i}`}
+              onClick={() => onPick(otherId)}
+              className="text-left px-2 py-1 rounded hover:bg-bg-hover text-xs flex items-center gap-2"
+              title={otherId}
+            >
+              <span className="font-mono text-text-muted shrink-0 w-24 truncate">{e.relation}</span>
+              <span className="text-text truncate">{e.label || otherId}</span>
+              {e.type && (
+                <span className="ml-auto text-[10px] font-mono text-text-muted shrink-0">
+                  {e.type}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

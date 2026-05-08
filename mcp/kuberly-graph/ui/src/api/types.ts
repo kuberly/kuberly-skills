@@ -120,29 +120,40 @@ export interface MetaOverviewResponse {
   links: GraphEdge[];
 }
 
-// /api/v1/nodes/{id} — single-node detail (variable schema by node type).
-export interface NodeDetail {
+// /api/v1/nodes/{id} — single-node detail. Backend wraps the node payload
+// under a `node` key; the inner object's schema is type-dependent (every
+// node carries id/type/layer/label, the rest is per-type metadata).
+export interface NodeDetailInner {
   id: string;
   type: string;
   layer: string;
   label?: string;
   category?: string;
-  attributes?: Record<string, unknown>;
   [k: string]: unknown;
 }
 
-// /api/v1/nodes/{id}/neighbors — inbound + outbound edges with the other
-// endpoint pre-resolved.
+export interface NodeDetail {
+  node: NodeDetailInner;
+}
+
+// /api/v1/nodes/{id}/neighbors — `incoming` and `outgoing` arrays. Edges
+// are NOT pre-resolved — the other endpoint is just a string id, plus
+// optional `label`/`type`/`layer` if the backend cached them. Resolve
+// label client-side via the loaded graph nodes when needed.
 export interface NeighborEdge {
   source: string;
   target: string;
   relation: string;
-  other: GraphNode;
+  label: string | null;
+  type: string | null;
+  layer: string | null;
 }
 
 export interface NeighborsResponse {
-  inbound: NeighborEdge[];
-  outbound: NeighborEdge[];
+  node: string;
+  node_info: NodeDetailInner;
+  incoming: NeighborEdge[];
+  outgoing: NeighborEdge[];
 }
 
 // /api/v1/search — substring across labels + ids.

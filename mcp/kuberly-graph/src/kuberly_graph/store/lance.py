@@ -40,7 +40,18 @@ def _embed_fn():
 
 
 def _embedding_text(node: dict) -> str:
-    base_keys = {"id", "type", "label"}
+    """Pick the text the embedding model encodes for this node.
+
+    Preferred path: the orchestrator pre-renders ``node["_embedding_doc"]``
+    via ``Layer.to_document()`` — a layer-aware sentence-shaped summary.
+    Fallback (for layers that haven't customised their template, or for
+    legacy nodes ingested through MemoryGraphStore tests): the generic
+    "<type> <label> {extras-json}" shape we used pre-v0.59.
+    """
+    doc = node.get("_embedding_doc")
+    if isinstance(doc, str) and doc.strip():
+        return doc[:512]
+    base_keys = {"id", "type", "label", "_embedding_doc"}
     extras = {k: v for k, v in node.items() if k not in base_keys}
     text = (
         f"{node.get('type', '')} {node.get('label', node.get('id', ''))} "
@@ -53,6 +64,10 @@ def _stringify_meta(node: dict) -> str:
     """JSON-encode arbitrary node metadata so LanceDB sees a single string column."""
     out: dict = {}
     for k, v in node.items():
+        if k == "_embedding_doc":
+            # Internal field — used only by _embedding_text to drive the
+            # vector embedding. Not part of the node's user-visible metadata.
+            continue
         if v is None:
             continue
         if isinstance(v, (str, int, float, bool)):

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
-import { useEffect, useMemo, useRef } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef } from "react";
 import ForceGraph3D, { type ForceGraphMethods } from "react-force-graph-3d";
 import * as THREE from "three";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
@@ -9,8 +9,15 @@ import { api } from "../api/client";
 import type { GraphEdge, GraphNode } from "../api/types";
 import { CATEGORY_COLORS, CATEGORY_LABELS } from "../lib/categories";
 import { useElementSize } from "../lib/useElementSize";
+import { useForceWorker } from "../lib/useForceWorker";
 import { useUI } from "../store/uiStore";
 import { GraphSidebar } from "../components/GraphSidebar";
+
+// Cosmos is heavy (~250 KB gzip) and only needed in perf mode — keep it
+// out of the initial chunk.
+const Graph2DCosmos = lazy(() =>
+  import("../components/Graph2DCosmos").then((m) => ({ default: m.Graph2DCosmos })),
+);
 
 // Force-graph data shape after mapping (links use string ids; library
 // resolves them to node refs internally).
@@ -29,6 +36,8 @@ export function GraphTab() {
   const toggleCategory = useUI((s) => s.toggleCategory);
   const selectedNodeId = useUI((s) => s.selectedNodeId);
   const selectNode = useUI((s) => s.selectNode);
+  const graphMode = useUI((s) => s.graphMode);
+  const simMode = useUI((s) => s.simMode);
 
   const graphQ = useQuery({
     queryKey: ["graph-all"],
@@ -56,6 +65,27 @@ export function GraphTab() {
     return { nodes, links };
   }, [graphQ.data, activeCategories]);
 
+  // Off-thread d3-force simulation. Disabled in cosmos mode (cosmos has its
+  // own GPU sim). When `done`, we pin positions onto the force-graph nodes
+  // and let the internal engine treat them as fixed (no main-thread compute).
+  const sim = useForceWorker(
+    data.nodes,
+    data.links as GraphEdge[],
+    simMode === "worker" && graphMode === "force3d",
+  );
+
+  // Enrich nodes with pinned positions from the worker. Only pay the
+  // map-allocation cost when the worker is done.
+  const renderData: FGData = useMemo(() => {
+    if (!sim.positions) return data;
+    const pinned = data.nodes.map((n) => {
+      const p = sim.positions!.get(n.id);
+      if (!p) return n;
+      return { ...n, x: p[0], y: p[1], z: p[2], fx: p[0], fy: p[1], fz: p[2] };
+    });
+    return { nodes: pinned, links: data.links };
+  }, [data, sim.positions]);
+
   // Bloom postprocess pass — gives the "glowy graph" look. Hooked once,
   // after the renderer exists.
   useEffect(() => {
@@ -72,7 +102,11 @@ export function GraphTab() {
       };
       const c = composer as Carry;
       if (c[flag]) return;
-      const bloom = new UnrealBloomPass(new THREE.Vector2(size.width, size.height), 0.8, 0.6, 0.1);
+      // Bloom params (strength, radius, threshold). Strength was 0.8 which
+      // blew out yellow/orange categories into single huge blobs at scale —
+      // dialing down + raising threshold so only genuinely bright pixels
+      // bloom. The "glow" stays, the blowout doesn't.
+      const bloom = new UnrealBloomPass(new THREE.Vector2(size.width, size.height), 0.35, 0.4, 0.85);
       c.addPass(bloom);
       c[flag] = true;
     } catch (err) {
@@ -108,6 +142,57 @@ export function GraphTab() {
     if (link?.distance) link.distance(40);
   }, [data.nodes.length === 0]);
 
+  // One-time scene polish: drop a sparse starfield behind the graph and run
+  // a cinematic camera dolly-in on first paint. Both run inside the same
+  // effect so the THREE scene is guaranteed to exist.
+  const introPlayed = useRef(false);
+  useEffect(() => {
+    const g = fgRef.current;
+    if (!g || size.width === 0 || size.height === 0) return;
+    const sceneFn = (g as unknown as { scene?: () => THREE.Scene }).scene;
+    if (typeof sceneFn !== "function") return;
+    const scene = sceneFn.call(g);
+    // Avoid stacking starfields if the effect re-runs.
+    if (!scene.getObjectByName("starfield")) {
+      const starCount = 1500;
+      const positions = new Float32Array(starCount * 3);
+      for (let i = 0; i < starCount; i++) {
+        // Distribute on a large sphere so stars sit "outside" the graph.
+        const r = 1800 + Math.random() * 800;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+        positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+        positions[i * 3 + 2] = r * Math.cos(phi);
+      }
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      const mat = new THREE.PointsMaterial({
+        color: 0xffffff,
+        size: 1.4,
+        sizeAttenuation: true,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+      });
+      const stars = new THREE.Points(geom, mat);
+      stars.name = "starfield";
+      scene.add(stars);
+    }
+  }, [size.width, size.height]);
+
+  // Cinematic intro: pull the camera way out, then dolly back in over ~2.5s
+  // once the engine settles. Runs once per data load.
+  function onEngineStop() {
+    if (introPlayed.current) return;
+    introPlayed.current = true;
+    const g = fgRef.current;
+    if (!g) return;
+    // Snap far out, then animate to a comfortable distance.
+    g.cameraPosition({ x: 0, y: 0, z: 1400 }, undefined, 0);
+    setTimeout(() => g.cameraPosition({ x: 0, y: 0, z: 380 }, { x: 0, y: 0, z: 0 }, 2400), 60);
+  }
+
   const nodeColor = (n: GraphNode): string => {
     if (search) {
       const q = search.toLowerCase();
@@ -134,8 +219,16 @@ export function GraphTab() {
 
   return (
     <div className="h-[calc(100vh-57px)] flex">
-      {/* Main 3D canvas region */}
-      <div className="flex-1 relative bg-[#090b0d]" ref={hostRef}>
+      {/* Main 3D canvas region — true space-black background with a faint
+          radial vignette so depth reads. Stars render on top via Three.js. */}
+      <div
+        className="flex-1 relative"
+        ref={hostRef}
+        style={{
+          background:
+            "radial-gradient(ellipse at center, #050714 0%, #02030a 60%, #000000 100%)",
+        }}
+      >
         {/* Active-category chips */}
         <div className="absolute top-3 left-3 z-10 flex flex-wrap gap-1.5 max-w-[60%]">
           {Object.entries(CATEGORY_LABELS).map(([cat, label]) => {
@@ -172,35 +265,62 @@ export function GraphTab() {
           </div>
         )}
 
-        {size.width > 0 && size.height > 0 && (
+        {graphMode === "force3d" && size.width > 0 && size.height > 0 && (
           <ForceGraph3D
             ref={fgRef}
-            graphData={data}
+            graphData={renderData}
             width={size.width}
             height={size.height}
-            backgroundColor="#090b0d"
+            // Transparent so the radial-gradient on the host shows through;
+            // gives a deeper "space" look than a flat colour.
+            backgroundColor="rgba(0,0,0,0)"
             nodeId="id"
             nodeRelSize={5}
             nodeOpacity={1}
             nodeColor={nodeColor}
             nodeLabel={(n) => makeNodeTooltip(n as GraphNode)}
-            nodeResolution={12}
-            linkColor={() => "rgba(255,255,255,0.10)"}
-            linkOpacity={0.7}
-            linkWidth={1}
-            linkDirectionalParticles={1}
+            nodeResolution={renderData.nodes.length > 4000 ? 6 : 10}
+            linkColor={() => "rgba(255,255,255,0.08)"}
+            linkOpacity={0.6}
+            linkWidth={0.6}
+            linkDirectionalParticles={renderData.nodes.length > 4000 ? 0 : 1}
             linkDirectionalParticleSpeed={0.005}
-            linkDirectionalParticleWidth={2}
+            linkDirectionalParticleWidth={1.4}
             controlType="orbit"
-            cooldownTime={15_000}
-            warmupTicks={60}
-            enableNodeDrag={true}
+            // When the worker pinned positions, we don't need the main-thread
+            // sim — pinned nodes have fx/fy/fz set, so internal forces are a
+            // no-op anyway. Skip warmup + cooldown to render instantly.
+            cooldownTicks={sim.status === "done" ? 0 : undefined}
+            cooldownTime={sim.status === "done" ? 0 : 15_000}
+            warmupTicks={sim.status === "done" ? 0 : 60}
+            enableNodeDrag={sim.status !== "done"}
+            onEngineStop={onEngineStop}
             onNodeClick={(n) => selectNode((n as GraphNode).id)}
             onBackgroundClick={() => selectNode(null)}
           />
         )}
 
-        {!graphQ.isLoading && data.nodes.length === 0 && (
+        {graphMode === "cosmos" && (
+          <Suspense
+            fallback={
+              <div className="absolute inset-0 flex items-center justify-center text-text-muted text-sm">
+                loading cosmos.gl engine…
+              </div>
+            }
+          >
+            <Graph2DCosmos nodes={renderData.nodes} edges={renderData.links as unknown as GraphEdge[]} />
+          </Suspense>
+        )}
+
+        {/* Worker progress indicator — only shown while the off-thread
+            simulation is grinding through ticks. */}
+        {graphMode === "force3d" && sim.status === "running" && (
+          <div className="absolute bottom-3 left-3 z-10 text-[11px] font-mono text-text-muted bg-bg-panel/85 border border-border rounded-md px-2.5 py-1.5">
+            laying out (worker) · {Math.round(sim.progress * 100)}%
+          </div>
+        )}
+
+        {!graphQ.isLoading && renderData.nodes.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center text-text-muted text-sm">
             no nodes match the current filters
           </div>

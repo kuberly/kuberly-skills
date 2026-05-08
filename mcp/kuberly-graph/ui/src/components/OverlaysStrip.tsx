@@ -9,27 +9,68 @@ interface Props {
   error?: string;
 }
 
-// Layer name → category id used for colouring. Mirrors the python
-// _LAYER_TO_CATEGORY mapping but only the slice we actually surface in the
-// strip; unknown layers fall through to "dependency".
+// Layer name → category id used for colouring + labelling. Mirrors the
+// Python _LAYER_TO_CATEGORY in dashboard/api.py; covers every layer the
+// LanceDB stats endpoint may emit (24 distinct names as of v0.58.0).
+// Unknown layers fall through to "dependency", which renders neutral grey.
 function layerToCategory(layer: string): string {
   const map: Record<string, string> = {
+    // IaC source code
     code: "iac_files",
     iac: "iac_files",
     static: "iac_files",
     terragrunt: "iac_files",
+    treesitter: "iac_files",
+    components: "iac_files",
+    // OpenTofu / Terraform state
     state: "tg_state",
     tg_state: "tg_state",
     tofu_state: "tg_state",
+    // Kubernetes
     k8s: "k8s_resources",
     kubernetes: "k8s_resources",
+    kubectl: "k8s_resources",
+    // Docs
     docs: "docs",
+    doc: "docs",
+    // CUE / schema
     cue: "cue",
+    schema: "cue",
+    cue_schema: "cue",
+    // CI/CD
     ci_cd: "ci_cd",
     image_build: "ci_cd",
+    github_actions: "ci_cd",
+    // Applications (rendered + argo)
     applications: "applications",
+    rendered: "applications",
     rendered_apps: "applications",
+    argo: "applications",
+    // Live observability
+    logs: "live_observability",
+    metrics: "live_observability",
+    traces: "live_observability",
+    alerts: "live_observability",
+    alert: "live_observability",
+    profiles: "live_observability",
+    compliance: "live_observability",
+    cost: "live_observability",
+    dns: "live_observability",
+    secrets: "live_observability",
+    // AWS scanner output
     aws: "aws",
+    aws_network: "aws",
+    aws_iam: "aws",
+    aws_compute: "aws",
+    aws_storage: "aws",
+    aws_rds: "aws",
+    aws_s3: "aws",
+    network: "aws",
+    iam: "aws",
+    storage: "aws",
+    // Meta
+    meta: "meta",
+    cold: "meta",
   };
   return map[layer] ?? "dependency";
 }
@@ -67,7 +108,7 @@ export function OverlaysStrip({ layers, loading, error }: Props) {
       {ranked.map((row) => {
         const cat = layerToCategory(row.name);
         const color = CATEGORY_COLORS[cat] ?? "#888";
-        const label = CATEGORY_LABELS[cat] ?? row.name;
+        const catLabel = CATEGORY_LABELS[cat] ?? cat;
         return (
           <span
             key={row.name}
@@ -80,14 +121,14 @@ export function OverlaysStrip({ layers, loading, error }: Props) {
                 "--cat-border": `${color}55`,
               } as React.CSSProperties
             }
-            title={`${row.name} · last_refresh=${row.last_refresh || "—"}`}
+            title={`${row.name} · ${catLabel} · last_refresh=${row.last_refresh || "—"}`}
           >
             <span
               className="w-2 h-2 rounded-full"
               style={{ background: color }}
               aria-hidden
             />
-            {label}
+            {row.name}
             <span className="text-text-muted font-mono ml-1">{(row.node_count ?? 0).toLocaleString()}</span>
           </span>
         );

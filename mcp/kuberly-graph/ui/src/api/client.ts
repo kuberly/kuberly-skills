@@ -21,6 +21,17 @@ import type {
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
+// Encode a node id for use as a Starlette `{node_id:path}` route param.
+//
+// The standard `encodeURIComponent` percent-encodes `/`, but Starlette's
+// path-converter wants raw slashes — feeding it `%2F` returns a 404 for
+// ids like "tf_state_resource:foo/bar/baz". Encode everything else
+// (especially `?`, `#`, and the rest of the reserved set) but leave `/`
+// intact.
+function encodeNodeId(id: string): string {
+  return encodeURIComponent(id).replace(/%2F/g, "/");
+}
+
 async function getJSON<T>(path: string): Promise<T> {
   // No `credentials: "include"` — the dashboard API has no auth surface,
   // and browsers reject responses that combine wildcard `Access-Control-
@@ -96,9 +107,9 @@ export const api = {
   awsServices: () => getJSON<AwsServicesResponse>("/api/v1/aws-services"),
   metaOverview: () => getJSON<MetaOverviewResponse>("/api/v1/meta-overview"),
 
-  nodeDetail: (id: string) => getJSON<NodeDetail>(`/api/v1/nodes/${encodeURIComponent(id)}`),
+  nodeDetail: (id: string) => getJSON<NodeDetail>(`/api/v1/nodes/${encodeNodeId(id)}`),
   nodeNeighbors: (id: string) =>
-    getJSON<NeighborsResponse>(`/api/v1/nodes/${encodeURIComponent(id)}/neighbors`),
+    getJSON<NeighborsResponse>(`/api/v1/nodes/${encodeNodeId(id)}/neighbors`),
 
   search: (q: string, limit = 25) =>
     getJSON<SearchResponse>(`/api/v1/search?q=${encodeURIComponent(q)}&limit=${limit}`),

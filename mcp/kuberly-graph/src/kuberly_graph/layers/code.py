@@ -33,6 +33,34 @@ class CodeLayer(Layer):
     name = "code"
     refresh_trigger = "manual"
 
+    def to_document(self, node: dict) -> str:
+        """Render an OpenTofu module / component / cloud-provider node."""
+        ntype = node.get("type", "")
+        label = node.get("label") or node.get("id", "")
+        if ntype == "module":
+            cloud = node.get("cloud") or node.get("provider") or ""
+            inputs = node.get("inputs") or node.get("input_names") or []
+            outputs = node.get("outputs") or node.get("output_names") or []
+            depends = node.get("dependencies") or []
+            parts = [f"OpenTofu module {label}"]
+            if cloud:
+                parts.append(f"in cloud {cloud}.")
+            if inputs:
+                parts.append(f"Inputs: {', '.join(str(x) for x in inputs[:8])}.")
+            if outputs:
+                parts.append(f"Outputs: {', '.join(str(x) for x in outputs[:8])}.")
+            if depends:
+                parts.append(f"Depends on: {', '.join(str(x) for x in depends[:6])}.")
+            return " ".join(parts)[:512]
+        if ntype == "component":
+            cluster = node.get("cluster") or node.get("env") or ""
+            return f"Component {label} for cluster {cluster}."[:512]
+        if ntype == "cloud_provider":
+            return f"Cloud provider {label} (root of the IaC tree)."[:512]
+        if ntype == "component_type":
+            return f"Component type {label}."[:512]
+        return super().to_document(node)
+
     def scan(self, ctx: dict) -> tuple[list[dict], list[dict]]:
         repo_root = ctx.get("repo_root", ".")
 

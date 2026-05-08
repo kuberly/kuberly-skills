@@ -41,6 +41,7 @@ import sys
 from typing import Any, Iterable
 
 from .base import Layer
+from .k8s import K8sLayer  # for to_document template reuse
 from .k8s import (
     _extract_container_images,
     _extract_pod_volume_claims,
@@ -119,6 +120,10 @@ def _resource_get_target(group: str, name: str) -> str:
 class KubectlLayer(Layer):
     name = "kubectl"
     refresh_trigger = "manual"
+
+    # Reuse the k8s document template — kubectl emits the same node
+    # shape (k8s_resource / crd) so the same prose summary applies.
+    to_document = K8sLayer.to_document  # type: ignore[assignment]
 
     # ------------------------------------------------------------------ scan
 

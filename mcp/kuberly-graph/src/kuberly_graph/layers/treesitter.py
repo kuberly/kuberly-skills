@@ -561,6 +561,49 @@ class TreeSitterLayer(Layer):
     name = "treesitter"
     refresh_trigger = "manual"
 
+    def to_document(self, node: dict) -> str:
+        """Render an HCL / CUE / variable / locals node as a sentence.
+
+        Each tree-sitter node carries the actual identifier plus the path
+        — combining them lets semantic_search match prose queries like
+        "find aws_lb resources" or "modules referencing aurora".
+        """
+        ntype = node.get("type", "")
+        label = node.get("label") or node.get("id", "")
+        rel = node.get("rel_path", "")
+        if ntype == "hcl_resource":
+            tf_type = node.get("tf_type", "")
+            tf_name = node.get("tf_name", "")
+            return (
+                f"OpenTofu resource of type {tf_type} named {tf_name} declared in {rel}."
+            )[:512]
+        if ntype == "hcl_data":
+            tf_type = node.get("tf_type", "")
+            tf_name = node.get("tf_name", "")
+            return (
+                f"OpenTofu data source {tf_type} named {tf_name} in {rel}."
+            )[:512]
+        if ntype == "hcl_module_call":
+            return f"OpenTofu module call {label} in {rel}."[:512]
+        if ntype == "hcl_variable":
+            return (
+                f"OpenTofu variable {label} declared in {rel}. "
+                f"Type: {node.get('vtype', '')}. Description: {node.get('description', '')}."
+            )[:512]
+        if ntype == "hcl_output":
+            return (
+                f"OpenTofu output {label} from {rel}. "
+                f"Description: {node.get('description', '')}."
+            )[:512]
+        if ntype == "hcl_locals":
+            return f"OpenTofu locals binding {label} in {rel}."[:512]
+        if ntype in ("cue_definition", "cue_field"):
+            return (
+                f"CUE {ntype.replace('cue_', '')} {label} in {rel}. "
+                f"Type: {node.get('cue_type', '')}."
+            )[:512]
+        return super().to_document(node)
+
     def scan(self, ctx: dict) -> tuple[list[dict], list[dict]]:
         repo_root = Path(ctx.get("repo_root", ".")).resolve()
         verbose = bool(ctx.get("verbose"))

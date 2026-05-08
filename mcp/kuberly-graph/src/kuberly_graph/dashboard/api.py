@@ -680,41 +680,179 @@ async def meta_overview_endpoint(_request: Request) -> JSONResponse:
 # Monitoring, Lambda/Serverless, Other.
 _AWS_SERVICE_TABLE: dict[str, tuple[str, str]] = {
     # Compute
-    "aws_ec2":            ("EC2 Instance",         "Compute"),
-    "aws_eks":            ("EKS Cluster",          "Compute"),
-    "aws_eks_nodegroup":  ("EKS Node Group",       "Compute"),
-    "aws_fargate_profile":("Fargate Profile",      "Compute"),
-    "aws_account":        ("AWS Account",          "Compute"),
+    "aws_account":                    ("AWS Account",              "Compute"),
+    "aws_ec2":                        ("EC2 Instance",             "Compute"),
+    "aws_instance":                   ("EC2 Instance",             "Compute"),
+    "aws_eks":                        ("EKS Cluster",              "Compute"),
+    "aws_eks_cluster":                ("EKS Cluster",              "Compute"),
+    "aws_eks_nodegroup":              ("EKS Node Group",           "Compute"),
+    "aws_eks_node_group":             ("EKS Node Group",           "Compute"),
+    "aws_eks_addon":                  ("EKS Addon",                "Compute"),
+    "aws_eks_access_entry":           ("EKS Access Entry",         "Compute"),
+    "aws_eks_access_policy_association": ("EKS Access Policy",     "Compute"),
+    "aws_eks_fargate_profile":        ("Fargate Profile",          "Compute"),
+    "aws_fargate_profile":            ("Fargate Profile",          "Compute"),
     # Storage
-    "aws_s3":             ("S3 Bucket",            "Storage"),
-    "aws_ebs":            ("EBS Volume",           "Storage"),
-    "aws_ecr_repo":       ("ECR Repository",       "Storage"),
+    "aws_s3":                         ("S3 Bucket",                "Storage"),
+    "aws_s3_bucket":                  ("S3 Bucket",                "Storage"),
+    "aws_s3_bucket_versioning":       ("S3 Versioning",            "Storage"),
+    "aws_s3_bucket_lifecycle_configuration":            ("S3 Lifecycle",  "Storage"),
+    "aws_s3_bucket_public_access_block":                ("S3 PAB",        "Storage"),
+    "aws_s3_bucket_server_side_encryption_configuration": ("S3 SSE",      "Storage"),
+    "aws_ebs":                        ("EBS Volume",               "Storage"),
+    "aws_ebs_volume":                 ("EBS Volume",               "Storage"),
+    "aws_ecr_repo":                   ("ECR Repository",           "Storage"),
+    "aws_ecr_repository":             ("ECR Repository",           "Storage"),
+    "aws_ecr_repository_policy":      ("ECR Repo Policy",          "Storage"),
+    "aws_ecr_lifecycle_policy":       ("ECR Lifecycle",            "Storage"),
+    "aws_dlm_lifecycle_policy":       ("EBS DLM Policy",           "Storage"),
     # Database
-    "aws_rds_cluster":    ("RDS Cluster",          "Database"),
-    "aws_rds_instance":   ("RDS Instance",         "Database"),
-    "aws_elasticache":    ("ElastiCache",          "Database"),
+    "aws_rds_cluster":                ("RDS Cluster",              "Database"),
+    "aws_rds_instance":               ("RDS Instance",             "Database"),
+    "aws_elasticache":                ("ElastiCache",              "Database"),
+    "aws_elasticache_cluster":        ("ElastiCache Cluster",      "Database"),
+    "aws_elasticache_user":           ("ElastiCache User",         "Database"),
+    "aws_elasticache_subnet_group":   ("ElastiCache Subnet Group", "Database"),
     # Network
-    "aws_vpc":            ("VPC",                  "Network"),
-    "aws_subnet":         ("Subnet",               "Network"),
-    "aws_rtb":            ("Route Table",          "Network"),
-    "aws_nat":            ("NAT Gateway",          "Network"),
-    "aws_igw":            ("Internet Gateway",     "Network"),
-    "aws_vpce":           ("VPC Endpoint",         "Network"),
-    "aws_lb":             ("Load Balancer",        "Network"),
+    "aws_vpc":                        ("VPC",                      "Network"),
+    "aws_subnet":                     ("Subnet",                   "Network"),
+    "aws_rtb":                        ("Route Table",              "Network"),
+    "aws_route_table":                ("Route Table",              "Network"),
+    "aws_route_table_association":    ("RT Association",           "Network"),
+    "aws_route":                      ("Route",                    "Network"),
+    "aws_default_route_table":        ("Default RT",               "Network"),
+    "aws_default_network_acl":        ("Default NACL",             "Network"),
+    "aws_default_security_group":    ("Default SG",                "Network"),
+    "aws_nat":                        ("NAT Gateway",              "Network"),
+    "aws_nat_gateway":                ("NAT Gateway",              "Network"),
+    "aws_igw":                        ("Internet Gateway",         "Network"),
+    "aws_internet_gateway":           ("Internet Gateway",         "Network"),
+    "aws_egress_only_internet_gateway": ("IPv6 Egress GW",         "Network"),
+    "aws_eip":                        ("Elastic IP",               "Network"),
+    "aws_vpce":                       ("VPC Endpoint",             "Network"),
+    "aws_vpc_endpoint":               ("VPC Endpoint",             "Network"),
+    "aws_flow_log":                   ("VPC Flow Log",             "Network"),
+    "aws_lb":                         ("Load Balancer",            "Network"),
+    "aws_lb_listener":                ("LB Listener",              "Network"),
+    "aws_lb_target_group":            ("LB Target Group",          "Network"),
+    "aws_lb_target_group_attachment": ("LB TG Attachment",         "Network"),
     # Security/IAM
-    "aws_sg":             ("Security Group",       "Security/IAM"),
-    "aws_iam_role":       ("IAM Role",             "Security/IAM"),
-    "aws_iam_policy":     ("IAM Policy",           "Security/IAM"),
-    "aws_iam_instance_profile": ("IAM Instance Profile", "Security/IAM"),
-    "aws_acm":            ("ACM Certificate",      "Security/IAM"),
+    "aws_sg":                         ("Security Group",           "Security/IAM"),
+    "aws_security_group":             ("Security Group",           "Security/IAM"),
+    "aws_security_group_rule":        ("Security Group Rule",      "Security/IAM"),
+    "aws_iam_role":                   ("IAM Role",                 "Security/IAM"),
+    "aws_iam_policy":                 ("IAM Policy",               "Security/IAM"),
+    "aws_iam_role_policy":            ("IAM Inline Policy",        "Security/IAM"),
+    "aws_iam_role_policy_attachment": ("IAM Role Attachment",      "Security/IAM"),
+    "aws_iam_instance_profile":       ("IAM Instance Profile",     "Security/IAM"),
+    "aws_iam_group":                  ("IAM Group",                "Security/IAM"),
+    "aws_iam_group_policy_attachment":("IAM Group Attachment",     "Security/IAM"),
+    "aws_iam_user":                   ("IAM User",                 "Security/IAM"),
+    "aws_iam_user_group_membership":  ("IAM User Membership",      "Security/IAM"),
+    "aws_iam_user_login_profile":     ("IAM Login Profile",        "Security/IAM"),
+    "aws_iam_service_linked_role":    ("IAM Service-Linked Role",  "Security/IAM"),
+    "aws_iam_openid_connect_provider":("OIDC Provider",            "Security/IAM"),
+    "aws_acm":                        ("ACM Certificate",          "Security/IAM"),
+    "aws_kms_key":                    ("KMS Key",                  "Security/IAM"),
+    "aws_kms_alias":                  ("KMS Alias",                "Security/IAM"),
+    "aws_secretsmanager_secret":      ("Secrets Manager Secret",   "Security/IAM"),
+    "aws_secretsmanager_secret_version": ("Secret Version",        "Security/IAM"),
     # Edge/CDN
-    "aws_cloudfront":     ("CloudFront",           "Edge/CDN"),
-    "aws_r53_zone":       ("Route 53 Zone",        "Edge/CDN"),
-    # Monitoring
-    "aws_cw_log_group":   ("CloudWatch Log Group", "Monitoring"),
+    "aws_cloudfront":                 ("CloudFront",               "Edge/CDN"),
+    "aws_cloudfront_distribution":    ("CloudFront",               "Edge/CDN"),
+    "aws_r53_zone":                   ("Route 53 Zone",            "Edge/CDN"),
+    "aws_route53_zone":               ("Route 53 Zone",            "Edge/CDN"),
+    # Monitoring & Events
+    "aws_cw_log_group":               ("CloudWatch Log Group",     "Monitoring"),
+    "aws_cloudwatch_log_group":       ("CloudWatch Log Group",     "Monitoring"),
+    "aws_cloudwatch_event_rule":      ("EventBridge Rule",         "Monitoring"),
+    "aws_cloudwatch_event_target":    ("EventBridge Target",       "Monitoring"),
+    # Messaging
+    "aws_sqs_queue":                  ("SQS Queue",                "Messaging"),
+    "aws_sqs_queue_policy":           ("SQS Queue Policy",         "Messaging"),
+    "aws_sns_topic":                  ("SNS Topic",                "Messaging"),
     # Lambda / Serverless
-    "aws_lambda":         ("Lambda Function",      "Lambda/Serverless"),
+    "aws_lambda":                     ("Lambda Function",          "Lambda/Serverless"),
+    "aws_lambda_function":            ("Lambda Function",          "Lambda/Serverless"),
+    # State / overlay layers (`iam`, `network`, `storage`, `secrets`, `dns`)
+    # produce nodes with bare types — no `aws_` prefix — sourced from
+    # tfstate. Map them onto the same service categories so the dashboard
+    # arch grid surfaces them alongside the boto3 scanner output.
+    "iam_role":                 ("IAM Role",                "Security/IAM"),
+    "iam_policy":               ("IAM Policy",              "Security/IAM"),
+    "iam_instance_profile":     ("IAM Instance Profile",    "Security/IAM"),
+    "iam_user":                 ("IAM User",                "Security/IAM"),
+    "iam_group":                ("IAM Group",               "Security/IAM"),
+    "security_group":           ("Security Group",          "Security/IAM"),
+    "acm_certificate":          ("ACM Certificate",         "Security/IAM"),
+    "kms_key":                  ("KMS Key",                 "Security/IAM"),
+    "kms_alias":                ("KMS Alias",               "Security/IAM"),
+    "vpc":                      ("VPC",                     "Network"),
+    "subnet":                   ("Subnet",                  "Network"),
+    "route_table":              ("Route Table",             "Network"),
+    "nat_gateway":              ("NAT Gateway",             "Network"),
+    "internet_gateway":         ("Internet Gateway",        "Network"),
+    "vpc_endpoint":             ("VPC Endpoint",            "Network"),
+    "load_balancer":            ("Load Balancer",           "Network"),
+    "elb":                      ("Load Balancer",           "Network"),
+    "alb":                      ("Application LB",          "Network"),
+    "nlb":                      ("Network LB",              "Network"),
+    "s3_bucket":                ("S3 Bucket",               "Storage"),
+    "ebs_volume":               ("EBS Volume",              "Storage"),
+    "efs_file_system":          ("EFS File System",         "Storage"),
+    "ecr_repository":           ("ECR Repository",          "Storage"),
+    "rds_cluster":              ("RDS Cluster",             "Database"),
+    "rds_instance":             ("RDS Instance",            "Database"),
+    "elasticache_cluster":      ("ElastiCache Cluster",     "Database"),
+    "elasticache_user":         ("ElastiCache User",        "Database"),
+    "elasticache_subnet_group": ("ElastiCache Subnet Group","Database"),
+    "secretsmanager_secret":    ("Secrets Manager Secret",  "Security/IAM"),
+    "cloudfront_distribution":  ("CloudFront",              "Edge/CDN"),
+    "route53_zone":             ("Route 53 Zone",           "Edge/CDN"),
+    "cloudwatch_log_group":     ("CloudWatch Log Group",    "Monitoring"),
+    "lambda_function":          ("Lambda Function",         "Lambda/Serverless"),
 }
+
+# Layer names whose nodes ALL belong on the AWS architecture grid even
+# when their `type` doesn't carry the `aws_` prefix. Each is a tfstate-/
+# overlay-derived view of one slice of AWS.
+_AWS_OVERLAY_LAYERS: frozenset[str] = frozenset(
+    {"iam", "network", "storage", "secrets", "dns", "rds", "compute"}
+)
+
+# tf_types that the per-domain layer scanners (iam.py, network.py,
+# storage.py, secrets.py) already emit as bare-typed graph nodes. The
+# state-overlay scan in `aws_services_endpoint` skips these to avoid
+# double-counting the same physical resources from two sources.
+_LAYER_COVERED_TF_TYPES: frozenset[str] = frozenset({
+    # iam.py
+    "aws_iam_role",
+    "aws_iam_policy",
+    "aws_iam_role_policy",
+    "aws_iam_role_policy_attachment",
+    "aws_iam_instance_profile",
+    "aws_iam_user",
+    # network.py
+    "aws_security_group",
+    "aws_security_group_rule",
+    "aws_subnet",
+    "aws_route",
+    "aws_route_table",
+    "aws_route_table_association",
+    "aws_vpc",
+    "aws_internet_gateway",
+    "aws_nat_gateway",
+    "aws_eip",
+    "aws_vpc_endpoint",
+    # storage.py
+    "aws_s3_bucket",
+    "aws_s3_bucket_versioning",
+    "aws_s3_bucket_lifecycle_configuration",
+    "aws_s3_bucket_public_access_block",
+    "aws_s3_bucket_server_side_encryption_configuration",
+    # secrets.py
+    "aws_secretsmanager_secret",
+})
 
 # Stable ordering of the categories as they should render in the UI.
 _AWS_CATEGORY_ORDER = (
@@ -725,17 +863,54 @@ _AWS_CATEGORY_ORDER = (
     "Security/IAM",
     "Edge/CDN",
     "Monitoring",
+    "Messaging",
     "Lambda/Serverless",
     "Other",
 )
 
 
+def _iter_state_overlay_aws_resources(persist_dir: Path):
+    """Yield (tf_type, address, env) for every `aws_*` resource in any
+    state_overlay_*.json file, regardless of whether a layer scanner has
+    consumed it yet.
+
+    The per-domain scanners (iam, network, storage, secrets) only handle
+    a small whitelist of tf_types each — EKS / KMS / LB / EC2 / etc. live
+    in the state overlay but never become graph nodes. Reading the overlay
+    JSON directly here lets the arch grid surface them anyway.
+    """
+    if not persist_dir.exists():
+        return
+    for state_path in sorted(persist_dir.glob("state_overlay_*.json")):
+        env = state_path.stem.replace("state_overlay_", "", 1)
+        try:
+            payload = json.loads(state_path.read_text())
+        except Exception:
+            continue
+        modules = payload.get("modules") or {}
+        if not isinstance(modules, dict):
+            continue
+        for blob in modules.values():
+            for res in (blob or {}).get("resources") or []:
+                if not isinstance(res, dict):
+                    continue
+                tf_type = (res.get("type") or res.get("tf_type") or "").strip()
+                if not tf_type.startswith("aws_"):
+                    continue
+                addr = res.get("address") or ""
+                yield tf_type, addr, env
+
+
 async def aws_services_endpoint(_request: Request) -> JSONResponse:
     """Return AWS resources grouped into service categories.
 
-    Walks every node where ``type`` starts with ``aws_`` (or ``id`` starts
-    with ``aws:``), maps it to a service+category via ``_AWS_SERVICE_TABLE``
-    and returns a category→services structure ready for tile rendering.
+    Two data sources merged:
+      1. Graph nodes whose ``type`` starts with ``aws_`` or ``id`` starts
+         with ``aws:`` (boto3 scanner output).
+      2. Graph nodes from overlay layers (iam/network/storage/secrets/dns/
+         rds/compute) whose bare types we map onto AWS service categories.
+      3. Raw resources in ``state_overlay_*.json`` files — captures tf_types
+         (EKS / KMS / EC2 / LB / etc.) that no scanner has consumed yet.
 
     Cached for ``_DASHBOARD_TTL_SECONDS`` seconds; key includes
     ``cache_epoch`` so a regenerate flushes immediately.
@@ -758,7 +933,18 @@ async def aws_services_endpoint(_request: Request) -> JSONResponse:
             continue
         ntype = (n.get("type") or "").strip()
         nid = n.get("id") or ""
-        if not (ntype.startswith("aws_") or nid.startswith("aws:")):
+        nlayer = (n.get("layer") or "").strip()
+        # AWS-flavoured nodes show up under three shapes:
+        #   1. type = "aws_*"  (boto3 scanner output)
+        #   2. id   = "aws:*"  (legacy id-prefixed AWS scanner)
+        #   3. layer ∈ _AWS_OVERLAY_LAYERS (tfstate-derived: iam/network/
+        #      storage/secrets/dns/rds/compute) — these have bare types like
+        #      `iam_role`, `security_group`, `s3_bucket`, etc.
+        if not (
+            ntype.startswith("aws_")
+            or nid.startswith("aws:")
+            or nlayer in _AWS_OVERLAY_LAYERS
+        ):
             continue
         total += 1
         service, category = _AWS_SERVICE_TABLE.get(
@@ -776,6 +962,35 @@ async def aws_services_endpoint(_request: Request) -> JSONResponse:
                 "sample_label": n.get("label") or nid,
             }
         else:
+            bucket["count"] += 1
+
+    # Source 3 — raw state_overlay_*.json. Catches the long tail of
+    # tf_types that no per-domain scanner has yet wrapped into the graph
+    # store: aws_eks_*, aws_kms_*, aws_lb*, aws_instance, aws_ecr_*,
+    # aws_sqs_*, aws_cloudwatch_*, etc. The skiplist below enumerates
+    # tf_types the iam/network/storage/secrets layers ALREADY emit as
+    # bare-typed graph nodes — counting both sources would double those.
+    for tf_type, addr, env in _iter_state_overlay_aws_resources(_persist_dir()):
+        if tf_type in _LAYER_COVERED_TF_TYPES:
+            continue
+        service, category = _AWS_SERVICE_TABLE.get(
+            tf_type,
+            (tf_type.replace("aws_", "").replace("_", " ").title() or "AWS Resource", "Other"),
+        )
+        key = f"{category}::{tf_type}"
+        bucket = by_service.get(key)
+        if bucket is None:
+            total += 1
+            by_service[key] = {
+                "service": service,
+                "category": category,
+                "node_type": tf_type,
+                "count": 1,
+                "sample_id": f"{env}/{addr}",
+                "sample_label": addr,
+            }
+        else:
+            total += 1
             bucket["count"] += 1
 
     # Group services by category in stable order.
