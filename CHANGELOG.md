@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.45.0 — 2026-05-08
+
+Introduces a brand-new MCP service — **`kuberly-graph`** — under `mcp/kuberly-graph/`. It's a FastMCP-based Python package that builds a **44-tool, 21-layer knowledge graph** spanning IaC, live cluster, observability, security, supply chain, compliance, DNS, secrets, and cost. Backed by **LanceDB** (vector search + auto-embedding via `sentence-transformers/all-MiniLM-L6-v2`) and **rustworkx** (graph algorithms). Ships with a vanilla-JS web dashboard mounted on the same FastMCP HTTP transport. Distributed via `apm install` like every other shared service in this package — no consumer-side scripts required.
+
+Resurrects the historical `kuberly-graph` MCP name that v0.12.0 of `scripts/sync_claude_config.py` used to **strip** from consumer `.mcp.json` files; the strip is removed and the name is now treated as a **canonical entry**, registered automatically across Claude Code / Cursor / OpenCode / VS Code.
+
+- **NEW:** **`mcp/kuberly-graph/`** — FastMCP microservice package (`pyproject.toml`, `Dockerfile`, `README.md`, `src/kuberly_graph/`). Exposes 44 `@mcp.tool()` decorators; runs as `kuberly-graph serve --transport {stdio,streamable-http}`. CLI surface limited to `serve / call / version` — every other operation is an MCP tool. Single `FastMCP("kuberly-graph", version="0.1.0")` instance imported from `server.py`.
+
+- **NEW:** **21-layer scanner pipeline** at `src/kuberly_graph/layers/`:
+  - **Cold (on-disk):** `code` (terragrunt modules) · `components` (env JSON) · `applications` (app JSON) · `rendered` (CUE-rendered manifests) · `state` (tfstate sidecar JSON). Plus `cold` meta-alias.
+  - **Live (via MCP client):** `k8s` · `argo` · `logs` (Loki templates via stdlib regex clustering) · `metrics` (Prom + scrape targets) · `traces` (Tempo services + operations + p50/p95/p99).
+  - **Derived structural:** `network` (VPC/Subnet/SG/NACL/Route/IGW/NAT/VPCEndpoint) · `iam` (roles/policies/IRSA chain) · `image_build` (image refs + optional GHA/ECR enrichment) · `storage` (PV/PVC/StorageClass/EBS/EFS/S3) · `dns` (Route53 + ACM) · `secrets` (ExternalSecret/SecretStore chain) · `cost` (Cost Explorer monthly snapshots — auth-gated, soft-degrades) · `alert` (PrometheusRule + Loki rules) · `compliance` (R001-R007 hardcoded rules over state + k8s).
+  - **Capstone:** `dependency` runs last; emits cross-layer edges only — Pod→Deployment/Node, Pod→ReplicaSet/StatefulSet/DaemonSet/Job, Pod→Node→NodeClaim→NodePool→EC2NodeClass (Karpenter), Pod→log_template/metric/service, rendered_resource→k8s_resource, application→argo_app, module→resource, Pod→PVC mount, Pod→Secret/ConfigMap consumption, Ingress→DNS record.
+
+  Layer order resolved via stdlib `graphlib.TopologicalSorter` + `_LAYER_PRECEDES` map. Empty-store-tolerant — every layer returns `(0, 0)` with a logged note when its source data isn't populated.
+
+- **NEW:** **44 MCP tools** at `src/kuberly_graph/tools/`:
+  - **Query (4):** `query_nodes` · `get_neighbors` · `blast_radius` · `shortest_path` — implemented over `RxGraph` (rustworkx `PyDiGraph` adapter at `src/kuberly_graph/graph/rustworkx_graph.py`).
+  - **Regenerate (4):** `regenerate_graph` · `regenerate_layer` · `list_layers` · `regenerate_all`. The last one is the one-shot full-refresh for operators after `aws sso login` + `kubectl` + ai-agent-tool MCP wiring; auto-discovers the live MCP URL from `<repo_root>/.mcp.json` (looks for `ai-agent-tool` HTTP entry, resolves `${VAR}` headers from env, drops missing-var headers without crash).
+  - **Semantic (3):** `semantic_search_graph` · `find_similar_graph` · `graph_stats` — backed by LanceDB's `SentenceTransformerEmbeddings` registry.
+  - **Analytics (6):** `find_log_anomalies` · `find_high_cardinality_metrics` · `find_metric_owners` · `find_slow_operations` · `find_error_hotspots` · `service_call_graph`.
+  - **Fusion (6):** `service_one_pager` · `find_anomalies` · `cross_layer_search` · `service_mermaid` · `health_score` · `cross_layer_fuse` (capstone — extends `fuse-live` semantics across all layers; writes `<out_dir>/cross_drift_<env>.{md,json}`).
+  - **Infra (6):** `find_open_security_groups` · `service_network_path` · `iam_role_assumers` · `irsa_chain` · `find_image_users` · `find_unbound_pvcs`.
+  - **Phase 7D (10):** `find_dns_dangling_records` · `service_dns_chain` · `find_secret_consumers` · `find_unused_secrets` · `external_secret_chain` · `cost_summary` · `find_orphan_alerts` · `service_alert_summary` · `compliance_report` · `find_violations_for_resource`.
+  - **Image build (2):** `find_image_scan_findings` · `commit_to_image_chain`.
+
+  Tools register via `@mcp.tool()` decorators — FastMCP auto-derives JSON schemas from type hints + docstrings. No hand-rolled `_MCP_TOOLS` dicts.
+
+- **NEW:** **Web dashboard** at `src/kuberly_graph/dashboard/` — vanilla HTML/JS/CSS (no build pipeline) mounted on FastMCP's `streamable-http` transport via `mcp.custom_route()`. Routes:
+  - `GET /dashboard` — SPA shell.
+  - `GET /dashboard/static/<file>` — path-traversal-safe static file server.
+  - `GET /api/v1/{layers,stats,nodes,nodes/<id>,nodes/<id>/neighbors,nodes/<id>/blast,search,search/cross,anomalies,service/<name>,service/<name>/mermaid}` — 11 JSON endpoints wrapping existing tools.
+
+  Mermaid via jsdelivr CDN. Empty-store renders a "populate then refresh" call-to-action. Stdio transport unaffected (dashboard only mounts on HTTP).
+
+- **NEW:** **`src/kuberly_graph/client.py`** — MCP client helper (`fetch_live_resources`, `call_mcp_tool`, `call_tool`). Sync wrappers detect a running event loop (FastMCP HTTP transport) and dispatch the coroutine to a worker-thread loop via `concurrent.futures.ThreadPoolExecutor` — fixes `RuntimeError: asyncio.run() cannot be called from a running event loop` that previously broke every live layer when invoked through the MCP transport.
+
+- **NEW:** **Auth-gated enrichment paths** in `ImageBuildLayer`:
+  - **GHA** — stdlib `urllib.request` (no `requests` lib) against GitHub Actions REST API. Token from `github_token` ctx → `GITHUB_TOKEN` env → `KUBERLY_GITHUB_TOKEN`. Emits `commit:<repo>/<sha>` + `workflow_run:<repo>/<run-id>` nodes; edges `commit→workflow_run→image` (SHA-prefix substring match against image tag).
+  - **ECR** — optional `boto3` (`try/except ImportError`). Enriches `ecr_repo:` nodes with `image_tag_mutability` / `scan_on_push` / `lifecycle_policy_text`; emits `image_scan_finding:<image>/<cve>` for HIGH/CRITICAL severities (top 10 per image).
+
+  Both opt-in via `enable_gha_enrichment` / `enable_ecr_enrichment` ctx flags (off by default). Soft-degrade with logged warning when token / boto3 / creds missing — never crash. v1 structural extraction unchanged when flags off.
+
+- **CHANGE: `scripts/sync_claude_config.py`** — removes the `out["mcpServers"].pop("kuberly-graph", None)` strip that v0.12.0 introduced; replaces it with first-class `kuberly-graph` registration. New `_mcp_server_graph_claude()` / `_mcp_server_graph_cursor()` factories; `_merge_mcp_file` refactored to a `{name: entry}` map. Both `kuberly-platform` and `kuberly-graph` are now written canonically across all four runtime config files (`.claude/settings.json`, `.mcp.json`, `.cursor/hooks.json`, `.cursor/mcp.json`).
+
+- **NEW:** **K8sLayer default kinds extended** with: `apps/v1` ReplicaSet · DaemonSet · Job; `v1` Pod · Node · ConfigMap · PersistentVolume · PersistentVolumeClaim · StorageClass; `karpenter.sh/v1` NodeClaim · NodePool; `karpenter.k8s.aws/v1` EC2NodeClass; `argoproj.io/v1alpha1` Application; `monitoring.coreos.com/v1` PrometheusRule · ServiceMonitor; `external-secrets.io/v1beta1` ExternalSecret · SecretStore · ClusterSecretStore. Live nodes carry `labels`, `owner_references`, `node_name`, `node_class_ref`, `provider_id`, `annotations`, `container_images`, `pvc_claims`, `secret_refs`, `configmap_refs` so DependencyLayer wires structurally without re-querying MCP.
+
+- **NEW:** **`pyproject.toml`** declares `dependencies = [mcp>=1.27.0, rustworkx>=0.16.0, lancedb>=0.13.0, sentence-transformers>=3.0.0, pyarrow>=17.0.0]`. `boto3` is **not** a hard dep — CostLayer + ECR enrichment import it inside `try/except ImportError`. `chromadb` and `networkx` are **explicitly NOT** in the package — replaced by LanceDB + rustworkx for unified Rust-backed perf.
+
+- **DOCS: `mcp/kuberly-graph/README.md`** — package overview, install (`pip install -e .`), running stdio (Claude Code) vs HTTP (microservice / cluster), the 11 layers, the 44-tool count, and the **Quick refresh** recipe: `kuberly-graph call regenerate_all`.
+
 ## v0.44.0 — 2026-05-08
 
 Builds on v0.43.0's dual-source `agent-k8s-ops` by pushing the same
