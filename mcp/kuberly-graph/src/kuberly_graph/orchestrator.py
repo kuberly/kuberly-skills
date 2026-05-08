@@ -208,6 +208,7 @@ def list_layers_summary(persist_dir: str = ".kuberly") -> list[dict]:
         "alert": "derived",
         "compliance": "derived",
         "dependency": "meta",
+        "meta": "meta",
     }
     out: list[dict] = []
     for layer in LAYERS:

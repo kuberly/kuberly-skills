@@ -8,3 +8,4 @@ from . import fusion  # noqa: F401
 from . import infra  # noqa: F401
 from . import phase7d  # noqa: F401
 from . import image_build  # noqa: F401
+from . import meta  # noqa: F401

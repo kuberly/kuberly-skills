@@ -21,6 +21,7 @@ from .iam import IAMLayer
 from .image_build import ImageBuildLayer
 from .k8s import K8sLayer
 from .logs import LogsLayer
+from .meta import MetaLayer
 from .metrics import MetricsLayer
 from .network import NetworkLayer
 from .rendered import RenderedLayer
@@ -55,8 +56,13 @@ LAYERS: list[Layer] = [
     AlertLayer(),
     ComplianceLayer(),
     # DependencyLayer derives cross-layer edges from whatever is already in
-    # the GraphStore — must run last.
+    # the GraphStore — must run last among data layers.
     DependencyLayer(),
+    # MetaLayer reads the populated store + the layer registry to emit
+    # `graph_layer:<name>` nodes + feeds_into edges (graph-of-graphs). It
+    # MUST run AFTER DependencyLayer so its node-counts reflect the final
+    # store state.
+    MetaLayer(),
 ]
 
 META_LAYERS: set[str] = {"cold"}
@@ -140,6 +146,31 @@ _LAYER_PRECEDES: dict[str, set[str]] = {
         "cost",
         "alert",
         "compliance",
+    },
+    # MetaLayer summarises the entire store — depends on every other layer
+    # finishing first so its node_count / edge_count fields reflect reality.
+    "meta": {
+        "cold",
+        "code",
+        "components",
+        "applications",
+        "rendered",
+        "state",
+        "k8s",
+        "argo",
+        "logs",
+        "metrics",
+        "traces",
+        "network",
+        "iam",
+        "image_build",
+        "storage",
+        "dns",
+        "secrets",
+        "cost",
+        "alert",
+        "compliance",
+        "dependency",
     },
 }
 

@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.46.0 — 2026-05-08
+
+Cluster-driven Kubernetes API discovery + a meta-graph layer that turns the
+`kuberly-graph` package into a graph-of-graphs. v0.45.1 captured 463 k8s
+nodes from a hardcoded ~22-kind list; v0.46.0 enumerates every CRD the
+cluster actually exposes and scans every served version of every kind —
+producing 800+ k8s nodes against the same `grafana-dev.traigent.ai/mcp`
+endpoint (cert-manager, Istio, Karpenter, external-secrets, Argo, Tekton,
+AWS Gateway/EBS/EFS controllers, Grafana operator, etc.) plus one new
+`crd:<name>` node per CRD wired to the resources it governs via
+`defines_kind` edges.
+
+- **FEAT: `kuberly_graph.client`** — new `discover_kinds()` /
+  `discover_kinds_sync()` enumerate the live API surface by listing every
+  `apiextensions.k8s.io/v1/CustomResourceDefinition` and parsing each CRD's
+  YAML spec (`spec.group`, `spec.names.kind`, `spec.scope`,
+  `spec.versions[*].name`) without pulling in PyYAML — a tolerant
+  indentation walker handles both inline `- name: vX` and block-style
+  `- additionalPrinterColumns:` version entries. New `parse_crd_spec_yaml()`
+  helper exported for testing. `BUILTIN_K8S_KINDS` (~40 entries) covers the
+  standard built-ins discovery doesn't surface — workloads, networking,
+  storage, RBAC, autoscaling, scheduling, admission webhooks, API services,
+  leases. Discovery soft-degrades on every error path: missing tool, missing
+  CRD kind, RBAC forbidden, transport failure all fall back to
+  `BUILTIN_K8S_KINDS` with a single stderr WARN.
+- **FEAT: `kuberly_graph.layers.k8s.K8sLayer`** — calls `discover_kinds_sync`
+  before scanning; emits one `crd:<name>` node per discovered CRD with
+  `crd:<name> -> k8s_resource:<...>` `defines_kind` edges to every live
+  resource of any of the CRD's served versions. Per-kind cap defaults to
+  1000 (configurable via ctx `k8s_per_kind_limit`) to keep huge clusters
+  tractable. Cluster-scoped resources now get `<ns>` = `cluster` in the
+  node id (was empty string before, breaking some `<env>/<ns>` parsing
+  paths on derived layers).
+- **FEAT: `kuberly_graph.layers.meta.MetaLayer`** — runs LAST after
+  `dependency`. Reads the freshly-populated `GraphStore` and the layer
+  registry, then emits one `graph_layer:<name>` node per registered layer
+  (carrying `name`, `layer_type`, `refresh_trigger`, `node_count`,
+  `edge_count`, `last_refresh`, sorted unique `node_types`) plus
+  `feeds_into` edges derived from `_LAYER_PRECEDES` and `summarized_by`
+  edges from every other layer to `graph_layer:meta`. Pure introspection —
+  no live MCP calls; soft-degrades to empty on missing `graph_store`.
+- **FEAT: `kuberly_graph.tools.meta.meta_overview`** — new MCP tool
+  returning the persisted `graph_layer` nodes + `feeds_into` /
+  `summarized_by` edges + a topological run order over the static layer
+  registry + summary counts. Pure GraphStore query — call after
+  `regenerate_layer meta` (or `regenerate_all`) for the freshest view.
+- **WIRING:** `LAYERS` now ends with `..., DependencyLayer(), MetaLayer()`.
+  `_LAYER_PRECEDES["meta"]` lists every other registered layer so topo-sort
+  runs MetaLayer last. `list_layers_summary` type_map gets `"meta": "meta"`.
+  Tool count: 44 -> **45**. Layer count: 21 -> **22**.
+
+Verified live against `https://grafana-dev.traigent.ai/mcp`:
+
+```
+regenerate_layer k8s:   805 nodes / 82 edges (was 463 / 0 in v0.45.1)
+                        — 102 CRDs, 154 distinct (apiVersion, Kind), per-kind
+                          cap inert at 1000
+regenerate_layer meta:   22 graph_layer nodes / 88 feeds_into+summarized_by edges
+meta_overview:           layer_count=22, topo_order ends ['...', 'dependency', 'meta']
+```
+
 ## v0.45.1 — 2026-05-08
 
 Fixes the `kuberly-graph` live-layer scanners against MCP servers that

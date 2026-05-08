@@ -1,38 +1,30 @@
-"""K8sLayer — live k8s resources via MCP `resources_list`."""
+"""K8sLayer — live k8s resources via MCP `resources_list`.
+
+v0.46.0 cluster-driven API discovery: we no longer ship a hardcoded ~22-kind
+list. ``K8sLayer.scan`` calls :func:`kuberly_graph.client.discover_kinds`
+which:
+
+  1. Lists every CustomResourceDefinition currently registered on the cluster.
+  2. Reads each CRD's ``spec`` to derive ``(group/version, Kind)`` for every
+     served version.
+  3. Merges the result with :data:`kuberly_graph.client.BUILTIN_K8S_KINDS`
+     (~40 standard kinds — workloads, networking, RBAC, storage, autoscaling,
+     scheduling, admission webhooks, API services, leases, etc.).
+
+If discovery fails or yields zero kinds, we fall back to ``BUILTIN_K8S_KINDS``.
+The legacy ``DEFAULT_K8S_KINDS`` symbol is kept as an alias for that fallback.
+"""
 
 from __future__ import annotations
 
-from .base import Layer
+import sys
 
-DEFAULT_K8S_KINDS: list[tuple[str, str]] = [
-    ("apps/v1", "Deployment"),
-    ("apps/v1", "StatefulSet"),
-    ("apps/v1", "DaemonSet"),
-    ("apps/v1", "ReplicaSet"),
-    ("batch/v1", "Job"),
-    ("v1", "Pod"),
-    ("v1", "Node"),
-    ("v1", "Service"),
-    ("networking.k8s.io/v1", "Ingress"),
-    ("v1", "ServiceAccount"),
-    ("v1", "ConfigMap"),
-    ("v1", "Secret"),
-    # Karpenter — Pod→Node→NodeClaim→NodePool→EC2NodeClass chain.
-    ("karpenter.sh/v1", "NodeClaim"),
-    ("karpenter.sh/v1", "NodePool"),
-    ("karpenter.k8s.aws/v1", "EC2NodeClass"),
-    # Storage — fed downstream by StorageLayer (PVC→PV→EBS/EFS chains)
-    # and by DependencyLayer (Pod→PVC mount edges).
-    ("v1", "PersistentVolume"),
-    ("v1", "PersistentVolumeClaim"),
-    ("storage.k8s.io/v1", "StorageClass"),
-    # Phase 7D — Alert + Secret CRDs.
-    ("monitoring.coreos.com/v1", "PrometheusRule"),
-    ("monitoring.coreos.com/v1", "ServiceMonitor"),
-    ("external-secrets.io/v1beta1", "ExternalSecret"),
-    ("external-secrets.io/v1beta1", "SecretStore"),
-    ("external-secrets.io/v1beta1", "ClusterSecretStore"),
-]
+from .base import Layer
+from ..client import BUILTIN_K8S_KINDS
+
+# Keep the v0.45.1 export name working — external callers (and tests) still
+# import this. New code should use ``BUILTIN_K8S_KINDS`` from ``client``.
+DEFAULT_K8S_KINDS: list[tuple[str, str]] = list(BUILTIN_K8S_KINDS)
 
 
 def _extract_container_images(spec: dict) -> list[str]:
@@ -212,10 +204,42 @@ class K8sLayer(Layer):
             ctx.get("_existing_rendered_ids", set())
         )
 
-        from ..client import fetch_live_resources_sync
+        from ..client import (
+            CLUSTER_SCOPED_BUILTINS,
+            discover_kinds_sync,
+            fetch_live_resources_sync,
+        )
+
+        per_kind_limit = int(ctx.get("k8s_per_kind_limit") or 1000)
+
+        # Discover the live API surface. Soft-degrades to BUILTIN_K8S_KINDS on
+        # any failure; never raises.
+        try:
+            kinds, crd_index, cluster_scoped = discover_kinds_sync(endpoint)
+        except ConnectionError:
+            raise
+        except Exception as exc:
+            print(
+                f"  warn: K8sLayer discovery failed ({exc}) — "
+                f"falling back to BUILTIN_K8S_KINDS",
+                file=sys.stderr,
+            )
+            kinds = list(DEFAULT_K8S_KINDS)
+            crd_index = {}
+            cluster_scoped = set(CLUSTER_SCOPED_BUILTINS)
+
+        if not kinds:
+            kinds = list(DEFAULT_K8S_KINDS)
+            cluster_scoped = set(CLUSTER_SCOPED_BUILTINS)
+
+        if verbose:
+            print(
+                f"  [K8sLayer] discovered {len(kinds)} kinds "
+                f"({len(crd_index)} CRDs)"
+            )
 
         try:
-            live = fetch_live_resources_sync(endpoint, DEFAULT_K8S_KINDS)
+            live = fetch_live_resources_sync(endpoint, kinds)
         except ConnectionError:
             raise
         except Exception as exc:
@@ -224,14 +248,43 @@ class K8sLayer(Layer):
         nodes: list[dict] = []
         edges: list[dict] = []
         live_index: dict[tuple[str, str, str], str] = {}
+        # Track which (apiVersion, Kind) ended up with at least one node, so
+        # CRD-defines-kind edges can target only existing nodes.
+        kind_to_node_ids: dict[tuple[str, str], list[str]] = {}
+
+        # Build a quick lookup: (group, kind) -> CRD metadata.name. Used to
+        # emit `crd:<name> -> k8s_resource:<...>` edges (relation
+        # `defines_kind`).
+        crd_by_group_kind: dict[tuple[str, str], str] = {}
+        for crd_name, spec in crd_index.items():
+            grp = spec.get("group") or ""
+            knd = spec.get("kind") or ""
+            if grp and knd:
+                crd_by_group_kind[(grp, knd)] = crd_name
 
         for (api_version, kind), resources in live.items():
+            if not resources:
+                continue
+            # Apply per-kind cap to keep the graph tractable on huge clusters
+            # (e.g. Events / Endpoints can be 10k+).
+            if per_kind_limit and len(resources) > per_kind_limit:
+                if verbose:
+                    print(
+                        f"  [K8sLayer] capping {api_version}/{kind} at "
+                        f"{per_kind_limit} (was {len(resources)})"
+                    )
+                resources = resources[:per_kind_limit]
+            kind_scope_cluster = kind in cluster_scoped
             for r in resources:
                 meta = r.get("metadata") or {}
                 name = meta.get("name")
                 if not name:
                     continue
-                ns = meta.get("namespace") or ""
+                ns_raw = meta.get("namespace") or ""
+                if not ns_raw and kind_scope_cluster:
+                    ns = "cluster"
+                else:
+                    ns = ns_raw
                 rid = f"k8s_resource:{ns}/{kind}/{name}"
                 # Preserve full metadata + spec on the node so DependencyLayer
                 # can read ownerReferences / labels / spec.nodeName etc. without
@@ -322,6 +375,48 @@ class K8sLayer(Layer):
                     }
                 )
                 live_index[(kind, ns, name)] = rid
+                kind_to_node_ids.setdefault((api_version, kind), []).append(rid)
+
+        # Emit one CRD node per discovered CustomResourceDefinition + a
+        # `crd:<name> -> k8s_resource:<...>` defines_kind edge for every live
+        # resource of the kinds it governs. The CRD nodes themselves live
+        # under the k8s layer so they refresh together with the live data.
+        for crd_name, spec in crd_index.items():
+            if not crd_name:
+                continue
+            grp = spec.get("group") or ""
+            knd = spec.get("kind") or ""
+            scope = spec.get("scope") or ""
+            versions = spec.get("versions") or []
+            crd_id = f"crd:{crd_name}"
+            nodes.append(
+                {
+                    "id": crd_id,
+                    "type": "crd",
+                    "label": crd_name,
+                    "name": crd_name,
+                    "group": grp,
+                    "kind": knd,
+                    "scope": scope,
+                    "versions": [v.get("name", "") for v in versions if v.get("name")],
+                }
+            )
+            if not (grp and knd):
+                continue
+            # Wire the CRD to every k8s_resource of any of its served versions.
+            for v in versions:
+                vname = v.get("name") or ""
+                if not vname:
+                    continue
+                api = f"{grp}/{vname}"
+                for rid in kind_to_node_ids.get((api, knd), []):
+                    edges.append(
+                        {
+                            "source": crd_id,
+                            "target": rid,
+                            "relation": "defines_kind",
+                        }
+                    )
 
         for rid_full in existing_rendered_ids:
             try:

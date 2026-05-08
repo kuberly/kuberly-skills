@@ -708,11 +708,350 @@ def call_mcp_tool_sync(endpoint: dict, tool_name: str, arguments: dict) -> Any:
     return call_tool(endpoint, tool_name, arguments)
 
 
+# ---------------------------------------------------------------------------
+# v0.46.0 — CRD-driven API discovery
+# ---------------------------------------------------------------------------
+#
+# `manusa/kubernetes-mcp-server` (the upstream behind ai-agent-tool) returns
+# `resources_get` payloads as plain YAML, NOT JSON. We avoid the PyYAML
+# dependency by tolerantly walking the indentation: only the keys we need
+# (spec.group, spec.scope, spec.names.{kind,plural,singular},
+# spec.versions[*].name) are extracted, everything else is ignored.
+
+
+def parse_crd_spec_yaml(text: str) -> dict:
+    """Pull ``{group, kind, scope, plural, singular, versions: [name,...]}``
+    from a Kubernetes CRD ``resources_get`` YAML response.
+
+    Defensive line-based parse — never raises on malformed input. Returns a
+    dict with empty fields when the YAML is unparseable. Multiple ``versions``
+    entries are supported; we capture the FIRST ``name: <X>`` field at indent
+    4 inside each ``- ...`` entry under ``  versions:``.
+    """
+    out: dict = {
+        "group": "",
+        "kind": "",
+        "scope": "",
+        "plural": "",
+        "singular": "",
+        "versions": [],  # list of {name, served, storage}
+    }
+    if not isinstance(text, str) or "spec:" not in text:
+        return out
+
+    lines = text.splitlines()
+    in_spec = False
+    in_names = False
+    in_versions = False
+    current_version: dict | None = None
+
+    for ln in lines:
+        if re.match(r"^spec:\s*$", ln):
+            in_spec = True
+            continue
+        if not in_spec:
+            continue
+        # Top-level keys (no indent) end the spec block.
+        if ln and not ln.startswith(" ") and not ln.startswith("\t"):
+            break
+        # Inside spec, only 2-space-indent keys are sibling.
+        m_top = re.match(r"^  (\w+):\s*(.*)$", ln)
+        if m_top:
+            key, val = m_top.group(1), m_top.group(2).strip()
+            in_names = key == "names"
+            if in_versions and current_version is not None:
+                # Closed off the previous version entry's scope.
+                current_version = None
+            in_versions = key == "versions"
+            if key == "group" and val:
+                out["group"] = val
+            elif key == "scope" and val:
+                out["scope"] = val
+            continue
+        # Inside spec.names — match 4-space indent.
+        if in_names:
+            m_n = re.match(r"^    (\w+):\s*(\S.*)?$", ln)
+            if m_n:
+                k, v = m_n.group(1), (m_n.group(2) or "").strip()
+                if k == "kind" and v:
+                    out["kind"] = v
+                elif k == "plural" and v:
+                    out["plural"] = v
+                elif k == "singular" and v:
+                    out["singular"] = v
+            elif not ln.startswith("    "):
+                in_names = False
+        # Inside spec.versions: list — entries start with `^  - `.
+        if in_versions:
+            m_dash = re.match(r"^  - (.*)$", ln)
+            if m_dash:
+                # New version entry. Capture inline `name: vX` if any.
+                current_version = {"name": "", "served": True, "storage": False}
+                out["versions"].append(current_version)
+                tail = m_dash.group(1).strip()
+                m_inline = re.match(r"^name:\s*(\S+)\s*$", tail)
+                if m_inline:
+                    current_version["name"] = m_inline.group(1)
+                continue
+            if current_version is not None:
+                m_field = re.match(r"^    (\w+):\s*(\S.*)?$", ln)
+                if m_field:
+                    k, v = m_field.group(1), (m_field.group(2) or "").strip()
+                    if k == "name" and v and not current_version["name"]:
+                        current_version["name"] = v
+                    elif k == "served" and v:
+                        current_version["served"] = v.lower() != "false"
+                    elif k == "storage" and v:
+                        current_version["storage"] = v.lower() == "true"
+    # Drop versions that never produced a name.
+    out["versions"] = [v for v in out["versions"] if v.get("name")]
+    return out
+
+
+# Curated builtin kinds — beyond the v0.45.1 hardcoded set, we sweep the
+# common namespaced + cluster-scoped objects that any cluster exposes. The
+# list is conservative: anything missing from the cluster soft-degrades.
+BUILTIN_K8S_KINDS: list[tuple[str, str]] = [
+    # Workloads
+    ("apps/v1", "Deployment"),
+    ("apps/v1", "StatefulSet"),
+    ("apps/v1", "DaemonSet"),
+    ("apps/v1", "ReplicaSet"),
+    ("batch/v1", "Job"),
+    ("batch/v1", "CronJob"),
+    ("v1", "Pod"),
+    ("v1", "Node"),
+    ("v1", "Namespace"),
+    ("v1", "Service"),
+    ("v1", "Endpoints"),
+    ("discovery.k8s.io/v1", "EndpointSlice"),
+    ("v1", "ServiceAccount"),
+    ("v1", "ConfigMap"),
+    ("v1", "Secret"),
+    ("v1", "PersistentVolume"),
+    ("v1", "PersistentVolumeClaim"),
+    ("v1", "Event"),
+    ("v1", "ResourceQuota"),
+    ("v1", "LimitRange"),
+    # Networking
+    ("networking.k8s.io/v1", "Ingress"),
+    ("networking.k8s.io/v1", "IngressClass"),
+    ("networking.k8s.io/v1", "NetworkPolicy"),
+    # Storage
+    ("storage.k8s.io/v1", "StorageClass"),
+    ("storage.k8s.io/v1", "VolumeAttachment"),
+    ("storage.k8s.io/v1", "CSIDriver"),
+    ("storage.k8s.io/v1", "CSINode"),
+    # Autoscaling / disruption
+    ("autoscaling/v2", "HorizontalPodAutoscaler"),
+    ("policy/v1", "PodDisruptionBudget"),
+    # RBAC (often forbidden by SA scope; soft-degrades)
+    ("rbac.authorization.k8s.io/v1", "Role"),
+    ("rbac.authorization.k8s.io/v1", "RoleBinding"),
+    ("rbac.authorization.k8s.io/v1", "ClusterRole"),
+    ("rbac.authorization.k8s.io/v1", "ClusterRoleBinding"),
+    # Coordination / admission / API surface
+    ("coordination.k8s.io/v1", "Lease"),
+    ("admissionregistration.k8s.io/v1", "ValidatingWebhookConfiguration"),
+    ("admissionregistration.k8s.io/v1", "MutatingWebhookConfiguration"),
+    ("apiregistration.k8s.io/v1", "APIService"),
+    # Scheduling
+    ("scheduling.k8s.io/v1", "PriorityClass"),
+    # Node-scoped runtime (sometimes absent)
+    ("node.k8s.io/v1", "RuntimeClass"),
+]
+
+
+# Cluster-scoped kinds — used to set `<ns>` to "cluster" in node ids when
+# resources_list returns blank namespace.
+CLUSTER_SCOPED_BUILTINS: set[str] = {
+    "Node",
+    "Namespace",
+    "PersistentVolume",
+    "StorageClass",
+    "VolumeAttachment",
+    "CSIDriver",
+    "CSINode",
+    "ClusterRole",
+    "ClusterRoleBinding",
+    "ValidatingWebhookConfiguration",
+    "MutatingWebhookConfiguration",
+    "APIService",
+    "PriorityClass",
+    "RuntimeClass",
+    "IngressClass",
+    "CustomResourceDefinition",
+}
+
+
+async def discover_kinds(
+    endpoint: dict,
+    *,
+    fetch_crd_specs: bool = True,
+) -> tuple[list[tuple[str, str]], dict[str, dict], set[str]]:
+    """Return ``(kinds, crd_index, cluster_scoped_kinds)`` discovered live.
+
+    - ``kinds`` is a deduplicated list of ``(apiVersion, Kind)`` covering both
+      ``BUILTIN_K8S_KINDS`` and every served version of every CustomResource-
+      Definition currently registered on the cluster.
+    - ``crd_index`` maps the CRD's ``metadata.name`` to its parsed spec
+      ``{group, kind, scope, plural, versions}`` so K8sLayer can wire
+      ``crd → k8s_resource`` defines_kind edges.
+    - ``cluster_scoped_kinds`` is the set of bare ``Kind`` strings that are
+      cluster-scoped (so K8sLayer knows when the empty-namespace from a
+      kubectl-table really means "cluster", not "missing").
+
+    Soft-degrades on every error path — if the discovery tool is missing or
+    rejected, returns ``(BUILTIN_K8S_KINDS, {}, CLUSTER_SCOPED_BUILTINS)``.
+    """
+    kinds: list[tuple[str, str]] = list(BUILTIN_K8S_KINDS)
+    crd_index: dict[str, dict] = {}
+    cluster_scoped: set[str] = set(CLUSTER_SCOPED_BUILTINS)
+    seen: set[tuple[str, str]] = set(kinds)
+    warn = _SeenWarn()
+
+    async def _runner(session):
+        nonlocal kinds, crd_index, cluster_scoped
+        try:
+            r = await session.call_tool(
+                "resources_list",
+                {
+                    "apiVersion": "apiextensions.k8s.io/v1",
+                    "kind": "CustomResourceDefinition",
+                },
+            )
+        except Exception as exc:
+            warn.once(
+                "discover-tool-err",
+                f"  warn: discovery resources_list(CRD) failed: {exc} — "
+                "falling back to BUILTIN_K8S_KINDS only",
+            )
+            return None
+        norm = _normalize_call_result(r)
+        if norm["is_error"]:
+            err = norm["error_text"]
+            if _looks_like_missing_tool(err):
+                warn.once(
+                    "discover-tool-missing",
+                    "  warn: cluster MCP lacks 'resources_list' — using "
+                    "BUILTIN_K8S_KINDS only (no CRD discovery)",
+                )
+            elif _looks_like_missing_kind(err):
+                warn.once(
+                    "discover-no-crds",
+                    "  warn: cluster has no apiextensions.k8s.io/v1 — "
+                    "using BUILTIN_K8S_KINDS only",
+                )
+            elif _looks_like_forbidden(err):
+                warn.once(
+                    "discover-forbidden",
+                    "  warn: RBAC forbids listing CRDs — using "
+                    "BUILTIN_K8S_KINDS only",
+                )
+            else:
+                warn.once(
+                    "discover-err",
+                    f"  warn: CRD listing returned isError: {err[:200]}",
+                )
+            return None
+
+        crd_items = parse_kubectl_table(
+            norm["raw_text"],
+            default_api_version="apiextensions.k8s.io/v1",
+            default_kind="CustomResourceDefinition",
+        )
+        if not crd_items:
+            warn.once(
+                "discover-empty",
+                "  warn: CRD list parsed as empty — using BUILTIN_K8S_KINDS only",
+            )
+            return None
+
+        # For each CRD we need group + scope + versions[].name. The
+        # kubectl-table view of a CRD only carries `name`, so we issue one
+        # `resources_get` per CRD when ``fetch_crd_specs`` is True (default).
+        # Skip the per-spec fetch when caller passes False (smoke tests).
+        for item in crd_items:
+            crd_name = (item.get("metadata") or {}).get("name") or ""
+            if not crd_name:
+                continue
+            if not fetch_crd_specs:
+                crd_index[crd_name] = {"group": "", "kind": "", "scope": "", "versions": []}
+                continue
+            try:
+                rg = await session.call_tool(
+                    "resources_get",
+                    {
+                        "apiVersion": "apiextensions.k8s.io/v1",
+                        "kind": "CustomResourceDefinition",
+                        "name": crd_name,
+                    },
+                )
+            except Exception as exc:
+                warn.once(
+                    f"crd-get-err-{crd_name}",
+                    f"  warn: resources_get(CRD/{crd_name}) failed: {exc}",
+                )
+                continue
+            normg = _normalize_call_result(rg)
+            if normg["is_error"]:
+                warn.once(
+                    f"crd-get-iserror-{crd_name}",
+                    f"  warn: resources_get(CRD/{crd_name}) isError: "
+                    f"{normg['error_text'][:200]}",
+                )
+                continue
+            spec = parse_crd_spec_yaml(normg["raw_text"])
+            crd_index[crd_name] = spec
+            grp = spec.get("group") or ""
+            scope = spec.get("scope") or ""
+            kind = spec.get("kind") or ""
+            if not (grp and kind and spec.get("versions")):
+                continue
+            if scope == "Cluster":
+                cluster_scoped.add(kind)
+            for v in spec["versions"]:
+                vname = v.get("name") or ""
+                if not vname:
+                    continue
+                api = f"{grp}/{vname}"
+                key = (api, kind)
+                if key not in seen:
+                    seen.add(key)
+                    kinds.append(key)
+        return None
+
+    try:
+        await _open_session(endpoint, _runner)
+    except ConnectionError as exc:
+        warn.once(
+            "discover-transport",
+            f"  warn: discovery transport failed: {exc}",
+        )
+    return kinds, crd_index, cluster_scoped
+
+
+def discover_kinds_sync(
+    endpoint: dict,
+    *,
+    fetch_crd_specs: bool = True,
+) -> tuple[list[tuple[str, str]], dict[str, dict], set[str]]:
+    """Sync wrapper around :func:`discover_kinds`."""
+    return _run_coro_sync(
+        lambda: discover_kinds(endpoint, fetch_crd_specs=fetch_crd_specs)
+    )
+
+
 __all__ = [
+    "BUILTIN_K8S_KINDS",
+    "CLUSTER_SCOPED_BUILTINS",
     "call_mcp_tool",
     "call_mcp_tool_sync",
     "call_tool",
+    "discover_kinds",
+    "discover_kinds_sync",
     "fetch_live_resources",
     "fetch_live_resources_sync",
+    "parse_crd_spec_yaml",
     "parse_kubectl_table",
 ]
