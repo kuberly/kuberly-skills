@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from .base import Layer
 
 
@@ -21,11 +19,11 @@ class ArgoLayer(Layer):
 
         existing_app_ids: set[str] = set(ctx.get("_existing_app_ids", set()))
 
-        from ..client import fetch_live_resources
+        from ..client import fetch_live_resources_sync
 
         argo_kinds = [("argoproj.io/v1alpha1", "Application")]
         try:
-            live = asyncio.run(fetch_live_resources(endpoint, argo_kinds))
+            live = fetch_live_resources_sync(endpoint, argo_kinds)
         except ConnectionError:
             raise
         except Exception as exc:

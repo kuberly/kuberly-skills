@@ -12,6 +12,7 @@ from .base import Layer
 from .cold import ColdLayer
 from .code import CodeLayer
 from .components import ComponentsLayer
+from .dependency import DependencyLayer
 from .k8s import K8sLayer
 from .logs import LogsLayer
 from .metrics import MetricsLayer
@@ -32,6 +33,9 @@ LAYERS: list[Layer] = [
     LogsLayer(),
     MetricsLayer(),
     TracesLayer(),
+    # DependencyLayer derives cross-layer edges from whatever is already in
+    # the GraphStore — must run last.
+    DependencyLayer(),
 ]
 
 META_LAYERS: set[str] = {"cold"}
@@ -81,6 +85,20 @@ _LAYER_PRECEDES: dict[str, set[str]] = {
     "logs": {"applications"},
     "metrics": {"applications", "code"},
     "traces": {"applications", "code"},
+    # DependencyLayer reads the populated store — make every other leaf
+    # layer that's part of this run finish first.
+    "dependency": {
+        "code",
+        "components",
+        "applications",
+        "rendered",
+        "state",
+        "k8s",
+        "argo",
+        "logs",
+        "metrics",
+        "traces",
+    },
 }
 
 

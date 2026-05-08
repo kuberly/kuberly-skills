@@ -12,9 +12,43 @@ can sys.exit(1) with a clean message.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import shlex
-from typing import Any
+from typing import Any, Awaitable, Callable, TypeVar
+
+
+T = TypeVar("T")
+
+
+def _run_coro_sync(coro_factory: Callable[[], Awaitable[T]]) -> T:
+    """Run an async coroutine from sync code, robust to a running event loop.
+
+    If there is no running loop in the current thread, use ``asyncio.run``
+    directly (the CLI path). If a loop is already running (FastMCP server
+    transport — sync tool dispatch is invoked from inside the loop), we
+    cannot call ``asyncio.run`` here; instead, hand the coroutine off to a
+    short-lived worker thread that owns its own fresh event loop.
+
+    ``coro_factory`` is a zero-arg callable that returns a fresh coroutine
+    object — we may need to construct the coroutine in the worker thread so
+    its event-loop bindings resolve there, not in the caller's thread.
+    """
+
+    try:
+        asyncio.get_running_loop()
+        in_loop = True
+    except RuntimeError:
+        in_loop = False
+
+    if not in_loop:
+        return asyncio.run(coro_factory())
+
+    def _worker() -> T:
+        return asyncio.run(coro_factory())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(_worker).result()
 
 
 def _endpoint_str(endpoint: dict) -> str:
@@ -166,8 +200,14 @@ async def call_mcp_tool(endpoint: dict, tool_name: str, arguments: dict) -> Any:
 
 
 def call_tool(endpoint: dict, tool_name: str, arguments: dict) -> Any:
-    """Sync wrapper around `call_mcp_tool`."""
-    return asyncio.run(call_mcp_tool(endpoint, tool_name, arguments))
+    """Sync wrapper around `call_mcp_tool`.
+
+    Safe to invoke from inside a running event loop (e.g. the FastMCP
+    transport): in that case the coroutine is dispatched to a worker thread
+    with its own loop. CLI invocations have no running loop and use
+    ``asyncio.run`` directly.
+    """
+    return _run_coro_sync(lambda: call_mcp_tool(endpoint, tool_name, arguments))
 
 
 async def fetch_live_resources(
@@ -197,3 +237,21 @@ async def fetch_live_resources(
 
     await _open_session(endpoint, _runner)
     return out
+
+
+def fetch_live_resources_sync(
+    endpoint: dict,
+    kinds: list[tuple[str, str]],
+) -> dict[tuple[str, str], list[dict]]:
+    """Sync wrapper around ``fetch_live_resources``.
+
+    Safe under a running event loop (FastMCP transport): in that case the
+    coroutine runs in a worker thread with its own fresh loop. CLI path
+    uses ``asyncio.run`` directly.
+    """
+    return _run_coro_sync(lambda: fetch_live_resources(endpoint, kinds))
+
+
+def call_mcp_tool_sync(endpoint: dict, tool_name: str, arguments: dict) -> Any:
+    """Sync alias for :func:`call_tool` — kept for layer-side clarity."""
+    return call_tool(endpoint, tool_name, arguments)

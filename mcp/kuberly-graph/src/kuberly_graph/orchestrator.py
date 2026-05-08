@@ -76,6 +76,10 @@ def regenerate_graph(
         "metrics_top_n": int(metrics_top_n) if metrics_top_n else 200,
         "traces_window": traces_window or "1h",
         "traces_limit": int(traces_limit) if traces_limit else 500,
+        # Expose the live GraphStore so DependencyLayer (and any future
+        # cross-layer scanner) can read the freshly-populated nodes/edges
+        # without re-opening the store.
+        "graph_store": store,
     }
     per_layer: dict[str, dict] = {}
     cold_graph: KuberlyGraph | None = None
@@ -187,6 +191,7 @@ def list_layers_summary(persist_dir: str = ".kuberly") -> list[dict]:
         "logs": "stub",
         "metrics": "stub",
         "traces": "stub",
+        "dependency": "meta",
     }
     out: list[dict] = []
     for layer in LAYERS:

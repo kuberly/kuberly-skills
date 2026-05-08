@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import datetime as _dt
 import hashlib
 import json
@@ -179,7 +178,7 @@ class LogsLayer(Layer):
 
         existing_app_ids: set[str] = set(ctx.get("_existing_app_ids", set()))
 
-        from ..client import call_mcp_tool
+        from ..client import call_tool as _call_tool_sync
 
         buckets: dict[tuple[str, str, str], dict] = {}
         trace_index: dict[str, list[tuple[tuple[str, str, str], str]]] = defaultdict(
@@ -193,7 +192,7 @@ class LogsLayer(Layer):
                 "limit": limit,
             }
             try:
-                payload = asyncio.run(call_mcp_tool(endpoint, "query_logs", args))
+                payload = _call_tool_sync(endpoint, "query_logs", args)
             except ConnectionError:
                 raise
             except Exception as exc:

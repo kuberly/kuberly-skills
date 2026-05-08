@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import datetime as _dt
 from collections import defaultdict
 
@@ -303,7 +302,7 @@ class TracesLayer(Layer):
             ctx.get("_existing_module_ids", set())
         )
 
-        from ..client import call_mcp_tool
+        from ..client import call_tool as _call_tool_sync
 
         all_spans: list[dict] = []
         traces_seen_total: set = set()
@@ -318,16 +317,14 @@ class TracesLayer(Layer):
 
         for env, query in queries:
             try:
-                payload = asyncio.run(
-                    call_mcp_tool(
-                        endpoint,
-                        "query_traces",
-                        {
-                            "query": query,
-                            "limit": per_query_limit,
-                            "start": f"-{window}",
-                        },
-                    )
+                payload = _call_tool_sync(
+                    endpoint,
+                    "query_traces",
+                    {
+                        "query": query,
+                        "limit": per_query_limit,
+                        "start": f"-{window}",
+                    },
                 )
             except ConnectionError:
                 raise

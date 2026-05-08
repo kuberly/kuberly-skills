@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import datetime as _dt
 from collections import defaultdict
 
@@ -158,13 +157,13 @@ class MetricsLayer(Layer):
             ctx.get("_existing_module_ids", set())
         )
 
-        from ..client import call_mcp_tool
+        from ..client import call_tool as _call_tool_sync
 
         promql = 'count by (__name__) ({__name__!=""})'
         metric_rows: list[tuple[str, int]] = []
         try:
-            payload = asyncio.run(
-                call_mcp_tool(endpoint, "query_metrics", {"query": promql})
+            payload = _call_tool_sync(
+                endpoint, "query_metrics", {"query": promql}
             )
         except ConnectionError:
             raise
@@ -189,8 +188,8 @@ class MetricsLayer(Layer):
 
         targets: list[dict] = []
         try:
-            t_payload = asyncio.run(
-                call_mcp_tool(endpoint, "prom_get_targets", {"state": "active"})
+            t_payload = _call_tool_sync(
+                endpoint, "prom_get_targets", {"state": "active"}
             )
         except ConnectionError:
             raise
@@ -216,12 +215,10 @@ class MetricsLayer(Layer):
         if metric_rows:
             for mname, _ in metric_rows[:50]:
                 try:
-                    m_payload = asyncio.run(
-                        call_mcp_tool(
-                            endpoint,
-                            "query_metrics",
-                            {"name": mname, "mode": "metadata"},
-                        )
+                    m_payload = _call_tool_sync(
+                        endpoint,
+                        "query_metrics",
+                        {"name": mname, "mode": "metadata"},
                     )
                 except ConnectionError:
                     raise
