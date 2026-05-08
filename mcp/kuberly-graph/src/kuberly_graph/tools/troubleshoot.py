@@ -207,15 +207,74 @@ def _safe_live_call(endpoint: dict, tool: str, args: dict[str, Any]) -> dict[str
     return {"tool": tool, "args": args, "result": payload}
 
 
-def _log_query(subject: str, namespace: str | None, limit: int) -> dict[str, Any]:
-    selector = subject.replace('"', "'")
+def _k8s_namespace_from_id(node_id: str) -> str | None:
+    match = re.match(r"^k8s_resource:([^/]+)/", node_id or "")
+    if not match:
+        return None
+    namespace = match.group(1)
+    return namespace if namespace and namespace != "cluster" else None
+
+
+def _infer_live_namespace(index: dict[str, Any], provided: str | None) -> str | None:
+    """Prefer live k8s namespaces from graph relation hints over rendered env namespaces."""
+    candidates: list[str] = []
+    for hint in index.get("relation_hints", []):
+        for key in ("target", "source"):
+            namespace = _k8s_namespace_from_id(str(hint.get(key) or ""))
+            if namespace and namespace not in candidates:
+                candidates.append(namespace)
+    if provided and provided in candidates:
+        return provided
+    if candidates:
+        return candidates[0]
+    return provided
+
+
+def _resource_api_version(kind: str) -> str:
+    normalized = kind.lower()
+    if normalized in {"deployment", "deploy", "replicaset", "daemonset", "statefulset"}:
+        return "apps/v1"
+    if normalized in {"virtualservice", "gateway", "destinationrule"}:
+        return "networking.istio.io/v1beta1"
+    return "v1"
+
+
+def _resource_kind(kind: str) -> str:
+    mapping = {
+        "deploy": "Deployment",
+        "deployment": "Deployment",
+        "pod": "Pod",
+        "service": "Service",
+        "serviceaccount": "ServiceAccount",
+        "sa": "ServiceAccount",
+        "virtualservice": "VirtualService",
+    }
+    return mapping.get(kind.lower(), kind[:1].upper() + kind[1:])
+
+
+def _log_query(
+    subject: str,
+    namespace: str | None,
+    limit: int,
+    window: str,
+    resource_name: str | None,
+) -> dict[str, Any]:
+    selector = (resource_name or subject).replace('"', "'")
     log_selector = f'{{namespace="{namespace}"}}' if namespace else '{namespace=~".+"}'
-    query = f'{log_selector} |= "{selector}"'
-    return {"query": query, "limit": limit}
+    return {"logql": f'{log_selector} |= "{selector}"', "limit": limit, "window": window}
 
 
-def _metric_query(kind: str, namespace: str | None) -> str:
-    ns_filter = f'{{namespace="{namespace}"}}' if namespace else ""
+def _metric_selector(namespace: str | None, resource_name: str | None) -> str:
+    filters: list[str] = []
+    if namespace:
+        filters.append(f'namespace="{namespace}"')
+    if resource_name:
+        filters.append(f'pod=~".*{resource_name}.*"')
+    return "{" + ",".join(filters) + "}" if filters else ""
+
+
+def _metric_query(kind: str, namespace: str | None, resource_name: str | None) -> str:
+    ns_filter = _metric_selector(namespace, resource_name)
     if kind == "saturation":
         return (
             "topk(10, sum by (pod) "
@@ -226,7 +285,14 @@ def _metric_query(kind: str, namespace: str | None) -> str:
             "histogram_quantile(0.95, sum by (le, service) "
             "(rate(http_request_duration_seconds_bucket[5m])))"
         )
-    return "sum by (service) (rate(http_requests_total{status=~\"5..\"}[5m]))"
+    return f"sum by (pod) (rate(container_cpu_usage_seconds_total{ns_filter}[15m]))"
+
+
+def _memory_query(namespace: str | None, resource_name: str | None) -> str:
+    return (
+        "sum by (pod) "
+        f"(container_memory_working_set_bytes{_metric_selector(namespace, resource_name)})"
+    )
 
 
 @mcp.tool()
@@ -243,6 +309,7 @@ def troubleshoot(
     persist_dir: str | None = None,
     graph_match_limit: int = 8,
     live_limit: int = 50,
+    live_window: str = "15m",
 ) -> dict[str, Any]:
     """Troubleshoot a Kuberly issue from graph context first, live cluster second.
 
@@ -311,16 +378,49 @@ def troubleshoot(
 
     result["live"]["called"] = True
     result["live"]["endpoint"] = "url" if endpoint.get("url") else "stdio"
+    live_namespace = _infer_live_namespace(index, namespace)
+    result["live"]["namespace"] = live_namespace
+    if namespace and live_namespace and namespace != live_namespace:
+        result["live"]["namespace_reason"] = "inferred from graph live_match/rendered_into relation hints"
     calls: list[dict[str, Any]] = result["live"]["calls"]
     calls.append(_safe_live_call(endpoint, "observability_status", {}))
 
     kind = heuristic["incident_kind"]
     if resource_kind and resource_name:
-        args: dict[str, Any] = {"kind": resource_kind, "name": resource_name}
-        if namespace:
-            args["namespace"] = namespace
-        calls.append(_safe_live_call(endpoint, "describe_resource", args))
-    elif namespace is None:
+        normalized_kind = _resource_kind(resource_kind)
+        if normalized_kind == "Pod":
+            calls.append(
+                _safe_live_call(
+                    endpoint,
+                    "pods_get",
+                    {"namespace": live_namespace, "name": resource_name},
+                )
+            )
+        else:
+            calls.append(
+                _safe_live_call(
+                    endpoint,
+                    "resources_get",
+                    {
+                        "apiVersion": _resource_api_version(resource_kind),
+                        "kind": normalized_kind,
+                        "namespace": live_namespace,
+                        "name": resource_name,
+                    },
+                )
+            )
+    if live_namespace:
+        calls.append(
+            _safe_live_call(
+                endpoint,
+                "pods_list_in_namespace",
+                {"namespace": live_namespace},
+            )
+        )
+        calls.append(
+            _safe_live_call(endpoint, "pods_top", {"namespace": live_namespace})
+        )
+    else:
         calls.append(_safe_live_call(endpoint, "list_namespaces", {}))
 
     if kind in {"crash", "errors", "logs"}:
@@ -328,15 +428,22 @@ def troubleshoot(
             _safe_live_call(
                 endpoint,
                 "query_logs",
-                _log_query(subject, namespace, live_limit),
+                _log_query(subject, live_namespace, live_limit, live_window, resource_name),
             )
         )
-    if kind in {"latency", "saturation", "metrics", "errors"}:
+    if kind in {"crash", "latency", "logs", "saturation", "metrics", "errors"}:
         calls.append(
             _safe_live_call(
                 endpoint,
                 "query_metrics",
-                {"query": _metric_query(kind, namespace)},
+                {"promql": _metric_query(kind, live_namespace, resource_name)},
+            )
+        )
+        calls.append(
+            _safe_live_call(
+                endpoint,
+                "query_metrics",
+                {"promql": _memory_query(live_namespace, resource_name)},
             )
         )
     if kind in {"latency", "traces"}:
