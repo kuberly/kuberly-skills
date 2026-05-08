@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kuberly-graph dashboard</title>
+  <link rel="stylesheet" href="/dashboard/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>kuberly-graph</h1>
+    <span class="subtitle">live multi-layer knowledge graph</span>
+    <span class="spacer"></span>
+    <button id="btn-refresh" title="Reload data from the server">refresh</button>
+  </header>
+
+  <main>
+    <aside id="sidebar">
+      <section>
+        <h2>layers</h2>
+        <ul id="layer-list"><li class="muted">loading…</li></ul>
+      </section>
+      <section>
+        <h2>search</h2>
+        <input id="search-box" type="search" placeholder="semantic + substring search…" autocomplete="off">
+        <ul id="search-results"></ul>
+      </section>
+      <section>
+        <h2>tabs</h2>
+        <ul class="tabs">
+          <li><a href="#" data-tab="overview" class="active">overview</a></li>
+          <li><a href="#" data-tab="nodes">nodes</a></li>
+          <li><a href="#" data-tab="anomalies">anomalies</a></li>
+          <li><a href="#" data-tab="service">service one-pager</a></li>
+        </ul>
+      </section>
+    </aside>
+
+    <section id="content">
+      <div id="empty-banner" class="hidden">
+        <p>The graph store appears empty. Run <code>kuberly-graph call regenerate_all</code> against your repo, then click <strong>refresh</strong>.</p>
+      </div>
+
+      <section id="tab-overview" class="tab active">
+        <h2>summary</h2>
+        <div id="summary-cards" class="cards"></div>
+      </section>
+
+      <section id="tab-nodes" class="tab">
+        <h2>node browser</h2>
+        <div class="filter-row">
+          <label>layer:
+            <select id="filter-layer"><option value="">(any)</option></select>
+          </label>
+          <label>type:
+            <input id="filter-type" type="text" placeholder="e.g. application">
+          </label>
+          <label>name contains:
+            <input id="filter-name" type="text" placeholder="substring">
+          </label>
+          <label>limit:
+            <input id="filter-limit" type="number" value="50" min="1" max="500">
+          </label>
+          <button id="btn-apply-filter">apply</button>
+        </div>
+        <div class="split">
+          <table id="node-table">
+            <thead><tr><th>id</th><th>type</th><th>layer</th><th>label</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <div id="node-detail" class="detail-pane">
+            <p class="muted">click a row to view details</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-anomalies" class="tab">
+        <h2>anomalies</h2>
+        <div class="filter-row">
+          <label>layer:
+            <select id="anom-layer"><option value="">(any)</option></select>
+          </label>
+          <label>limit:
+            <input id="anom-limit" type="number" value="20" min="1" max="200">
+          </label>
+          <button id="btn-load-anomalies">load</button>
+        </div>
+        <table id="anomaly-table">
+          <thead><tr><th>score</th><th>id</th><th>type</th><th>layer</th><th>why</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section id="tab-service" class="tab">
+        <h2>service one-pager</h2>
+        <div class="filter-row">
+          <label>service:
+            <input id="svc-name" type="text" placeholder="e.g. backend">
+          </label>
+          <label>env:
+            <input id="svc-env" type="text" placeholder="optional">
+          </label>
+          <button id="btn-load-service">render</button>
+        </div>
+        <pre id="svc-json" class="muted">no service loaded yet</pre>
+        <h3>neighbourhood diagram</h3>
+        <div id="svc-mermaid" class="mermaid-host"></div>
+      </section>
+    </section>
+  </main>
+
+  <script type="module" src="/dashboard/static/app.js"></script>
+</body>
+</html>

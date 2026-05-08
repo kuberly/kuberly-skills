@@ -24,6 +24,20 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         # FastMCP exposes host/port via settings.
         mcp.settings.host = args.host
         mcp.settings.port = args.port
+        # Live web dashboard rides on the same Starlette app via FastMCP's
+        # custom_route mechanism — no extra port, no second uvicorn.
+        from .dashboard import register_dashboard
+
+        register_dashboard(mcp)
+        mcp_path = getattr(mcp.settings, "streamable_http_path", "/mcp")
+        print(
+            f"kuberly-graph MCP listening on http://{args.host}:{args.port}{mcp_path}",
+            file=sys.stderr,
+        )
+        print(
+            f"dashboard at  http://{args.host}:{args.port}/dashboard",
+            file=sys.stderr,
+        )
         mcp.run(transport="streamable-http")
     else:
         print(f"unknown transport {transport}", file=sys.stderr)
